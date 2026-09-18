@@ -1,63 +1,4 @@
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
-
-import * as ts from "typescript";
-
-import type { Field } from "../src/field";
-import { TypeWalker, type WalkDiagnostic } from "../src/walk";
-
-/**
- * Compiles `source` in a real, throwaway `ts.Program` (matching this
- * project's established "verify against the real compiler" approach rather
- * than hand-rolling a fake `ts.Type`) and resolves the named top-level
- * `interface`/`type` declaration's `ts.Type` and node, plus a fresh
- * `TypeWalker` bound to the same checker.
- */
-function loadDeclaration(
-	source: string,
-	declarationName: string,
-): { type: ts.Type; node: ts.Node; walker: TypeWalker; cleanup: () => void } {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "surge-walk-test-"));
-	const file = path.join(dir, "input.ts");
-	fs.writeFileSync(file, source);
-	const program = ts.createProgram([file], {
-		strict: true,
-		skipLibCheck: true,
-		target: ts.ScriptTarget.ES2019,
-	});
-	const checker = program.getTypeChecker();
-	const sourceFile = program.getSourceFile(file);
-	if (!sourceFile) {
-		throw new Error("failed to load the generated source file");
-	}
-
-	let declarationNode: ts.InterfaceDeclaration | ts.TypeAliasDeclaration | undefined;
-	sourceFile.forEachChild((node) => {
-		if (
-			(ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) &&
-			node.name.text === declarationName
-		) {
-			declarationNode = node;
-		}
-	});
-	if (!declarationNode) {
-		throw new Error(`declaration '${declarationName}' not found in test source`);
-	}
-
-	const type = checker.getTypeAtLocation(declarationNode.name);
-	const walker = new TypeWalker(ts, checker);
-	return { type, node: declarationNode, walker, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
-}
-
-function walkDeclaration(source: string, declarationName: string): { field: Field; diagnostics: WalkDiagnostic[] } {
-	const { type, node, walker, cleanup } = loadDeclaration(source, declarationName);
-	try {
-		return { field: walker.walk(type, node, false), diagnostics: walker.diagnostics };
-	} finally {
-		cleanup();
-	}
-}
+import { loadDeclaration, walkDeclaration } from "./harness";
 
 describe("TypeWalker classification", () => {
 	// Regression test for the bug this task's advisor review caught: the
@@ -167,5 +108,72 @@ describe("TypeWalker classification", () => {
 		} finally {
 			cleanup();
 		}
+	});
+});
+
+describe("TypeWalker classification with fixture packages", () => {
+	test("a DataType.* brand classifies by its declared width, not as a plain number", () => {
+		const { field } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { n: DataType.f32; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "n", field: { kind: "num", width: "f32" } }],
+		});
+	});
+
+	test("DataType.Packed<T> bit-packs its boolean fields", () => {
+		const { field } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			interface Inner { a: boolean; }
+			interface T { p: DataType.Packed<Inner>; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{
+					name: "p",
+					field: { kind: "object", fields: [{ name: "a", field: { kind: "bool", packed: true } }] },
+				},
+			],
+		});
+	});
+
+	test("Vector3 classifies as the vector3 scalar kind", () => {
+		const { field } = walkDeclaration("interface T { v: Vector3; }", "T", { roblox: true });
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "v", field: { kind: "vector3" } }],
+		});
+	});
+
+	test("a real Roblox enum walks as an enum Field with sorted members", () => {
+		const { field } = walkDeclaration("interface T { s: Enum.SortOrder; }", "T", { roblox: true });
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{
+					name: "s",
+					field: { kind: "enum", enumName: "SortOrder", members: ["Custom", "LayoutOrder", "Name"] },
+				},
+			],
+		});
+	});
+
+	// `Instance` is documented as the opaque blob-passthrough channel
+	// (Type Coverage in transformer.md), but it declares real properties in
+	// `@rbxts/types`, so the walk recurses into them instead of falling back
+	// to `blob` -- the exact gap tracked in
+	// docs/future-work/blob-classification.md. This asserts the current
+	// (buggy) behavior, not the documented one; update it once that fix lands.
+	test("Instance currently walks its declared properties instead of falling back to the blob passthrough channel", () => {
+		const { field } = walkDeclaration("interface T { i: Instance; }", "T", { roblox: true });
+		expect(field.kind).toBe("object");
+		if (field.kind !== "object") throw new Error("unreachable");
+		expect(field.fields.find((entry) => entry.name === "i")?.field.kind).toBe("object");
 	});
 });

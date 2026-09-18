@@ -7,5 +7,6 @@
 		"incremental": false,
 		"types": ["node", "jest"]
 	},
-	"include": ["../src/**/*", "**/*"]
+	"include": ["../src/**/*", "**/*"],
+	"exclude": ["fixtures/**"]
 }

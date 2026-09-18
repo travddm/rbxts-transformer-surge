@@ -11,7 +11,10 @@ export default [
 	importXConfigs.recommended,
 	importXConfigs.typescript,
 	{
-		ignores: ["**/lib/**", "**/node_modules/**", "eslint.config.ts"],
+		// test/fixtures/** are fixture packages compiled into their own throwaway
+		// `ts.Program` at test runtime (see test/harness.ts), not part of either
+		// tsconfig project -- there's no project for typed linting to attach them to.
+		ignores: ["**/lib/**", "**/node_modules/**", "eslint.config.ts", "test/fixtures/**"],
 	},
 	{
 		files: ["**/*.ts", "**/*.tsx"],

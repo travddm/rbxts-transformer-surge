@@ -1,0 +1,421 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Emitter per-kind write/read snapshots array 1`] = `
+"// write
+const arr1 = value;
+const [buf2, pos3] = alloc(4);
+buffer.writeu32(buf2, pos3, arr1.size());
+for (const item4 of arr1) {
+    const [buf5, pos6] = alloc(8);
+    buffer.writef64(buf5, pos6, item4);
+}
+
+// read
+const [buf7, pos8] = readAlloc(4);
+const count9 = buffer.readu32(buf7, pos8);
+const result10 = [];
+for (let i11 = 0; i11 < count9; i11++) {
+    const [buf12, pos13] = readAlloc(8);
+    result10.push(buffer.readf64(buf12, pos13));
+}
+return result10;"
+`;
+
+exports[`Emitter per-kind write/read snapshots blob 1`] = `
+"// write
+pushBlob(value);
+
+// read
+return nextBlob();"
+`;
+
+exports[`Emitter per-kind write/read snapshots bool 1`] = `
+"// write
+const [buf1, pos2] = alloc(1);
+buffer.writeu8(buf1, pos2, value ? 1 : 0);
+
+// read
+const [buf3, pos4] = readAlloc(1);
+return buffer.readu8(buf3, pos4) !== 0;"
+`;
+
+exports[`Emitter per-kind write/read snapshots cframe 1`] = `
+"// write
+const [buf1, pos2] = alloc(12);
+buffer.writef32(buf1, pos2, value.Position.X);
+buffer.writef32(buf1, pos2 + 4, value.Position.Y);
+buffer.writef32(buf1, pos2 + 8, value.Position.Z);
+const [axis3, angle4] = value.ToAxisAngle();
+const rv5 = axis3.mul(angle4);
+const [buf6, pos7] = alloc(12);
+buffer.writef32(buf6, pos7, rv5.X);
+buffer.writef32(buf6, pos7 + 4, rv5.Y);
+buffer.writef32(buf6, pos7 + 8, rv5.Z);
+
+// read
+const [buf8, pos9] = readAlloc(12);
+const pos10 = new Vector3(buffer.readf32(buf8, pos9), buffer.readf32(buf8, pos9 + 4), buffer.readf32(buf8, pos9 + 8));
+const [buf11, pos12] = readAlloc(12);
+const rv13 = new Vector3(buffer.readf32(buf11, pos12), buffer.readf32(buf11, pos12 + 4), buffer.readf32(buf11, pos12 + 8));
+const angle14 = rv13.Magnitude;
+const rotation15 = CFrame.fromAxisAngle(angle14 > 1e-6 ? rv13.Unit : Vector3.zAxis, angle14);
+return rotation15.add(pos10);"
+`;
+
+exports[`Emitter per-kind write/read snapshots color3 1`] = `
+"// write
+const [buf1, pos2] = alloc(3);
+buffer.writeu8(buf1, pos2, math.floor(value.R * 255));
+buffer.writeu8(buf1, pos2 + 1, math.floor(value.G * 255));
+buffer.writeu8(buf1, pos2 + 2, math.floor(value.B * 255));
+
+// read
+const [buf3, pos4] = readAlloc(3);
+return new Color3(buffer.readu8(buf3, pos4) / 255, buffer.readu8(buf3, pos4 + 1) / 255, buffer.readu8(buf3, pos4 + 2) / 255);"
+`;
+
+exports[`Emitter per-kind write/read snapshots colorSequence 1`] = `
+"// write
+const keypoints1 = value.Keypoints;
+const [buf2, pos3] = alloc(1);
+buffer.writeu8(buf2, pos3, keypoints1.size());
+for (const kp4 of keypoints1) {
+    const [buf5, pos6] = alloc(4);
+    buffer.writef32(buf5, pos6, kp4.Time);
+    const [buf7, pos8] = alloc(3);
+    buffer.writeu8(buf7, pos8, math.floor(kp4.Value.R * 255));
+    buffer.writeu8(buf7, pos8 + 1, math.floor(kp4.Value.G * 255));
+    buffer.writeu8(buf7, pos8 + 2, math.floor(kp4.Value.B * 255));
+}
+
+// read
+const [buf9, pos10] = readAlloc(1);
+const count11 = buffer.readu8(buf9, pos10);
+const keypoints12 = [];
+for (let i13 = 0; i13 < count11; i13++) {
+    const [buf14, pos15] = readAlloc(4);
+    const time16 = buffer.readf32(buf14, pos15);
+    const [buf17, pos18] = readAlloc(3);
+    keypoints12.push(new ColorSequenceKeypoint(time16, new Color3(buffer.readu8(buf17, pos18) / 255, buffer.readu8(buf17, pos18 + 1) / 255, buffer.readu8(buf17, pos18 + 2) / 255)));
+}
+return new ColorSequence(keypoints12);"
+`;
+
+exports[`Emitter per-kind write/read snapshots dict (map) 1`] = `
+"// write
+const dict1 = value;
+const [buf2, pos3] = alloc(4);
+let count4 = 0;
+for (const [k5, v11] of dict1 as unknown as Map<string, number>) {
+    const s6 = k5;
+    const [buf7, pos8] = alloc(4);
+    buffer.writeu32(buf7, pos8, s6.size());
+    const [buf9, pos10] = alloc(s6.size());
+    buffer.writestring(buf9, pos10, s6);
+    const [buf12, pos13] = alloc(8);
+    buffer.writef64(buf12, pos13, v11);
+    count4++;
+}
+backpatchU32(pos3, count4);
+
+// read
+const [buf14, pos15] = readAlloc(4);
+const count16 = buffer.readu32(buf14, pos15);
+const result17: Record<string, number> = {};
+for (let i18 = 0; i18 < count16; i18++) {
+    const [buf19, pos20] = readAlloc(4);
+    const len21 = buffer.readu32(buf19, pos20);
+    const [buf22, pos23] = readAlloc(len21);
+    const [buf24, pos25] = readAlloc(8);
+    result17[buffer.readstring(buf22, pos23, len21)] = buffer.readf64(buf24, pos25);
+}
+return result17 as unknown as Map<string, number>;"
+`;
+
+exports[`Emitter per-kind write/read snapshots dict (set, no value) 1`] = `
+"// write
+const dict1 = value;
+const [buf2, pos3] = alloc(4);
+let count4 = 0;
+for (const k5 of dict1 as unknown as Set<string>) {
+    const s6 = k5;
+    const [buf7, pos8] = alloc(4);
+    buffer.writeu32(buf7, pos8, s6.size());
+    const [buf9, pos10] = alloc(s6.size());
+    buffer.writestring(buf9, pos10, s6);
+    count4++;
+}
+backpatchU32(pos3, count4);
+
+// read
+const [buf11, pos12] = readAlloc(4);
+const count13 = buffer.readu32(buf11, pos12);
+const result14: Record<string, boolean> = {};
+for (let i15 = 0; i15 < count13; i15++) {
+    const [buf16, pos17] = readAlloc(4);
+    const len18 = buffer.readu32(buf16, pos17);
+    const [buf19, pos20] = readAlloc(len18);
+    result14[buffer.readstring(buf19, pos20, len18)] = true;
+}
+return result14 as unknown as Set<string>;"
+`;
+
+exports[`Emitter per-kind write/read snapshots enum 1`] = `
+"// write
+const [buf1, pos2] = alloc(1);
+buffer.writeu8(buf1, pos2, value.Name === "Custom" ? 0 : value.Name === "LayoutOrder" ? 1 : 2);
+
+// read
+const [buf3, pos4] = readAlloc(1);
+const idx5 = buffer.readu8(buf3, pos4);
+return idx5 === 0 ? Enum.SortOrder.Custom : idx5 === 1 ? Enum.SortOrder.LayoutOrder : Enum.SortOrder.Name;"
+`;
+
+exports[`Emitter per-kind write/read snapshots guardedUnion 1`] = `
+"// write
+const idx1 = typeIs(value, "number") ? 0 : 1;
+const [buf2, pos3] = alloc(1);
+buffer.writeu8(buf2, pos3, idx1);
+if (idx1 === 0) {
+    const [buf9, pos10] = alloc(8);
+    buffer.writef64(buf9, pos10, value as unknown as number);
+}
+else if (idx1 === 1) {
+    const s4 = value as unknown as string;
+    const [buf5, pos6] = alloc(4);
+    buffer.writeu32(buf5, pos6, s4.size());
+    const [buf7, pos8] = alloc(s4.size());
+    buffer.writestring(buf7, pos8, s4);
+}
+
+// read
+const [buf11, pos12] = readAlloc(1);
+const idx13 = buffer.readu8(buf11, pos12);
+let result14: number | string;
+if (idx13 === 1) {
+    const [buf17, pos18] = readAlloc(4);
+    const len19 = buffer.readu32(buf17, pos18);
+    const [buf20, pos21] = readAlloc(len19);
+    result14 = buffer.readstring(buf20, pos21, len19);
+}
+else {
+    const [buf15, pos16] = readAlloc(8);
+    result14 = buffer.readf64(buf15, pos16);
+}
+return result14;"
+`;
+
+exports[`Emitter per-kind write/read snapshots literal 1`] = `
+"// write
+const [buf1, pos2] = alloc(1);
+buffer.writeu8(buf1, pos2, value === "a" ? 0 : value === "b" ? 1 : 2);
+
+// read
+const [buf3, pos4] = readAlloc(1);
+const idx5 = buffer.readu8(buf3, pos4);
+return idx5 === 0 ? "a" : idx5 === 1 ? "b" : "c";"
+`;
+
+exports[`Emitter per-kind write/read snapshots literalConst 1`] = `
+"// write
+
+
+// read
+return "fixed";"
+`;
+
+exports[`Emitter per-kind write/read snapshots num 1`] = `
+"// write
+const [buf1, pos2] = alloc(4);
+buffer.writef32(buf1, pos2, value);
+
+// read
+const [buf3, pos4] = readAlloc(4);
+return buffer.readf32(buf3, pos4);"
+`;
+
+exports[`Emitter per-kind write/read snapshots numberSequence 1`] = `
+"// write
+const keypoints1 = value.Keypoints;
+const [buf2, pos3] = alloc(1);
+buffer.writeu8(buf2, pos3, keypoints1.size());
+for (const kp4 of keypoints1) {
+    const [buf5, pos6] = alloc(4);
+    buffer.writef32(buf5, pos6, kp4.Time);
+    const [buf7, pos8] = alloc(4);
+    buffer.writef32(buf7, pos8, kp4.Value);
+}
+
+// read
+const [buf9, pos10] = readAlloc(1);
+const count11 = buffer.readu8(buf9, pos10);
+const keypoints12 = [];
+for (let i13 = 0; i13 < count11; i13++) {
+    const [buf14, pos15] = readAlloc(4);
+    const time16 = buffer.readf32(buf14, pos15);
+    const [buf17, pos18] = readAlloc(4);
+    keypoints12.push(new NumberSequenceKeypoint(time16, buffer.readf32(buf17, pos18)));
+}
+return new NumberSequence(keypoints12);"
+`;
+
+exports[`Emitter per-kind write/read snapshots object 1`] = `
+"// write
+const [buf1, pos2] = alloc(8);
+buffer.writef64(buf1, pos2, value.a);
+const s3 = value.b;
+const [buf4, pos5] = alloc(4);
+buffer.writeu32(buf4, pos5, s3.size());
+const [buf6, pos7] = alloc(s3.size());
+buffer.writestring(buf6, pos7, s3);
+
+// read
+const [buf8, pos9] = readAlloc(8);
+const [buf10, pos11] = readAlloc(4);
+const len12 = buffer.readu32(buf10, pos11);
+const [buf13, pos14] = readAlloc(len12);
+return {
+    a: buffer.readf64(buf8, pos9),
+    b: buffer.readstring(buf13, pos14, len12)
+};"
+`;
+
+exports[`Emitter per-kind write/read snapshots optional 1`] = `
+"// write
+const opt1 = value;
+const [buf2, pos3] = alloc(1);
+buffer.writeu8(buf2, pos3, opt1 !== undefined ? 1 : 0);
+if (opt1 !== undefined) {
+    const [buf4, pos5] = alloc(8);
+    buffer.writef64(buf4, pos5, opt1);
+}
+
+// read
+const [buf6, pos7] = readAlloc(1);
+const present8 = buffer.readu8(buf6, pos7) !== 0;
+let opt9;
+if (present8) {
+    const [buf10, pos11] = readAlloc(8);
+    opt9 = buffer.readf64(buf10, pos11);
+}
+return opt9;"
+`;
+
+exports[`Emitter per-kind write/read snapshots recursiveRef 1`] = `
+"// write
+surge_Node_1_write(value);
+
+// read
+return surge_Node_1_read();"
+`;
+
+exports[`Emitter per-kind write/read snapshots str 1`] = `
+"// write
+const s1 = value;
+const [buf2, pos3] = alloc(4);
+buffer.writeu32(buf2, pos3, s1.size());
+const [buf4, pos5] = alloc(s1.size());
+buffer.writestring(buf4, pos5, s1);
+
+// read
+const [buf6, pos7] = readAlloc(4);
+const len8 = buffer.readu32(buf6, pos7);
+const [buf9, pos10] = readAlloc(len8);
+return buffer.readstring(buf9, pos10, len8);"
+`;
+
+exports[`Emitter per-kind write/read snapshots taggedUnion 1`] = `
+"// write
+const idx1 = value.kind === "a" ? 0 : 1;
+const [buf2, pos3] = alloc(1);
+buffer.writeu8(buf2, pos3, idx1);
+if (idx1 === 0) {
+    const [buf9, pos10] = alloc(8);
+    buffer.writef64(buf9, pos10, (value as unknown as {
+        x: number;
+    }).x);
+}
+else if (idx1 === 1) {
+    const s4 = (value as unknown as {
+        y: string;
+    }).y;
+    const [buf5, pos6] = alloc(4);
+    buffer.writeu32(buf5, pos6, s4.size());
+    const [buf7, pos8] = alloc(s4.size());
+    buffer.writestring(buf7, pos8, s4);
+}
+
+// read
+const [buf11, pos12] = readAlloc(1);
+const idx13 = buffer.readu8(buf11, pos12);
+let result14: {
+    kind: "a";
+    x: number;
+} | {
+    kind: "b";
+    y: string;
+};
+if (idx13 === 1) {
+    const [buf17, pos18] = readAlloc(4);
+    const len19 = buffer.readu32(buf17, pos18);
+    const [buf20, pos21] = readAlloc(len19);
+    result14 = {
+        ...{
+            y: buffer.readstring(buf20, pos21, len19)
+        },
+        kind: "b"
+    };
+}
+else {
+    const [buf15, pos16] = readAlloc(8);
+    result14 = {
+        ...{
+            x: buffer.readf64(buf15, pos16)
+        },
+        kind: "a"
+    };
+}
+return result14;"
+`;
+
+exports[`Emitter per-kind write/read snapshots tuple with a rest element 1`] = `
+"// write
+const tup1 = value;
+const s2 = tup1[0];
+const [buf3, pos4] = alloc(4);
+buffer.writeu32(buf3, pos4, s2.size());
+const [buf5, pos6] = alloc(s2.size());
+buffer.writestring(buf5, pos6, s2);
+const [buf7, pos8] = alloc(4);
+buffer.writeu32(buf7, pos8, tup1.size() - 1);
+for (let i9 = 1; i9 < tup1.size(); i9++) {
+    const [buf10, pos11] = alloc(8);
+    buffer.writef64(buf10, pos11, tup1[i9]);
+}
+
+// read
+const tup12 = [];
+const [buf13, pos14] = readAlloc(4);
+const len15 = buffer.readu32(buf13, pos14);
+const [buf16, pos17] = readAlloc(len15);
+tup12.push(buffer.readstring(buf16, pos17, len15));
+const [buf18, pos19] = readAlloc(4);
+const count20 = buffer.readu32(buf18, pos19);
+for (let i21 = 0; i21 < count20; i21++) {
+    const [buf22, pos23] = readAlloc(8);
+    tup12.push(buffer.readf64(buf22, pos23));
+}
+return tup12;"
+`;
+
+exports[`Emitter per-kind write/read snapshots vector3 1`] = `
+"// write
+const [buf1, pos2] = alloc(12);
+buffer.writef32(buf1, pos2, value.X);
+buffer.writef32(buf1, pos2 + 4, value.Y);
+buffer.writef32(buf1, pos2 + 8, value.Z);
+
+// read
+const [buf3, pos4] = readAlloc(12);
+return new Vector3(buffer.readf32(buf3, pos4), buffer.readf32(buf3, pos4 + 4), buffer.readf32(buf3, pos4 + 8));"
+`;

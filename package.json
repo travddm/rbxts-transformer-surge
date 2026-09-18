@@ -31,6 +31,8 @@
 	"homepage": "https://github.com/travddm/rbxts-transformer-surge#readme",
 	"devDependencies": {
 		"@eslint/js": "^9.39.2",
+		"@rbxts/compiler-types": "^3.0.0-types.0",
+		"@rbxts/types": "^1.0.953",
 		"@trivago/prettier-plugin-sort-imports": "^6.0.1",
 		"@types/jest": "^29.5.14",
 		"@types/node": "^22.0.0",
