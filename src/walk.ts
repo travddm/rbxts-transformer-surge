@@ -23,17 +23,42 @@ function nextHelperName(base: string): string {
 	return `surge_${base}_${helperCounter}`;
 }
 
+// `type.types`/`type.getProperties()` order reflects the checker's type-id
+// or declaration-creation order -- stable for one program, but not across
+// two programs that differ only in an unrelated file (Transformer Design §3
+// promises field order is a pure function of the type itself). Every place
+// that assigns a wire-format index from declaration/creation order must sort
+// by value first.
+const LITERAL_TYPE_ORDER: Readonly<Record<string, number>> = { boolean: 0, number: 1, string: 2, undefined: 3 };
+function compareLiteral(a: string | number | boolean | undefined, b: string | number | boolean | undefined): number {
+	const ta = LITERAL_TYPE_ORDER[typeof a];
+	const tb = LITERAL_TYPE_ORDER[typeof b];
+	if (ta !== tb) {
+		return ta - tb;
+	}
+	if (a === b || a === undefined || b === undefined) {
+		return 0;
+	}
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export class TypeWalker {
-	// Keyed by (symbol, packed): the same named object type can be walked
-	// once plain and once inside a `Packed<T>` subtree (e.g. a shared
-	// `interface` reused as both a plain field and a `Packed<T>` field
-	// elsewhere in the same root type), and those two walks must produce
-	// different `Field`s (only one has its boolean fields bit-packed) --
-	// memoizing by symbol alone would silently reuse whichever variant was
-	// walked first for both.
-	private readonly resolved = new Map<ts.Symbol, Map<boolean, Field>>();
-	private readonly inProgress = new Set<ts.Symbol>();
-	private readonly helperNames = new Map<ts.Symbol, { name: string; packed: boolean }>();
+	// Keyed by (ts.Type, packed), not by symbol: the checker interns every
+	// instantiation of a generic declaration (or an anonymous alias body) as
+	// its own `ts.Type` object, so `Box<number>` and `Box<string>` are
+	// distinct keys even though they share one declaration symbol -- keying
+	// by symbol alone would silently collapse them onto whichever
+	// instantiation was walked first. The `packed` half of the key is what
+	// keeps a type walked once plain and once inside a `Packed<T>` subtree
+	// (e.g. a shared `interface` reused as both a plain field and a
+	// `Packed<T>` field elsewhere in the same root type) from sharing one
+	// cached `Field`, since only one of those two walks bit-packs its
+	// boolean fields. `ts.Type` identity works the same way for union types
+	// (no symbol of their own) as for object types, so this one set of maps
+	// also backs the union recursion guard in `walkUnion`.
+	private readonly resolved = new Map<ts.Type, Map<boolean, Field>>();
+	private readonly inProgress = new Set<ts.Type>();
+	private readonly helperNames = new Map<ts.Type, Map<boolean, string>>();
 	public readonly diagnostics: WalkDiagnostic[] = [];
 
 	public constructor(
@@ -45,26 +70,32 @@ export class TypeWalker {
 		this.diagnostics.push({ message, node });
 	}
 
-	private getResolved(symbol: ts.Symbol, packed: boolean): Field | undefined {
-		return this.resolved.get(symbol)?.get(packed);
+	private getResolved(type: ts.Type, packed: boolean): Field | undefined {
+		return this.resolved.get(type)?.get(packed);
 	}
 
-	private setResolved(symbol: ts.Symbol, packed: boolean, field: Field): void {
-		let byPacked = this.resolved.get(symbol);
+	private setResolved(type: ts.Type, packed: boolean, field: Field): void {
+		let byPacked = this.resolved.get(type);
 		if (!byPacked) {
 			byPacked = new Map<boolean, Field>();
-			this.resolved.set(symbol, byPacked);
+			this.resolved.set(type, byPacked);
 		}
 		byPacked.set(packed, field);
 	}
 
-	/** Resolved `Field`s for every symbol that turned out to be self-referential, keyed by the helper name assigned to it. */
+	private getHelperName(type: ts.Type, packed: boolean): string | undefined {
+		return this.helperNames.get(type)?.get(packed);
+	}
+
+	/** Resolved `Field`s for every type that turned out to be self-referential, keyed by the helper name assigned to it. */
 	public getHelperFields(): Map<string, Field> {
 		const result = new Map<string, Field>();
-		for (const [symbol, { name, packed }] of this.helperNames) {
-			const resolved = this.getResolved(symbol, packed);
-			if (resolved) {
-				result.set(name, resolved);
+		for (const [type, byPacked] of this.helperNames) {
+			for (const [packed, name] of byPacked) {
+				const resolved = this.getResolved(type, packed);
+				if (resolved) {
+					result.set(name, resolved);
+				}
 			}
 		}
 		return result;
@@ -161,18 +192,15 @@ export class TypeWalker {
 		if (properties.length === 0) {
 			return undefined;
 		}
-		const symbol = type.symbol;
-		if (symbol && this.inProgress.has(symbol)) {
-			const helperName = this.helperNameFor(symbol, packed);
+		if (this.inProgress.has(type)) {
+			const helperName = this.helperNameFor(type, packed);
 			return { kind: "recursiveRef", helperName };
 		}
-		const cached = symbol && this.getResolved(symbol, packed);
+		const cached = this.getResolved(type, packed);
 		if (cached) {
 			return cached;
 		}
-		if (symbol) {
-			this.inProgress.add(symbol);
-		}
+		this.inProgress.add(type);
 
 		const names = properties.map((p) => p.name).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 		const fields: ObjectFieldEntry[] = [];
@@ -182,25 +210,40 @@ export class TypeWalker {
 			fields.push({ name, field: this.walk(propType, node, packed) });
 		}
 
+		this.inProgress.delete(type);
 		let result: Field = { kind: "object", fields };
-		if (symbol) {
-			this.inProgress.delete(symbol);
-			const helper = this.helperNames.get(symbol);
-			if (helper && helper.packed === packed) {
-				result = { kind: "object", fields, helperName: helper.name };
-			}
-			this.setResolved(symbol, packed, result);
+		const helperName = this.getHelperName(type, packed);
+		if (helperName) {
+			result = { kind: "object", fields, helperName };
 		}
+		this.setResolved(type, packed, result);
 		return result;
 	}
 
-	private helperNameFor(symbol: ts.Symbol, packed: boolean): string {
-		let entry = this.helperNames.get(symbol);
-		if (!entry) {
-			entry = { name: nextHelperName(symbol.name || "recursive"), packed };
-			this.helperNames.set(symbol, entry);
+	/**
+	 * The type's own name has no bearing on wire compatibility (only field
+	 * order and kinds do), so any name that helps a reader match a helper
+	 * back to its source type is fine -- prefer the alias name
+	 * (`type X = ...`) over the declaration symbol's name, since an
+	 * anonymous alias body's symbol is always `__type`.
+	 */
+	private helperBaseName(type: ts.Type): string {
+		const aliasSymbol = (type as ts.Type & { aliasSymbol?: ts.Symbol }).aliasSymbol;
+		return aliasSymbol?.name ?? type.symbol?.name ?? "recursive";
+	}
+
+	private helperNameFor(type: ts.Type, packed: boolean): string {
+		let byPacked = this.helperNames.get(type);
+		if (!byPacked) {
+			byPacked = new Map<boolean, string>();
+			this.helperNames.set(type, byPacked);
 		}
-		return entry.name;
+		let name = byPacked.get(packed);
+		if (!name) {
+			name = nextHelperName(this.helperBaseName(type));
+			byPacked.set(packed, name);
+		}
+		return name;
 	}
 
 	// ---- arrays / tuples --------------------------------------------------
@@ -276,12 +319,24 @@ export class TypeWalker {
 
 	private walkEnum(constituents: ts.Type[], node: ts.Node): Field {
 		const checker = this.checker;
-		const named = constituents.map((constituent) => {
+		const named: string[] = [];
+		for (const constituent of constituents) {
 			const nameProp = constituent.getProperty("Name");
 			const nameType = nameProp ? checker.getTypeOfSymbolAtLocation(nameProp, node) : undefined;
-			const name = nameType && nameType.isStringLiteral() ? nameType.value : (constituent.symbol?.name ?? "");
-			return name;
-		});
+			if (!nameType || !nameType.isStringLiteral()) {
+				// A bare `EnumItem` field (not a specific `Enum.*` type): `Name` is
+				// the general `string` type rather than a member's literal name, so
+				// there is no member list to index into. Reported instead of
+				// classified, since the alternative is `Enum.Enum.EnumItem` on the
+				// read side, which errors at runtime (see enum-encoding.md).
+				this.report(
+					`surge: a bare "EnumItem" field isn't supported -- narrow it to a specific enum type, e.g. "Enum.KeyCode".`,
+					node,
+				);
+				return { kind: "blob" };
+			}
+			named.push(nameType.value);
+		}
 		named.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
 		const first = constituents[0];
@@ -293,7 +348,47 @@ export class TypeWalker {
 
 	// ---- unions -------------------------------------------------------
 
+	/**
+	 * Recursion through a union (or an alias resolving to one) has no
+	 * declaration symbol to key the recursion guard by the way
+	 * `tryWalkObject` keys on an object type's symbol -- this guards by the
+	 * union's own `ts.Type` identity instead (see the field comment on
+	 * `resolved` above), so a discriminated union that reappears on its own
+	 * walk path compiles to a helper instead of recursing the walker
+	 * forever. Wrapping the whole union walk (not only the table-shaped
+	 * branch in `classifyUnion`) costs nothing on the common, non-recursive
+	 * cases: they simply never hit the `inProgress`/helper paths.
+	 *
+	 * Unlike `tryWalkObject`, which can attach `helperName` directly onto its
+	 * `object` result (`Field`'s `object` variant has that slot, and
+	 * `emit.ts` dispatches on it), no other `Field` kind has anywhere to
+	 * carry a helper marker. So here, once a walk this method starts turns
+	 * out to need a helper, *every* call site that walk passes through --
+	 * including the outermost one, whether that's the root declaration or a
+	 * plain, non-recursive-looking field elsewhere -- gets back
+	 * `{ kind: "recursiveRef", helperName }` instead of the real structure.
+	 * The real structure exists exactly once, in `resolved`, reachable only
+	 * through `getHelperFields()` (what `emit.ts`'s `ensureHelper` builds the
+	 * helper's body from).
+	 */
 	private walkUnion(type: ts.UnionType, node: ts.Node, packed: boolean): Field {
+		const cached = this.getResolved(type, packed);
+		if (cached !== undefined) {
+			const helperName = this.getHelperName(type, packed);
+			return helperName ? { kind: "recursiveRef", helperName } : cached;
+		}
+		if (this.inProgress.has(type)) {
+			return { kind: "recursiveRef", helperName: this.helperNameFor(type, packed) };
+		}
+		this.inProgress.add(type);
+		const field = this.walkUnionBody(type, node, packed);
+		this.inProgress.delete(type);
+		this.setResolved(type, packed, field);
+		const helperName = this.getHelperName(type, packed);
+		return helperName ? { kind: "recursiveRef", helperName } : field;
+	}
+
+	private walkUnionBody(type: ts.UnionType, node: ts.Node, packed: boolean): Field {
 		const ts_ = this.typescript;
 		const checker = this.checker;
 		let constituents = [...type.types];
@@ -324,6 +419,7 @@ export class TypeWalker {
 			const values = nonUndefined.map((t) =>
 				t.isStringLiteral() || t.isNumberLiteral() ? t.value : checker.typeToString(t) === "true",
 			);
+			values.sort(compareLiteral);
 			if (hasUndefined) {
 				return { kind: "literal", values: [...values, undefined as unknown as string] };
 			}
@@ -373,12 +469,32 @@ export class TypeWalker {
 			return { kind: "blob" };
 		}
 		void checker;
-		return { kind: "guardedUnion", variants: fields };
+		// Sorted by kind, then by value for two `literalConst` variants (the
+		// only kind that can repeat among guarded-union variants): `type.types`
+		// order is otherwise the checker's unstable type-id order (see
+		// `compareLiteral`'s doc comment), and the variant index is encoded in
+		// the buffer.
+		const variants = [...fields].sort((a, b) => {
+			if (a.kind !== b.kind) {
+				return a.kind < b.kind ? -1 : 1;
+			}
+			if (a.kind === "literalConst" && b.kind === "literalConst") {
+				return compareLiteral(a.value, b.value);
+			}
+			return 0;
+		});
+		return { kind: "guardedUnion", variants };
 	}
 
 	private findDiscriminant(variants: ts.Type[], node: ts.Node): string | undefined {
 		const checker = this.checker;
-		const candidateNames = variants[0].getProperties().map((p) => p.name);
+		// Name-sorted, not declaration order: when two properties both qualify
+		// as a discriminant, the choice must not depend on which was declared
+		// first in variant 0 (see `compareLiteral`'s doc comment).
+		const candidateNames = variants[0]
+			.getProperties()
+			.map((p) => p.name)
+			.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 		for (const name of candidateNames) {
 			const values: Array<string | number | boolean> = [];
 			let ok = true;
@@ -428,7 +544,7 @@ export class TypeWalker {
 		// from `type.types` reflects declaration/normalization order, not
 		// anything guaranteed stable across differently-constructed
 		// equivalent types, and the variant index is encoded in the buffer.
-		builtVariants.sort((a, b) => (a.tagValue < b.tagValue ? -1 : a.tagValue > b.tagValue ? 1 : 0));
+		builtVariants.sort((a, b) => compareLiteral(a.tagValue, b.tagValue));
 		return { kind: "taggedUnion", tagKey, variants: builtVariants };
 	}
 }

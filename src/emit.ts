@@ -16,17 +16,19 @@ const WIDTH_BYTES: Record<NumWidth, number> = {
 /**
  * Turns a `Field` IR tree into `write`/`read` statements (Transformer
  * Design §5). Every field, fixed or variable-size, is inlined in source
- * order with no runtime dispatch on kind -- the one exception is a
- * self-referential `object` field (carries `helperName`), which compiles to
- * a call into a named module-scoped helper instead (§6); `ensureHelper`
- * generates that helper's body lazily, the first time it's actually
- * referenced.
+ * order with no runtime dispatch on kind -- the exception is a
+ * self-referential field (an `object` carrying `helperName`, or a bare
+ * `recursiveRef`), which compiles to a call into a named module-scoped
+ * helper instead (§6); `ensureHelper` generates that helper's body lazily,
+ * the first time it's actually referenced.
  */
 export class Emitter {
 	private tempCounter = 0;
 	public readonly usedImports = new Set<string>();
 	private readonly generatedHelpers = new Set<string>();
 	private readonly helperDecls: ts.Statement[] = [];
+	private readonly enumTables = new Map<string, { itemsName: string; indexName: string }>();
+	private enumTableCounter = 0;
 
 	public constructor(
 		private readonly ts_: typeof ts,
@@ -62,6 +64,24 @@ export class Emitter {
 				this.ts_.NodeFlags.Const,
 			),
 		);
+	}
+
+	/**
+	 * Binds a side-effecting read expression (one that advances a cursor when
+	 * evaluated, rather than being preceded by the statement that reserves its
+	 * bytes) to a `const` in statement order, and returns the identifier in
+	 * its place. `readObjectInline` pushes each field's read statements in
+	 * field order but evaluates each field's returned expression later,
+	 * inside the object literal -- sound only if every such expression is
+	 * side-effect free. A bare `object`/`recursiveRef` helper call and a
+	 * `blob`'s `nextBlob()` are not, so their `readField` cases route through
+	 * this instead of returning the call expression directly (see
+	 * read-order-side-effects.md).
+	 */
+	private bindSideEffect(expr: ts.Expression, out: ts.Statement[]): ts.Expression {
+		const tmp = this.fresh("val");
+		out.push(this.constStatement(tmp, expr));
+		return tmp;
 	}
 
 	private destructureAlloc(
@@ -203,11 +223,12 @@ export class Emitter {
 				return;
 			}
 			case "enum": {
-				const { buf, pos, statement } = this.destructureAlloc("alloc", 1);
+				const bytes = field.members.length <= 256 ? 1 : 2;
+				const { buf, pos, statement } = this.destructureAlloc("alloc", bytes);
 				out.push(statement);
 				out.push(
 					f.createExpressionStatement(
-						this.bufferCall("writeu8", [
+						this.bufferCall(bytes === 1 ? "writeu8" : "writeu16", [
 							buf,
 							pos,
 							this.enumIndexExpr(field.enumName, field.members, value),
@@ -221,6 +242,13 @@ export class Emitter {
 				return;
 			}
 			case "recursiveRef": {
+				// `ensureHelper` is idempotent (guarded by `generatedHelpers`):
+				// calling it here matters when this `recursiveRef` is the root
+				// field itself (a directly recursive union/alias, not one reached
+				// through an `object`'s `helperName`, which already calls it from
+				// `writeObject`) -- without it, this call site would reference a
+				// helper function that's never declared.
+				this.ensureHelper(field.helperName);
 				out.push(f.createExpressionStatement(this.callLocal(`${field.helperName}_write`, [value])));
 				return;
 			}
@@ -479,24 +507,75 @@ export class Emitter {
 		);
 	}
 
-	private enumIndexExpr(_enumName: string, members: ReadonlyArray<string>, value: ts.Expression): ts.Expression {
+	private enumIndexExpr(enumName: string, members: ReadonlyArray<string>, value: ts.Expression): ts.Expression {
+		const { indexName } = this.ensureEnumTable(enumName, members);
 		const f = this.factory;
-		const nameExpr = f.createPropertyAccessExpression(value, "Name");
-		let expr: ts.Expression = this.num(members.length - 1);
-		for (let i = members.length - 2; i >= 0; i--) {
-			expr = f.createConditionalExpression(
-				f.createBinaryExpression(
-					nameExpr,
-					this.ts_.SyntaxKind.EqualsEqualsEqualsToken,
-					f.createStringLiteral(members[i]),
-				),
-				undefined,
-				this.num(i),
-				undefined,
-				expr,
-			);
+		return f.createNonNullExpression(
+			f.createCallExpression(f.createPropertyAccessExpression(f.createIdentifier(indexName), "get"), undefined, [
+				f.createPropertyAccessExpression(value, "Name"),
+			]),
+		);
+	}
+
+	/**
+	 * Declares the write-side `{[name]: index}` map and read-side
+	 * `EnumItem[]` for one enum field (Type Coverage in transformer.md
+	 * promises an O(1) lookup, not the linear ternary chain this replaced --
+	 * see enum-encoding.md), and returns their names, generating the
+	 * declarations only the first time this exact member list is seen.
+	 * Keyed by the full member list rather than `enumName`: a field using
+	 * only a subset of an enum's members (still classified with that enum's
+	 * `enumName`) needs its own table, indexed 0..subset.length-1, not the
+	 * full enum's table.
+	 *
+	 * The index side is keyed by `value.Name` (a plain string), not the
+	 * `EnumItem` value itself: confirmed by execution under Lune (the
+	 * headless round-trip harness in `tests/`) that `Enum.<X>.<Y>` there
+	 * does not return the same object on repeated access -- `a == b` is
+	 * `true` (Lune gives `EnumItem` a custom equality), but raw Luau table
+	 * indexing doesn't consult that, so `t[a]` after `t[b] = ...` misses.
+	 * Real Roblox's `EnumItem`s are true engine singletons and wouldn't hit
+	 * this, but nothing about `{[EnumItem]: index}` guarantees it, and a
+	 * string key sidesteps the question entirely at no extra cost.
+	 */
+	private ensureEnumTable(
+		enumName: string,
+		members: ReadonlyArray<string>,
+	): { itemsName: string; indexName: string } {
+		const key = `${enumName}|${members.join("|")}`;
+		const cached = this.enumTables.get(key);
+		if (cached) {
+			return cached;
 		}
-		return expr;
+		this.enumTableCounter += 1;
+		const base = `surge_${enumName}_${this.enumTableCounter}`;
+		const entry = { itemsName: `${base}_items`, indexName: `${base}_index` };
+		this.enumTables.set(key, entry);
+
+		const f = this.factory;
+		const enumMember = (name: string) =>
+			f.createPropertyAccessExpression(
+				f.createPropertyAccessExpression(f.createIdentifier("Enum"), enumName),
+				name,
+			);
+		this.helperDecls.push(
+			this.constStatement(
+				f.createIdentifier(entry.itemsName),
+				f.createArrayLiteralExpression(members.map(enumMember)),
+			),
+		);
+		const indexEntries = members.map((name, i) =>
+			f.createArrayLiteralExpression([f.createStringLiteral(name), this.num(i)]),
+		);
+		this.helperDecls.push(
+			this.constStatement(
+				f.createIdentifier(entry.indexName),
+				f.createNewExpression(f.createIdentifier("Map"), undefined, [
+					f.createArrayLiteralExpression(indexEntries),
+				]),
+			),
+		);
+		return entry;
 	}
 
 	private literalValueExpr(value: string | number | boolean): ts.Expression {
@@ -638,19 +717,41 @@ export class Emitter {
 			const byteCount = Math.ceil(packedBools.length / 8);
 			const { buf, pos, statement } = this.destructureAlloc("alloc", byteCount);
 			out.push(statement);
-			packedBools.forEach((entry, i) => {
-				out.push(
-					f.createExpressionStatement(
-						this.call("packBit", [
-							buf,
-							pos,
-							this.num(i),
-							f.createPropertyAccessExpression(value, entry.name),
-						]),
-					),
-				);
-			});
+			// One `writeu8` per byte, computed from all its bits at once, rather
+			// than one `packBit` call per bit into the reused scratch region:
+			// `alloc()` doesn't zero a region it didn't just grow into, so a
+			// bit-at-a-time write would leave any bit past `packedBools.length`
+			// holding whatever an earlier `serialize()` call left there (see
+			// wire-format-determinism.md). Computing the whole byte writes every
+			// bit, including the unused high ones (implicitly zero), so the
+			// result is deterministic by construction.
+			for (let byteIndex = 0; byteIndex < byteCount; byteIndex++) {
+				const chunk = packedBools.slice(byteIndex * 8, byteIndex * 8 + 8);
+				const byteExpr = this.packedByteExpr(chunk, value);
+				const offset =
+					byteIndex === 0
+						? pos
+						: f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, this.num(byteIndex));
+				out.push(f.createExpressionStatement(this.bufferCall("writeu8", [buf, offset, byteExpr])));
+			}
 		}
+	}
+
+	/** Sums `1 << bitIndex` for each true entry in `entries` (bit 0 = the byte's least-significant bit, matching `unpackBit`'s `buffer.readbits`). */
+	private packedByteExpr(entries: ReadonlyArray<ObjectFieldEntry>, value: ts.Expression): ts.Expression {
+		const f = this.factory;
+		let expr: ts.Expression | undefined;
+		entries.forEach((entry, bitIndex) => {
+			const term = f.createConditionalExpression(
+				f.createPropertyAccessExpression(value, entry.name),
+				undefined,
+				this.num(1 << bitIndex),
+				undefined,
+				this.num(0),
+			);
+			expr = expr ? f.createBinaryExpression(expr, this.ts_.SyntaxKind.PlusToken, term) : term;
+		});
+		return expr!;
 	}
 
 	private writeTaggedUnion(
@@ -817,17 +918,19 @@ export class Emitter {
 				return this.readSequence("NumberSequence", out);
 			}
 			case "enum": {
-				const { buf, pos, statement } = this.destructureAlloc("readAlloc", 1);
+				const bytes = field.members.length <= 256 ? 1 : 2;
+				const { buf, pos, statement } = this.destructureAlloc("readAlloc", bytes);
 				out.push(statement);
 				const idx = this.fresh("idx");
-				out.push(this.constStatement(idx, this.bufferCall("readu8", [buf, pos])));
+				out.push(this.constStatement(idx, this.bufferCall(bytes === 1 ? "readu8" : "readu16", [buf, pos])));
 				return this.enumFromIndexExpr(field.enumName, field.members, idx);
 			}
 			case "object": {
 				return this.readObject(field, out);
 			}
 			case "recursiveRef": {
-				return this.callLocal(`${field.helperName}_read`, []);
+				this.ensureHelper(field.helperName);
+				return this.bindSideEffect(this.callLocal(`${field.helperName}_read`, []), out);
 			}
 			case "array": {
 				const { buf, pos, statement } = this.destructureAlloc("readAlloc", 4);
@@ -981,7 +1084,7 @@ export class Emitter {
 				return this.readGuardedUnion(field, out);
 			}
 			case "blob": {
-				return this.call("nextBlob", []);
+				return this.bindSideEffect(this.call("nextBlob", []), out);
 			}
 		}
 	}
@@ -1106,23 +1209,8 @@ export class Emitter {
 	}
 
 	private enumFromIndexExpr(enumName: string, members: ReadonlyArray<string>, idx: ts.Expression): ts.Expression {
-		const f = this.factory;
-		const enumMember = (name: string) =>
-			f.createPropertyAccessExpression(
-				f.createPropertyAccessExpression(f.createIdentifier("Enum"), enumName),
-				name,
-			);
-		let expr: ts.Expression = enumMember(members[members.length - 1]);
-		for (let i = members.length - 2; i >= 0; i--) {
-			expr = f.createConditionalExpression(
-				f.createBinaryExpression(idx, this.ts_.SyntaxKind.EqualsEqualsEqualsToken, this.num(i)),
-				undefined,
-				enumMember(members[i]),
-				undefined,
-				expr,
-			);
-		}
-		return expr;
+		const { itemsName } = this.ensureEnumTable(enumName, members);
+		return this.factory.createElementAccessExpression(this.factory.createIdentifier(itemsName), idx);
 	}
 
 	private literalFromIndexExpr(
@@ -1227,7 +1315,7 @@ export class Emitter {
 	private readObject(field: Extract<Field, { kind: "object" }>, out: ts.Statement[]): ts.Expression {
 		if (field.helperName) {
 			this.ensureHelper(field.helperName);
-			return this.callLocal(`${field.helperName}_read`, []);
+			return this.bindSideEffect(this.callLocal(`${field.helperName}_read`, []), out);
 		}
 		return this.readObjectInline(field.fields, out);
 	}
@@ -1458,19 +1546,32 @@ export class Emitter {
 		}
 		this.generatedHelpers.add(name);
 		const field = this.helperFields.get(name);
-		if (!field || field.kind !== "object") {
-			throw new Error(`surge: internal error -- no resolved object field for recursive helper "${name}"`);
+		if (!field) {
+			throw new Error(`surge: internal error -- no resolved field for recursive helper "${name}"`);
 		}
+		// Building this body can never recurse into this same helper: for an
+		// `object`, `field.fields` is used directly below (`writeObjectInline`/
+		// `readObjectInline`), bypassing the `field.helperName` check that
+		// `writeObject`/`readObject` make -- the marker is there, just unused
+		// here. Every other kind has no such marker to carry in the first
+		// place, so the walker (see `walk.ts`'s `resolved`/`walkUnion` doc
+		// comments) only ever hands back the bare structure for those; the
+		// first call site to finish walking a recursive one instead resolves
+		// to `recursiveRef`, and that's what a *nested* reference inside this
+		// very `field` will be.
 		const f = this.factory;
 
-		this.helperDecls.push(
-			f.createTypeAliasDeclaration(undefined, `${name}_Type`, undefined, this.objectShapeTypeNode(field.fields)),
-		);
+		const typeNode = field.kind === "object" ? this.objectShapeTypeNode(field.fields) : this.fieldToTypeNode(field);
+		this.helperDecls.push(f.createTypeAliasDeclaration(undefined, `${name}_Type`, undefined, typeNode));
 		const typeRef = f.createTypeReferenceNode(`${name}_Type`);
 
 		const valueParam = f.createParameterDeclaration(undefined, undefined, "value", undefined, typeRef, undefined);
 		const writeBody: ts.Statement[] = [];
-		this.writeObjectInline(field.fields, f.createIdentifier("value"), writeBody);
+		if (field.kind === "object") {
+			this.writeObjectInline(field.fields, f.createIdentifier("value"), writeBody);
+		} else {
+			this.writeField(field, f.createIdentifier("value"), writeBody);
+		}
 		this.helperDecls.push(
 			f.createFunctionDeclaration(
 				undefined,
@@ -1484,7 +1585,8 @@ export class Emitter {
 		);
 
 		const readBody: ts.Statement[] = [];
-		const resultExpr = this.readObjectInline(field.fields, readBody);
+		const resultExpr =
+			field.kind === "object" ? this.readObjectInline(field.fields, readBody) : this.readField(field, readBody);
 		readBody.push(f.createReturnStatement(resultExpr));
 		this.helperDecls.push(
 			f.createFunctionDeclaration(

@@ -159,3 +159,111 @@ describe("Emitter per-kind write/read snapshots", () => {
 		expect(emitSnapshot({ kind: "recursiveRef", helperName: "surge_Node_1" }, helperFields)).toMatchSnapshot();
 	});
 });
+
+// Regression tests for docs/future-work/read-order-side-effects.md:
+// `readObjectInline` pushes each field's read *statements* in field order but
+// evaluates each field's returned *expression* later, inside the object
+// literal -- sound only if every returned expression is side-effect free. A
+// helper call and a blob read are not, so a sibling field whose own read
+// needs a statement (anything but those two, plus a handful of expression-
+// only kinds) must not have its statement land ahead of an earlier-declared
+// side-effecting field's binding.
+describe("Emitter read-order for side-effecting fields", () => {
+	test("a helper-object field followed by a plain field binds the helper call before the next statement", () => {
+		const helperFields = new Map<string, Field>([
+			[
+				"surge_Tree_1",
+				{
+					kind: "object",
+					fields: [{ name: "kids", field: { kind: "array", element: { kind: "num", width: "f64" } } }],
+				},
+			],
+		]);
+		const field: Field = {
+			kind: "object",
+			fields: [
+				{
+					name: "inner",
+					field: {
+						kind: "object",
+						fields: [{ name: "kids", field: { kind: "array", element: { kind: "num", width: "f64" } } }],
+						helperName: "surge_Tree_1",
+					},
+				},
+				{ name: "zebra", field: { kind: "num", width: "f64" } },
+			],
+		};
+		const output = emitSnapshot(field, helperFields);
+		const readSection = output.slice(output.indexOf("// read"));
+		const helperCallIndex = readSection.indexOf("surge_Tree_1_read()");
+		const zebraAllocIndex = readSection.indexOf("readAlloc(8)");
+		expect(helperCallIndex).toBeGreaterThan(-1);
+		expect(zebraAllocIndex).toBeGreaterThan(-1);
+		expect(helperCallIndex).toBeLessThan(zebraAllocIndex);
+		expect(output).toMatchSnapshot();
+	});
+
+	test("a blob field followed by a plain field binds the blob read before the next statement", () => {
+		const field: Field = {
+			kind: "object",
+			fields: [
+				{ name: "a", field: { kind: "blob" } },
+				{ name: "b", field: { kind: "num", width: "f64" } },
+			],
+		};
+		const output = emitSnapshot(field);
+		const readSection = output.slice(output.indexOf("// read"));
+		const blobIndex = readSection.indexOf("nextBlob()");
+		const bAllocIndex = readSection.indexOf("readAlloc(8)");
+		expect(blobIndex).toBeGreaterThan(-1);
+		expect(bAllocIndex).toBeGreaterThan(-1);
+		expect(blobIndex).toBeLessThan(bAllocIndex);
+		expect(output).toMatchSnapshot();
+	});
+});
+
+// Regression test for docs/future-work/wire-format-determinism.md: packed
+// booleans must write a whole computed byte (zeroing any unused high bits by
+// construction) instead of one `packBit` call per bit into scratch memory
+// that may still hold a previous payload's bits.
+describe("Emitter packed boolean padding", () => {
+	test("packed booleans write one computed byte per group instead of per-bit packBit calls", () => {
+		const field: Field = {
+			kind: "object",
+			fields: [
+				{ name: "a", field: { kind: "bool", packed: true } },
+				{ name: "b", field: { kind: "bool", packed: true } },
+				{ name: "c", field: { kind: "bool", packed: true } },
+			],
+		};
+		const output = emitSnapshot(field);
+		const writeSection = output.slice(0, output.indexOf("// read"));
+		expect(writeSection).not.toContain("packBit");
+		expect(writeSection).toContain("writeu8");
+		expect(output).toMatchSnapshot();
+	});
+});
+
+// Regression tests for docs/future-work/enum-encoding.md: an enum index
+// wider than one byte, and an O(1) lookup table instead of a linear ternary
+// chain of string/index comparisons.
+describe("Emitter enum index width and lookup table", () => {
+	test("an enum with more than 256 members uses a 2-byte index", () => {
+		const members = Array.from({ length: 300 }, (_, i) => `M${i}`);
+		const output = emitSnapshot({ kind: "enum", enumName: "Big", members });
+		expect(output).toContain("writeu16");
+		expect(output).toContain("readu16");
+		expect(output).not.toContain("writeu8");
+	});
+
+	test("an enum index is an O(1) table lookup, not a chain of Name comparisons", () => {
+		const output = emitSnapshot({
+			kind: "enum",
+			enumName: "SortOrder",
+			members: ["Custom", "LayoutOrder", "Name"],
+		});
+		expect(output).not.toMatch(/\.Name ===/);
+		expect(output).toMatch(/_index\.get\(value\.Name\)/);
+		expect(output).toMatch(/_items\[idx\d+\]/);
+	});
+});
