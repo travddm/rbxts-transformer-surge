@@ -1,5 +1,7 @@
 # rbxts-transformer-surge
 
+[![CI](https://github.com/travddm/rbxts-transformer-surge/actions/workflows/ci.yml/badge.svg)](https://github.com/travddm/rbxts-transformer-surge/actions/workflows/ci.yml)
+
 The TypeScript transformer for [`@rbxts/surge`](https://github.com/travddm/surge):
 detects `createSerializer<T>()`/`createDeserializer<T>()`/`createBinarySerializer<T>()`
 calls and replaces them with specialized serialize/deserialize code generated
@@ -9,7 +11,7 @@ generated code calls into.
 
 The full design (why this approach works, the detection/type-walk/codegen
 design, the type coverage table, testing strategy) lives in
-[travddm/surge's docs/](https://github.com/travddm/surge/tree/main/docs),
+[travddm/surge's docs/](https://github.com/travddm/surge/tree/master/docs),
 particularly `transformer.md` and `testing.md` — kept in one place across
 both repos rather than duplicated here.
 
