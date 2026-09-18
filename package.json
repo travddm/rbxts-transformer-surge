@@ -1,0 +1,57 @@
+{
+	"name": "rbxts-transformer-surge",
+	"version": "0.1.0",
+	"private": true,
+	"description": "TypeScript transformer that generates specialized serialize/deserialize code for @rbxts/surge.",
+	"main": "lib/index.js",
+	"files": [
+		"lib"
+	],
+	"scripts": {
+		"compile": "tsc -p tsconfig.json",
+		"prepare": "npm run compile",
+		"test": "jest",
+		"lint:check": "npm run lint:eslint && npm run lint:md",
+		"lint:fix": "npm run lint:eslint -- --fix && npm run lint:md -- --fix",
+		"lint:eslint": "eslint .",
+		"lint:md": "markdownlint-cli2 \"**/*.md\" \"!**/node_modules/**\" \"!**/lib/**\"",
+		"format:check": "prettier --check .",
+		"format:fix": "prettier --write .",
+		"spell": "cspell --no-progress"
+	},
+	"author": "travddm",
+	"license": "ISC",
+	"devDependencies": {
+		"@eslint/js": "^9.39.2",
+		"@trivago/prettier-plugin-sort-imports": "^6.0.1",
+		"@types/jest": "^29.5.14",
+		"@types/node": "^22.0.0",
+		"cspell": "^8.17.5",
+		"eslint": "^9.39.2",
+		"eslint-config-prettier": "^10.1.8",
+		"eslint-import-resolver-typescript": "^4.4.4",
+		"eslint-plugin-import-x": "^4.16.2",
+		"eslint-plugin-prettier": "^5.5.4",
+		"jest": "^29.7.0",
+		"jiti": "^2.6.1",
+		"markdownlint-cli2": "^0.23.2",
+		"prettier": "^3.7.4",
+		"ts-jest": "^29.2.5",
+		"typescript": "5.5.3",
+		"typescript-eslint": "^8.56.0"
+	},
+	"jest": {
+		"testEnvironment": "node",
+		"testMatch": [
+			"<rootDir>/test/**/*.test.ts"
+		],
+		"transform": {
+			"^.+\\.ts$": [
+				"ts-jest",
+				{
+					"tsconfig": "test/tsconfig.json"
+				}
+			]
+		}
+	}
+}

@@ -1,0 +1,84 @@
+{
+	"version": "2.0.0",
+	// mise tasks assume a POSIX shell (confirmed against the sibling `surge` repo: PowerShell
+	// mis-invokes node_modules/.bin's shebang scripts, e.g. "uname: command not found").
+	"windows": {
+		"options": {
+			"shell": {
+				"executable": "C:\\Program Files\\Git\\bin\\bash.exe",
+				"args": ["-c"]
+			}
+		}
+	},
+	"tasks": [
+		{
+			"label": "transformer: ci",
+			"detail": "Run the full verification suite (mise run ci)",
+			"type": "shell",
+			"command": "mise run ci",
+			"group": "test",
+			"problemMatcher": []
+		},
+		{
+			"label": "transformer: test",
+			"detail": "Run the transformer's unit tests (Jest, plain Node) (mise run test)",
+			"type": "shell",
+			"command": "mise run test",
+			"group": { "kind": "test", "isDefault": true },
+			"problemMatcher": []
+		},
+		{
+			"label": "transformer: lint:check",
+			"detail": "Lint with ESLint and markdownlint (mise run lint:check)",
+			"type": "shell",
+			"command": "mise run lint:check",
+			"group": "test",
+			"problemMatcher": []
+		},
+		{
+			"label": "transformer: lint:fix",
+			"detail": "Lint with ESLint and markdownlint and apply fixes (mise run lint:fix)",
+			"type": "shell",
+			"command": "mise run lint:fix",
+			"problemMatcher": []
+		},
+		{
+			"label": "transformer: format:check",
+			"detail": "Check formatting with Prettier (mise run format:check)",
+			"type": "shell",
+			"command": "mise run format:check",
+			"group": "test",
+			"problemMatcher": []
+		},
+		{
+			"label": "transformer: format:fix",
+			"detail": "Format with Prettier and apply fixes (mise run format:fix)",
+			"type": "shell",
+			"command": "mise run format:fix",
+			"problemMatcher": []
+		},
+		{
+			"label": "transformer: spell",
+			"detail": "Spell check with cspell (mise run spell)",
+			"type": "shell",
+			"command": "mise run spell",
+			"group": "test",
+			"problemMatcher": []
+		},
+		{
+			"label": "transformer: compile",
+			"detail": "Build the transformer with tsc (mise run compile)",
+			"type": "shell",
+			"command": "mise run compile",
+			"group": { "kind": "build", "isDefault": true },
+			"problemMatcher": []
+		},
+		{
+			"label": "transformer: hooks:install",
+			"detail": "Install the project's git hooks (mise run hooks:install)",
+			"type": "shell",
+			"command": "mise run hooks:install",
+			"problemMatcher": []
+		}
+	]
+}

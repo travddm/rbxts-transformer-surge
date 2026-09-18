@@ -1,0 +1,11 @@
+{
+	"ul-indent": false,
+	"fenced-code-language": false,
+	"no-hard-tabs": false,
+	"first-line-heading": false,
+	"line-length": {
+		"line_length": 100,
+		"tables": false,
+		"code_blocks": false
+	}
+}

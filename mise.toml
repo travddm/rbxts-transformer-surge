@@ -1,0 +1,43 @@
+[tools]
+node = "24.18.0"
+
+[hooks]
+# Keeps node_modules in sync whenever `mise install` runs (e.g. after a [tools] version bump),
+# without a separate manual step.
+postinstall = "npm install"
+
+[tasks.compile]
+description = "Build the transformer with tsc"
+run = "npm run compile"
+
+[tasks.test]
+description = "Run the transformer's unit tests (Jest, plain Node)"
+run = "npm run test"
+
+[tasks."lint:check"]
+description = "Lint with ESLint and markdownlint"
+run = "npm run lint:check"
+
+[tasks."lint:fix"]
+description = "Lint with ESLint and markdownlint and apply fixes"
+run = "npm run lint:fix"
+
+[tasks."format:check"]
+description = "Check formatting with Prettier"
+run = "npm run format:check"
+
+[tasks."format:fix"]
+description = "Format with Prettier and apply fixes"
+run = "npm run format:fix"
+
+[tasks.spell]
+description = "Spell check with cspell"
+run = "npm run spell"
+
+[tasks."hooks:install"]
+description = "Install the project's git hooks (opt-in)"
+run = "git config core.hooksPath .githooks"
+
+[tasks.ci]
+description = "Run all CI checks in order (for agent verification)"
+run = ["npm run lint:check", "npm run format:check", "npm run spell", "npm run compile", "npm run test"]

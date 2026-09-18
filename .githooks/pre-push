@@ -1,0 +1,6 @@
+#!/bin/sh
+# Opt-in pre-push hook: run the full verification suite before pushing.
+# Install with: mise run hooks:install
+set -e
+
+exec mise run ci

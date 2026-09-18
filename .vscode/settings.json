@@ -1,0 +1,60 @@
+{
+	"js/ts.tsdk.promptToUseWorkspaceVersion": true,
+	"js/ts.tsdk.path": "node_modules/typescript/lib",
+	"files.eol": "\n",
+	"[typescript]": {
+		"editor.defaultFormatter": "dbaeumer.vscode-eslint",
+		"editor.formatOnSave": true
+	},
+	"[json]": {
+		"editor.defaultFormatter": "esbenp.prettier-vscode",
+		"editor.formatOnSave": true
+	},
+	"[jsonc]": {
+		"editor.defaultFormatter": "esbenp.prettier-vscode",
+		"editor.formatOnSave": true
+	},
+	"[markdown]": {
+		"editor.defaultFormatter": "esbenp.prettier-vscode",
+		"editor.formatOnSave": true
+	},
+	"cSpell.enabled": true,
+	"eslint.run": "onType",
+	"eslint.format.enable": true,
+	"markdownlint.configFile": ".markdownlint.json",
+	// This repo has zero Luau -- plain Node/CommonJS. luau-lsp's own sourcemap.* settings are
+	// resource-scoped (correctly per-folder even in the multi-root surge.code-workspace), but
+	// this folder never set any, so it fell back to luau-lsp's compiled-in default
+	// (rojoProjectFile: "default.project.json") and tried to generate a sourcemap for a Rojo
+	// project that doesn't exist here -- confirmed by the resulting error explicitly naming this
+	// folder. Disabling the feature entirely is the fix, not pointing it at a real project file.
+	"luau-lsp.sourcemap.enabled": false,
+	"VsCodeTaskButtons.showCounter": false,
+	"VsCodeTaskButtons.tasks": [
+		{
+			"label": "$(gear) Compile",
+			"tooltip": "Compile the project",
+			"task": "transformer: compile"
+		},
+		{
+			"label": "$(wrench) Fix",
+			"tooltip": "Apply lint and formatting fixes",
+			"tasks": [
+				{ "label": "Lint", "task": "transformer: lint:fix", "description": "mise run lint:fix" },
+				{ "label": "Format", "task": "transformer: format:fix", "description": "mise run format:fix" }
+			]
+		},
+		{
+			"label": "$(beaker) CI",
+			"tooltip": "Run all CI checks or a single step",
+			"tasks": [
+				{ "label": "All", "task": "transformer: ci", "description": "mise run ci" },
+				{ "label": "Lint", "task": "transformer: lint:check", "description": "mise run lint:check" },
+				{ "label": "Format", "task": "transformer: format:check", "description": "mise run format:check" },
+				{ "label": "Spell", "task": "transformer: spell", "description": "mise run spell" },
+				{ "label": "Compile", "task": "transformer: compile", "description": "mise run compile" },
+				{ "label": "Test", "task": "transformer: test", "description": "mise run test" }
+			]
+		}
+	]
+}

@@ -1,0 +1,19 @@
+{
+	"compilerOptions": {
+		"target": "ES2019",
+		"module": "commonjs",
+		"moduleResolution": "Node",
+		"lib": ["ES2019"],
+		"types": ["node"],
+		"strict": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+		"declaration": true,
+		"rootDir": "src",
+		"outDir": "lib",
+		"incremental": true,
+		"tsBuildInfoFile": ".tsbuildinfo/tsconfig.tsbuildinfo"
+	},
+	"include": ["src/**/*"]
+}
