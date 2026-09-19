@@ -447,6 +447,17 @@ for (let i21 = 0; i21 < count20; i21++) {
 return tup12;"
 `;
 
+exports[`Emitter per-kind write/read snapshots vector2 1`] = `
+"// write
+const [buf1, pos2] = alloc(8);
+buffer.writef32(buf1, pos2, value.X);
+buffer.writef32(buf1, pos2 + 4, value.Y);
+
+// read
+const [buf3, pos4] = readAlloc(8);
+return new Vector2(buffer.readf32(buf3, pos4), buffer.readf32(buf3, pos4 + 4));"
+`;
+
 exports[`Emitter per-kind write/read snapshots vector3 1`] = `
 "// write
 const [buf1, pos2] = alloc(12);
