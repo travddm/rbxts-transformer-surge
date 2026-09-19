@@ -20,6 +20,25 @@ function runTransform(source: string): {
 	}
 }
 
+/**
+ * Type-checks the transformed file in a second program, as roblox-ts does
+ * before it emits, and returns the error messages. A type error in generated
+ * code fails the user's build at a position they cannot see.
+ */
+function typeErrorsOfGeneratedCode(source: string): string[] {
+	const { printed, diagnostics, cleanup } = runTransform(source);
+	const second = createFixtureProgram(printed, { surge: true });
+	try {
+		expect(diagnostics).toHaveLength(0);
+		return ts
+			.getPreEmitDiagnostics(second.program, second.sourceFile)
+			.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, " "));
+	} finally {
+		cleanup();
+		second.cleanup();
+	}
+}
+
 describe("transform (end-to-end)", () => {
 	test("createBinarySerializer<T>() becomes an IIFE and injects a sorted @rbxts/surge import", () => {
 		const { printed, cleanup } = runTransform(
@@ -151,5 +170,48 @@ describe("transform injected imports", () => {
 		} finally {
 			cleanup();
 		}
+	});
+});
+
+describe("transform generated code", () => {
+	// Each case is a shape whose generated code used to fail the type check.
+	test.each([
+		["a tuple whose rest element type differs from a fixed element", `type T = [string, ...number[]];`],
+		[
+			"an optional property of a recursive type",
+			`interface Folder { name: string; entries: Entry[]; }
+			interface Entry { size: number; folder?: Folder; }
+			type T = Folder;`,
+		],
+		[
+			"an optional property of a recursive discriminated union variant",
+			`type T = { kind: "leaf"; label?: string } | { kind: "pair"; l: T; r: T };`,
+		],
+		["a tuple property of a recursive type", `interface Scope { pair?: [Scope, number]; } type T = Scope;`],
+		["a required property of type unknown", `interface T { anything: unknown; }`],
+	])("the generated code for %s passes the type check", (_name, declarations) => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { createBinarySerializer } from "@rbxts/surge";
+			${declarations}
+			export const s = createBinarySerializer<T>();`,
+		);
+		expect(errors).toEqual([]);
+	});
+
+	test("the generated code for a shape of every common kind passes the type check", () => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { DataType, createBinarySerializer } from "@rbxts/surge";
+			interface Everything {
+				n: number; w: DataType.u16; b: boolean; s: string; o?: string;
+				list: number[]; map: Map<string, number>; set: Set<string>; record: Record<string, boolean>;
+				literal: "a" | "b"; constant: 1; tagged: { kind: "x"; v: number } | { kind: "y" };
+				guarded: string | number | { name: string };
+				position: Vector3; tint: Color3; placement: CFrame; rig: Enum.HumanoidRigType;
+				colors: ColorSequence; part: Instance;
+				flags: DataType.Packed<{ p: boolean; q: boolean }>;
+			}
+			export const s = createBinarySerializer<Everything>();`,
+		);
+		expect(errors).toEqual([]);
 	});
 });

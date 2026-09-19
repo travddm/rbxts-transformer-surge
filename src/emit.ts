@@ -410,7 +410,13 @@ export class Emitter {
 					out.push(f.createExpressionStatement(this.bufferCall("writeu32", [buf, pos, restCountExpr])));
 					const i = this.fresh("i");
 					const body: ts.Statement[] = [];
-					this.writeField(field.rest, f.createElementAccessExpression(tup, i), body);
+					// `tup[i]` has the union of every element type; the index is
+					// past the fixed elements, so it is a rest element.
+					this.writeField(
+						field.rest,
+						this.castTo(f.createElementAccessExpression(tup, i), this.fieldToTypeNode(field.rest)),
+						body,
+					);
 					out.push(
 						f.createForStatement(
 							f.createVariableDeclarationList(
@@ -488,7 +494,9 @@ export class Emitter {
 				return;
 			}
 			case "blob": {
-				out.push(f.createExpressionStatement(this.call("pushBlob", [value])));
+				// `pushBlob` takes `defined`, and the static type of a blob can be `unknown`.
+				const asDefined = this.castTo(value, f.createTypeReferenceNode("defined"));
+				out.push(f.createExpressionStatement(this.call("pushBlob", [asDefined])));
 				return;
 			}
 		}
@@ -1209,7 +1217,9 @@ export class Emitter {
 						),
 					);
 				}
-				return result;
+				// `result` is inferred as an array of the union of what was
+				// pushed, which is not assignable to a tuple type.
+				return this.castTo(result, this.fieldToTypeNode(field));
 			}
 			case "dict": {
 				return this.readDict(field, out);
@@ -1674,18 +1684,22 @@ export class Emitter {
 		return this.factory.createTypeReferenceNode(`${name}_Type`);
 	}
 
-	private objectShapeTypeNode(fields: ReadonlyArray<ObjectFieldEntry>): ts.TypeNode {
-		const f = this.factory;
-		return f.createTypeLiteralNode(
-			fields.map((entry) =>
-				f.createPropertySignature(
-					undefined,
-					this.propertyName(entry),
-					undefined,
-					this.fieldToTypeNode(entry.field),
-				),
-			),
+	/**
+	 * An `optional` property is declared optional (`key?:`). The
+	 * user's type is passed to a helper typed with this shape, and
+	 * `{ key?: T }` is not assignable to `{ key: T | undefined }`.
+	 */
+	private propertySignature(entry: ObjectFieldEntry): ts.PropertySignature {
+		return this.factory.createPropertySignature(
+			undefined,
+			this.propertyName(entry),
+			entry.field.kind === "optional" ? this.factory.createToken(this.ts_.SyntaxKind.QuestionToken) : undefined,
+			this.fieldToTypeNode(entry.field),
 		);
+	}
+
+	private objectShapeTypeNode(fields: ReadonlyArray<ObjectFieldEntry>): ts.TypeNode {
+		return this.factory.createTypeLiteralNode(fields.map((entry) => this.propertySignature(entry)));
 	}
 
 	/** The best-effort structural type of a `Field`, for internal declarations only (never shown to a caller). */
@@ -1764,14 +1778,7 @@ export class Emitter {
 									this.literalValueExpr(variant.tagValue) as ts.LiteralExpression | ts.BooleanLiteral,
 								),
 							),
-							...variant.fields.map((entry) =>
-								f.createPropertySignature(
-									undefined,
-									this.propertyName(entry),
-									undefined,
-									this.fieldToTypeNode(entry.field),
-								),
-							),
+							...variant.fields.map((entry) => this.propertySignature(entry)),
 						]),
 					),
 				);

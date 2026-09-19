@@ -37,7 +37,7 @@ return result10;"
 
 exports[`Emitter per-kind write/read snapshots blob 1`] = `
 "// write
-__surge_pushBlob(value);
+__surge_pushBlob(value as unknown as defined);
 
 // read
 const val1 = __surge_nextBlob();
@@ -429,7 +429,7 @@ const [buf7, pos8] = __surge_alloc(4);
 buffer.writeu32(buf7, pos8, tup1.size() - 1);
 for (let i9 = 1; i9 < tup1.size(); i9++) {
     const [buf10, pos11] = __surge_alloc(8);
-    buffer.writef64(buf10, pos11, tup1[i9]);
+    buffer.writef64(buf10, pos11, tup1[i9] as unknown as number);
 }
 
 // read
@@ -444,7 +444,10 @@ for (let i21 = 0; i21 < count20; i21++) {
     const [buf22, pos23] = __surge_readAlloc(8);
     tup12.push(buffer.readf64(buf22, pos23));
 }
-return tup12;"
+return tup12 as unknown as [
+    string,
+    ...number[]
+];"
 `;
 
 exports[`Emitter per-kind write/read snapshots vector2 1`] = `
@@ -472,7 +475,7 @@ return new Vector3(buffer.readf32(buf3, pos4), buffer.readf32(buf3, pos4 + 4), b
 
 exports[`Emitter read-order for side-effecting fields a blob field followed by a plain field binds the blob read before the next statement 1`] = `
 "// write
-__surge_pushBlob(value.a);
+__surge_pushBlob(value.a as unknown as defined);
 const [buf1, pos2] = __surge_alloc(8);
 buffer.writef64(buf1, pos2, value.b);
 
