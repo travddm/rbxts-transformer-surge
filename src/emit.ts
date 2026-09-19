@@ -202,6 +202,10 @@ export class Emitter {
 				out.push(f.createExpressionStatement(this.bufferCall("writestring", [sbuf, spos, s])));
 				return;
 			}
+			case "vector2": {
+				this.writeNum2(value, "X", "Y", "f32", out);
+				return;
+			}
 			case "vector3": {
 				this.writeNum3(value, "X", "Y", "Z", "f32", out);
 				return;
@@ -371,6 +375,26 @@ export class Emitter {
 				return;
 			}
 		}
+	}
+
+	private writeNum2(value: ts.Expression, a: string, b: string, width: "f32", out: ts.Statement[]): void {
+		const f = this.factory;
+		const { buf, pos, statement } = this.destructureAlloc("alloc", 8);
+		out.push(statement);
+		out.push(
+			f.createExpressionStatement(
+				this.bufferCall(`write${width}`, [buf, pos, f.createPropertyAccessExpression(value, a)]),
+			),
+		);
+		out.push(
+			f.createExpressionStatement(
+				this.bufferCall(`write${width}`, [
+					buf,
+					f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, this.num(4)),
+					f.createPropertyAccessExpression(value, b),
+				]),
+			),
+		);
 	}
 
 	private writeNum3(value: ts.Expression, a: string, b: string, c: string, width: "f32", out: ts.Statement[]): void {
@@ -901,6 +925,10 @@ export class Emitter {
 				);
 				return this.bufferCall("readstring", [sbuf, spos, len]);
 			}
+			case "vector2": {
+				const [x, y] = this.readNum2("f32", out);
+				return f.createNewExpression(f.createIdentifier("Vector2"), undefined, [x, y]);
+			}
 			case "vector3": {
 				const [x, y, z] = this.readNum3("f32", out);
 				return f.createNewExpression(f.createIdentifier("Vector3"), undefined, [x, y, z]);
@@ -1087,6 +1115,17 @@ export class Emitter {
 				return this.bindSideEffect(this.call("nextBlob", []), out);
 			}
 		}
+	}
+
+	private readNum2(width: "f32", out: ts.Statement[]): [ts.Expression, ts.Expression] {
+		const { buf, pos, statement } = this.destructureAlloc("readAlloc", 8);
+		out.push(statement);
+		const x = this.bufferCall(`read${width}`, [buf, pos]);
+		const y = this.bufferCall(`read${width}`, [
+			buf,
+			this.factory.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, this.num(4)),
+		]);
+		return [x, y];
 	}
 
 	private readNum3(width: "f32", out: ts.Statement[]): [ts.Expression, ts.Expression, ts.Expression] {
@@ -1459,6 +1498,8 @@ export class Emitter {
 				return kw(this.ts_.SyntaxKind.BooleanKeyword);
 			case "str":
 				return kw(this.ts_.SyntaxKind.StringKeyword);
+			case "vector2":
+				return f.createTypeReferenceNode("Vector2");
 			case "vector3":
 				return f.createTypeReferenceNode("Vector3");
 			case "cframe":

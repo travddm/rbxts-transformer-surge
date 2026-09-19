@@ -16,6 +16,7 @@ export type Field =
 	| { readonly kind: "num"; readonly width: NumWidth }
 	| { readonly kind: "bool"; readonly packed: boolean }
 	| { readonly kind: "str" }
+	| { readonly kind: "vector2" }
 	| { readonly kind: "vector3" }
 	| { readonly kind: "cframe" }
 	| { readonly kind: "color3" }

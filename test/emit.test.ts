@@ -36,6 +36,10 @@ describe("Emitter per-kind write/read snapshots", () => {
 		expect(emitSnapshot({ kind: "str" })).toMatchSnapshot();
 	});
 
+	test("vector2", () => {
+		expect(emitSnapshot({ kind: "vector2" })).toMatchSnapshot();
+	});
+
 	test("vector3", () => {
 		expect(emitSnapshot({ kind: "vector3" })).toMatchSnapshot();
 	});

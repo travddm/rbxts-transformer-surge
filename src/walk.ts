@@ -10,6 +10,7 @@ export interface WalkDiagnostic {
 
 const NUM_BRAND_WIDTHS: ReadonlySet<string> = new Set(["f32", "f64", "u8", "u16", "u32", "i8", "i16", "i32"]);
 const ROBLOX_SCALAR_KINDS: Readonly<Record<string, Field["kind"]>> = {
+	Vector2: "vector2",
 	Vector3: "vector3",
 	CFrame: "cframe",
 	Color3: "color3",
@@ -155,8 +156,8 @@ export class TypeWalker {
 		// to the blob passthrough channel here, before any structural check
 		// below can walk their declared properties, is the fix for
 		// blob-classification.md: `Instance` has hundreds of properties and
-		// `Vector2`/`UDim`/`BrickColor`/etc. have their own, so without this
-		// check they never reach the "opaque type" fallback further down.
+		// `UDim`/`BrickColor`/etc. have their own, so without this check
+		// they never reach the "opaque type" fallback further down.
 		if (isRobloxNominalType(type)) {
 			return { kind: "blob" };
 		}

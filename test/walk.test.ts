@@ -143,6 +143,14 @@ describe("TypeWalker classification with fixture packages", () => {
 		});
 	});
 
+	test("Vector2 classifies as the vector2 scalar kind", () => {
+		const { field } = walkDeclaration("interface T { v: Vector2; }", "T", { roblox: true });
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "v", field: { kind: "vector2" } }],
+		});
+	});
+
 	test("Vector3 classifies as the vector3 scalar kind", () => {
 		const { field } = walkDeclaration("interface T { v: Vector3; }", "T", { roblox: true });
 		expect(field).toEqual({
@@ -193,8 +201,8 @@ describe("TypeWalker classification with fixture packages", () => {
 		expect(diagnostics).toEqual([]);
 	});
 
-	test("a Roblox datatype without a dedicated scalar kind (Vector2) falls back to blob via its _nominal_ brand", () => {
-		const { field } = walkDeclaration("interface T { v: Vector2; }", "T", { roblox: true });
+	test("a Roblox datatype without a dedicated scalar kind (Vector3int16) falls back to blob via its _nominal_ brand", () => {
+		const { field } = walkDeclaration("interface T { v: Vector3int16; }", "T", { roblox: true });
 		expect(field).toEqual({
 			kind: "object",
 			fields: [{ name: "v", field: { kind: "blob" } }],
