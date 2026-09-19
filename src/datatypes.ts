@@ -36,6 +36,9 @@ export const FIXED_DATATYPES: Readonly<Record<string, DatatypeSpec>> = {
 			{ path: ["Y", "Offset"], width: "i32" },
 		],
 	},
+	BrickColor: {
+		components: [{ path: ["Number"], width: "u16" }],
+	},
 };
 
 export function isFixedDatatype(name: string): boolean {
