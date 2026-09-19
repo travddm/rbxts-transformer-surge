@@ -1,6 +1,6 @@
 import type ts from "typescript";
 
-import { getDataTypeBrand, getPackedInnerType } from "./detect";
+import { getDataTypeBrand, getPackedInnerType, isFromTypesPackage, isRobloxNominalType } from "./detect";
 import type { Field, NumWidth, ObjectFieldEntry } from "./field";
 
 export interface WalkDiagnostic {
@@ -140,9 +140,68 @@ export class TypeWalker {
 			return { kind: "bool", packed };
 		}
 
+		// Identity-based, not a bare name match: a user-declared
+		// `interface Vector3 { foo: string }` has `type.symbol.name ===
+		// "Vector3"` too, so the scalar-kind table only applies to the real
+		// `@rbxts/types` declaration (see blob-classification.md).
 		const symbolName = type.symbol?.name;
-		if (symbolName && symbolName in ROBLOX_SCALAR_KINDS) {
+		if (symbolName && symbolName in ROBLOX_SCALAR_KINDS && isFromTypesPackage(type.symbol?.declarations)) {
 			return { kind: ROBLOX_SCALAR_KINDS[symbolName] } as Field;
+		}
+
+		// `@rbxts/types` brands `Instance` (and every subclass) and every
+		// Roblox datatype not covered above with its own `_nominal_*`
+		// property (fbs and serio both key off the same brand). Routing them
+		// to the blob passthrough channel here, before any structural check
+		// below can walk their declared properties, is the fix for
+		// blob-classification.md: `Instance` has hundreds of properties and
+		// `Vector2`/`UDim`/`BrickColor`/etc. have their own, so without this
+		// check they never reach the "opaque type" fallback further down.
+		if (isRobloxNominalType(type)) {
+			return { kind: "blob" };
+		}
+
+		// These types carry properties inherited from their apparent type
+		// (`String`/`Symbol` prototype members) or none at all, and either
+		// way can't be structurally encoded -- reported instead of silently
+		// routed to blob so a typo'd type doesn't disappear without a trace.
+		if ((type.flags & ts_.TypeFlags.TemplateLiteral) !== 0) {
+			this.report(
+				`surge: a template literal type can't be structurally encoded -- widen it to "string" or opt into the blob passthrough channel with "unknown".`,
+				node,
+			);
+			return { kind: "blob" };
+		}
+		if ((type.flags & ts_.TypeFlags.ESSymbolLike) !== 0) {
+			this.report(
+				`surge: "symbol" can't be structurally encoded -- opt into the blob passthrough channel with "unknown".`,
+				node,
+			);
+			return { kind: "blob" };
+		}
+		if ((type.flags & ts_.TypeFlags.BigIntLike) !== 0) {
+			this.report(
+				`surge: "bigint" can't be structurally encoded -- opt into the blob passthrough channel with "unknown".`,
+				node,
+			);
+			return { kind: "blob" };
+		}
+		if ((type.flags & ts_.TypeFlags.Null) !== 0) {
+			this.report(
+				`surge: "null" can't be structurally encoded -- opt into the blob passthrough channel with "unknown".`,
+				node,
+			);
+			return { kind: "blob" };
+		}
+		if (
+			checker.getSignaturesOfType(type, ts_.SignatureKind.Call).length > 0 ||
+			checker.getSignaturesOfType(type, ts_.SignatureKind.Construct).length > 0
+		) {
+			this.report(
+				`surge: a function type can't be encoded -- it would round-trip as a stale reference in-process at best and be meaningless over a RemoteEvent at worst. Opt into the blob passthrough channel with "unknown" if this is intentional.`,
+				node,
+			);
+			return { kind: "blob" };
 		}
 
 		if (this.isEnumItemUnionMember(type)) {
@@ -159,6 +218,16 @@ export class TypeWalker {
 			return this.walkMapOrSet(type, node, packed);
 		}
 
+		const indexInfos = checker.getIndexInfosOfType(type);
+		if (type.getProperties().length > 0 && indexInfos.length > 0) {
+			this.report(
+				`surge: a type with both declared properties and an index signature isn't supported -- split the index ` +
+					`signature into its own "Record"/"Map" field, or opt into the blob passthrough channel with "unknown".`,
+				node,
+			);
+			return { kind: "blob" };
+		}
+
 		if (type.getProperties().length > 0 || this.hasNoIndexOrProperties(type)) {
 			const objectResult = this.tryWalkObject(type, node, packed);
 			if (objectResult) {
@@ -166,7 +235,6 @@ export class TypeWalker {
 			}
 		}
 
-		const indexInfos = checker.getIndexInfosOfType(type);
 		if (indexInfos.length > 0) {
 			return this.walkIndexSignature(type, indexInfos, node, packed);
 		}
@@ -456,6 +524,20 @@ export class TypeWalker {
 		}
 
 		const fields = constituents.map((t) => this.walk(t, node, packed));
+
+		// Every constituent routed to the opaque passthrough channel (for
+		// example a union of `Instance` subclasses, now that they're
+		// nominally detected -- see blob-classification.md): there is
+		// nothing left to guard on, since `pushBlob`/`nextBlob` write and
+		// read identically regardless of which variant produced the value.
+		// `emit.ts`'s `guardFor` has no case for `"blob"` (that gap is
+		// walker-emitter-robustness.md's, for the general union-guard
+		// model), so collapsing here avoids a crash for what is otherwise
+		// ordinary Roblox code.
+		if (fields.length > 0 && fields.every((f) => f.kind === "blob")) {
+			return { kind: "blob" };
+		}
+
 		const tableShapedCount = fields.filter(
 			(f) => f.kind === "object" || f.kind === "array" || f.kind === "tuple" || f.kind === "dict",
 		).length;

@@ -164,17 +164,49 @@ describe("TypeWalker classification with fixture packages", () => {
 		});
 	});
 
-	// `Instance` is documented as the opaque blob-passthrough channel
-	// (Type Coverage in transformer.md), but it declares real properties in
-	// `@rbxts/types`, so the walk recurses into them instead of falling back
-	// to `blob` -- the exact gap tracked in
-	// docs/future-work/blob-classification.md. This asserts the current
-	// (buggy) behavior, not the documented one; update it once that fix lands.
-	test("Instance currently walks its declared properties instead of falling back to the blob passthrough channel", () => {
+	// `Instance` is documented as the opaque blob-passthrough channel (Type
+	// Coverage in transformer.md); it's detected by `@rbxts/types`' own
+	// `_nominal_Instance` brand property, not by walking its (hundreds of)
+	// declared properties -- see docs/future-work/blob-classification.md.
+	test("Instance falls back to the blob passthrough channel instead of walking its declared properties", () => {
 		const { field } = walkDeclaration("interface T { i: Instance; }", "T", { roblox: true });
-		expect(field.kind).toBe("object");
-		if (field.kind !== "object") throw new Error("unreachable");
-		expect(field.fields.find((entry) => entry.name === "i")?.field.kind).toBe("object");
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "i", field: { kind: "blob" } }],
+		});
+	});
+
+	test("an Instance subclass also falls back to blob via its inherited _nominal_Instance brand", () => {
+		const { field } = walkDeclaration("interface T { p: BasePart; }", "T", { roblox: true });
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "p", field: { kind: "blob" } }],
+		});
+	});
+
+	test("a union of Instance subclasses collapses to a single blob instead of a guardedUnion", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { p: BasePart | Model; }", "T", { roblox: true });
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "p", field: { kind: "blob" } }],
+		});
+		expect(diagnostics).toEqual([]);
+	});
+
+	test("a Roblox datatype without a dedicated scalar kind (Vector2) falls back to blob via its _nominal_ brand", () => {
+		const { field } = walkDeclaration("interface T { v: Vector2; }", "T", { roblox: true });
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "v", field: { kind: "blob" } }],
+		});
+	});
+
+	test("unknown classifies as blob", () => {
+		const { field } = walkDeclaration("interface T { u: unknown; }", "T", { roblox: true });
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "u", field: { kind: "blob" } }],
+		});
 	});
 });
 
@@ -378,6 +410,91 @@ describe("TypeWalker bare EnumItem", () => {
 		expect(field.kind).toBe("object");
 		if (field.kind !== "object") throw new Error("unreachable");
 		expect(field.fields.find((entry) => entry.name === "any")?.field).toEqual({ kind: "blob" });
+		expect(diagnostics.length).toBeGreaterThan(0);
+	});
+});
+
+// Regression tests for docs/future-work/blob-classification.md.
+describe("TypeWalker blob classification", () => {
+	// The scalar-kind table matched by bare symbol name before this fix, so a
+	// user's own unrelated same-named type would misclassify as the Roblox
+	// scalar. No `{ roblox: true }` here: the point is that this type isn't
+	// the real `@rbxts/types` declaration at all.
+	test("a user-declared type named after a Roblox scalar kind isn't misclassified by name alone", () => {
+		const { field } = walkDeclaration("interface Vector3 { foo: string; } interface T { v: Vector3; }", "T");
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "v", field: { kind: "object", fields: [{ name: "foo", field: { kind: "str" } }] } }],
+		});
+	});
+
+	test("a function-typed field is rejected with a diagnostic instead of a silent blob", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { f: () => void; }", "T");
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "f", field: { kind: "blob" } }],
+		});
+		expect(diagnostics.length).toBeGreaterThan(0);
+	});
+
+	// Regression test for walker-emitter-robustness.md's `in` operator bullet:
+	// `symbolName in ROBLOX_SCALAR_KINDS` matches through the prototype chain,
+	// so a method named after an `Object.prototype` member used to look up
+	// truthy regardless of `ROBLOX_SCALAR_KINDS`'s own keys. Gating that
+	// lookup on `@rbxts/types` declaration origin (this doc's own fix) closes
+	// it too: the method's declaration is the user's file, so the lookup now
+	// falls through to the function-type diagnostic below instead.
+	test("a method named after an Object.prototype member doesn't match the scalar-kind table through the prototype chain", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { toString(): string; }", "T");
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "toString", field: { kind: "blob" } }],
+		});
+		expect(diagnostics.length).toBeGreaterThan(0);
+	});
+
+	test("a symbol-typed field is rejected with a diagnostic instead of walking Symbol's members", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { s: symbol; }", "T");
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "s", field: { kind: "blob" } }],
+		});
+		expect(diagnostics.length).toBeGreaterThan(0);
+	});
+
+	test("a bigint-typed field is rejected with a diagnostic instead of a silent blob", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { b: bigint; }", "T");
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "b", field: { kind: "blob" } }],
+		});
+		expect(diagnostics.length).toBeGreaterThan(0);
+	});
+
+	test("a null-typed field is rejected with a diagnostic instead of a silent blob", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { n: null; }", "T");
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "n", field: { kind: "blob" } }],
+		});
+		expect(diagnostics.length).toBeGreaterThan(0);
+	});
+
+	test("a template literal type is rejected with a diagnostic instead of walking String's members", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { id: `id-${number}`; }", "T");
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "id", field: { kind: "blob" } }],
+		});
+		expect(diagnostics.length).toBeGreaterThan(0);
+	});
+
+	test("a type with both declared properties and an index signature is rejected with a diagnostic", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { m: { a: number; [k: string]: number }; }", "T");
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "m", field: { kind: "blob" } }],
+		});
 		expect(diagnostics.length).toBeGreaterThan(0);
 	});
 });
