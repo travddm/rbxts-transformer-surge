@@ -705,11 +705,21 @@ export class Emitter {
 			this.writeColor3(f.createPropertyAccessExpression(kp, "Value"), colorBody);
 			body.push(...colorBody);
 		} else {
-			const { buf: vbuf, pos: vpos, statement: vstmt } = this.destructureAlloc("alloc", 4);
+			const { buf: vbuf, pos: vpos, statement: vstmt } = this.destructureAlloc("alloc", 8);
 			body.push(vstmt);
 			body.push(
 				f.createExpressionStatement(
 					this.bufferCall("writef32", [vbuf, vpos, f.createPropertyAccessExpression(kp, "Value")]),
+				),
+			);
+			// fbs drops the envelope. It is part of the value, so it is kept here.
+			body.push(
+				f.createExpressionStatement(
+					this.bufferCall("writef32", [
+						vbuf,
+						this.offsetFrom(vpos, 4),
+						f.createPropertyAccessExpression(kp, "Envelope"),
+					]),
 				),
 			);
 		}
@@ -1467,15 +1477,16 @@ export class Emitter {
 		body.push(tstmt);
 		const time = this.fresh("time");
 		body.push(this.constStatement(time, this.bufferCall("readf32", [tbuf, tpos])));
-		let valueExpr: ts.Expression;
+		const keypointArgs: ts.Expression[] = [time];
 		if (kind === "ColorSequence") {
-			valueExpr = this.readColor3(body);
+			keypointArgs.push(this.readColor3(body));
 		} else {
-			const { buf: vbuf, pos: vpos, statement: vstmt } = this.destructureAlloc("readAlloc", 4);
+			const { buf: vbuf, pos: vpos, statement: vstmt } = this.destructureAlloc("readAlloc", 8);
 			body.push(vstmt);
-			valueExpr = this.bufferCall("readf32", [vbuf, vpos]);
+			keypointArgs.push(this.bufferCall("readf32", [vbuf, vpos]));
+			keypointArgs.push(this.bufferCall("readf32", [vbuf, this.offsetFrom(vpos, 4)]));
 		}
-		const keypoint = f.createNewExpression(f.createIdentifier(`${kind}Keypoint`), undefined, [time, valueExpr]);
+		const keypoint = f.createNewExpression(f.createIdentifier(`${kind}Keypoint`), undefined, keypointArgs);
 		body.push(
 			f.createExpressionStatement(
 				f.createCallExpression(f.createPropertyAccessExpression(keypoints, "push"), undefined, [keypoint]),
@@ -1837,6 +1848,13 @@ export class Emitter {
 				return f.createTupleTypeNode(members);
 			}
 			case "dict":
+				// A `Record` is not assignable to a `Map`, and `readDict` returns one for this source.
+				if (field.source === "record" && field.value) {
+					return f.createTypeReferenceNode("Record", [
+						this.fieldToTypeNode(field.key),
+						this.fieldToTypeNode(field.value),
+					]);
+				}
 				return field.value
 					? f.createTypeReferenceNode("Map", [
 							this.fieldToTypeNode(field.key),
