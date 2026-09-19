@@ -45,6 +45,14 @@ export const FIXED_DATATYPES: Readonly<Record<string, DatatypeSpec>> = {
 			{ path: ["Max"], width: "f32" },
 		],
 	},
+	Rect: {
+		components: [
+			{ path: ["Min", "X"], width: "f32" },
+			{ path: ["Min", "Y"], width: "f32" },
+			{ path: ["Max", "X"], width: "f32" },
+			{ path: ["Max", "Y"], width: "f32" },
+		],
+	},
 };
 
 export function isFixedDatatype(name: string): boolean {
