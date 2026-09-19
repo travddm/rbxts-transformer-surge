@@ -116,6 +116,16 @@ for (let i13 = 0; i13 < count11; i13++) {
 return new ColorSequence(keypoints12);"
 `;
 
+exports[`Emitter per-kind write/read snapshots datatype BrickColor 1`] = `
+"// write
+const [buf1, pos2] = __surge_alloc(2);
+buffer.writeu16(buf1, pos2, value.Number);
+
+// read
+const [buf3, pos4] = __surge_readAlloc(2);
+return new BrickColor(buffer.readu16(buf3, pos4));"
+`;
+
 exports[`Emitter per-kind write/read snapshots datatype UDim 1`] = `
 "// write
 const [buf1, pos2] = __surge_alloc(8);
