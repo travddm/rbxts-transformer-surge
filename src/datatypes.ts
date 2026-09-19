@@ -28,6 +28,14 @@ export const FIXED_DATATYPES: Readonly<Record<string, DatatypeSpec>> = {
 			{ path: ["Offset"], width: "i32" },
 		],
 	},
+	UDim2: {
+		components: [
+			{ path: ["X", "Scale"], width: "f32" },
+			{ path: ["X", "Offset"], width: "i32" },
+			{ path: ["Y", "Scale"], width: "f32" },
+			{ path: ["Y", "Offset"], width: "i32" },
+		],
+	},
 };
 
 export function isFixedDatatype(name: string): boolean {
