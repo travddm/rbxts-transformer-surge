@@ -1685,15 +1685,20 @@ export class Emitter {
 	}
 
 	/**
-	 * An `optional` property is declared optional (`key?:`). The
+	 * A property that admits `undefined` is declared optional (`key?:`). The
 	 * user's type is passed to a helper typed with this shape, and
 	 * `{ key?: T }` is not assignable to `{ key: T | undefined }`.
 	 */
 	private propertySignature(entry: ObjectFieldEntry): ts.PropertySignature {
+		const field = entry.field;
+		// The walker appends `undefined` to the values of a literal union that admits it.
+		const admitsUndefined =
+			field.kind === "optional" ||
+			(field.kind === "literal" && (field.values as ReadonlyArray<unknown>).includes(undefined));
 		return this.factory.createPropertySignature(
 			undefined,
 			this.propertyName(entry),
-			entry.field.kind === "optional" ? this.factory.createToken(this.ts_.SyntaxKind.QuestionToken) : undefined,
+			admitsUndefined ? this.factory.createToken(this.ts_.SyntaxKind.QuestionToken) : undefined,
 			this.fieldToTypeNode(entry.field),
 		);
 	}

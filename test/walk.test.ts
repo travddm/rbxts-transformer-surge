@@ -172,6 +172,28 @@ describe("TypeWalker classification with fixture packages", () => {
 		});
 	});
 
+	// One `enum` field holds the members of one enum: items of two enums used
+	// to be merged under the first enum's name.
+	test.each([
+		["two whole enums", "Enum.SortOrder | Enum.HumanoidRigType"],
+		["two items with the same name", "Enum.AutomaticSize.None | Enum.ActuatorType.None"],
+	])("a union of items from %s is rejected with a diagnostic", (_name, type) => {
+		const { field, diagnostics } = walkDeclaration(`interface T { e: ${type}; }`, "T", { roblox: true });
+		expect(field).toEqual({ kind: "object", fields: [{ name: "e", field: { kind: "blob" } }] });
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain("items from two enums");
+	});
+
+	test("a user type with the properties of an enum item walks as an object, not as an enum", () => {
+		const { field, diagnostics } = walkDeclaration(
+			`interface Item { Name: "Sword"; Value: number; EnumType: string; } interface T { item: Item; }`,
+			"T",
+			{ roblox: true },
+		);
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toMatchObject({ fields: [{ name: "item", field: { kind: "object" } }] });
+	});
+
 	// `Instance` is documented as the opaque blob-passthrough channel (Type
 	// Coverage in transformer.md); it's detected by `@rbxts/types`' own
 	// `_nominal_Instance` brand property, not by walking its (hundreds of)
@@ -209,8 +231,19 @@ describe("TypeWalker classification with fixture packages", () => {
 		});
 	});
 
-	test("unknown classifies as blob", () => {
-		const { field } = walkDeclaration("interface T { u: unknown; }", "T", { roblox: true });
+	// `unknown` admits `undefined`, and `u?: unknown` has no `undefined`
+	// constituent to find, so a plain `blob` would push nothing for an absent
+	// value and shift every later blob.
+	test.each(["u: unknown", "u?: unknown", "u: any"])("%s classifies as an optional blob", (property) => {
+		const { field } = walkDeclaration(`interface T { ${property}; }`, "T", { roblox: true });
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "u", field: { kind: "optional", inner: { kind: "blob" }, packed: false } }],
+		});
+	});
+
+	test("defined classifies as a blob with no presence flag", () => {
+		const { field } = walkDeclaration("interface T { u: defined; }", "T", { roblox: true });
 		expect(field).toEqual({
 			kind: "object",
 			fields: [{ name: "u", field: { kind: "blob" } }],
