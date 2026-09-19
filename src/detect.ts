@@ -45,9 +45,33 @@ function nearestPackageName(filePath: string): string | undefined {
 	}
 }
 
-function isFromSurgePackage(declarations: ts.Declaration[] | undefined): boolean {
+function isFromPackage(declarations: ts.Declaration[] | undefined, packageName: string): boolean {
 	const decl = declarations?.[0];
-	return decl !== undefined && nearestPackageName(decl.getSourceFile().fileName) === "@rbxts/surge";
+	return decl !== undefined && nearestPackageName(decl.getSourceFile().fileName) === packageName;
+}
+
+function isFromSurgePackage(declarations: ts.Declaration[] | undefined): boolean {
+	return isFromPackage(declarations, "@rbxts/surge");
+}
+
+/**
+ * `@rbxts/types` brands every Roblox class and datatype interface with its
+ * own uniquely named `_nominal_<TypeName>: unique symbol` property --
+ * `Instance` and each of its subclasses, plus `Vector2`, `BrickColor`,
+ * `CFrame`, and every other datatype (confirmed via `grep -n "_nominal_"` in
+ * the package's own `.d.ts` files; see blob-classification.md). Checking
+ * property shape plus declaration origin, rather than a fixed name list,
+ * covers all of them uniformly and can't be triggered by an unrelated user
+ * type that happens to declare its own `_nominal_*`-named property.
+ */
+export function isRobloxNominalType(type: ts.Type): boolean {
+	return type
+		.getProperties()
+		.some((p) => p.name.startsWith("_nominal_") && isFromPackage(p.declarations, "@rbxts/types"));
+}
+
+export function isFromTypesPackage(declarations: ts.Declaration[] | undefined): boolean {
+	return isFromPackage(declarations, "@rbxts/types");
 }
 
 /**
