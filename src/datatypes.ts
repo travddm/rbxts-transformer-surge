@@ -39,6 +39,12 @@ export const FIXED_DATATYPES: Readonly<Record<string, DatatypeSpec>> = {
 	BrickColor: {
 		components: [{ path: ["Number"], width: "u16" }],
 	},
+	NumberRange: {
+		components: [
+			{ path: ["Min"], width: "f32" },
+			{ path: ["Max"], width: "f32" },
+		],
+	},
 };
 
 export function isFixedDatatype(name: string): boolean {
