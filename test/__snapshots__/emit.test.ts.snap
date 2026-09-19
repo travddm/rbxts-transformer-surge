@@ -126,6 +126,17 @@ const [buf3, pos4] = __surge_readAlloc(2);
 return new BrickColor(buffer.readu16(buf3, pos4));"
 `;
 
+exports[`Emitter per-kind write/read snapshots datatype NumberRange 1`] = `
+"// write
+const [buf1, pos2] = __surge_alloc(8);
+buffer.writef32(buf1, pos2, value.Min);
+buffer.writef32(buf1, pos2 + 4, value.Max);
+
+// read
+const [buf3, pos4] = __surge_readAlloc(8);
+return new NumberRange(buffer.readf32(buf3, pos4), buffer.readf32(buf3, pos4 + 4));"
+`;
+
 exports[`Emitter per-kind write/read snapshots datatype UDim 1`] = `
 "// write
 const [buf1, pos2] = __surge_alloc(8);
