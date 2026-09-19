@@ -353,6 +353,11 @@ export class Emitter {
 				return;
 			}
 			case "cframe": {
+				if (field.packed) {
+					// The packed form branches on the value, so it is a runtime function (cframe.ts in @rbxts/surge).
+					out.push(this.factory.createExpressionStatement(this.call("writePackedCFrame", [value])));
+					return;
+				}
 				this.writeCFrame(value, out);
 				return;
 			}
@@ -1318,7 +1323,9 @@ export class Emitter {
 				return this.readColor3(out);
 			}
 			case "cframe": {
-				return this.readCFrame(out);
+				return field.packed
+					? this.bindSideEffect(this.call("readPackedCFrame", []), out)
+					: this.readCFrame(out);
 			}
 			case "colorSequence": {
 				return this.readSequence("ColorSequence", out);

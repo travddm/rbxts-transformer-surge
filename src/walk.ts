@@ -198,7 +198,8 @@ export class TypeWalker {
 		// `@rbxts/types` declaration (see blob-classification.md).
 		const symbolName = type.symbol?.name;
 		if (symbolName && symbolName in ROBLOX_SCALAR_KINDS && isFromTypesPackage(type.symbol?.declarations)) {
-			return { kind: ROBLOX_SCALAR_KINDS[symbolName] } as Field;
+			const kind = ROBLOX_SCALAR_KINDS[symbolName];
+			return (kind === "cframe" && packed ? { kind, packed } : { kind }) as Field;
 		}
 		if (symbolName && isFixedDatatype(symbolName) && isFromTypesPackage(type.symbol?.declarations)) {
 			return { kind: "datatype", name: symbolName };

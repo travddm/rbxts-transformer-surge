@@ -134,6 +134,31 @@ describe("TypeWalker classification with fixture packages", () => {
 		expect(field).toEqual({ kind: "object", fields: [{ name: "n", field: { kind: "num", width } }] });
 	});
 
+	test("a CFrame is packed only inside DataType.Packed<T>, at any depth", () => {
+		const { field } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			interface T { plain: CFrame; packed: DataType.Packed<{ one: CFrame; list: CFrame[] }>; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{
+					name: "packed",
+					field: {
+						kind: "object",
+						fields: [
+							{ name: "list", field: { kind: "array", element: { kind: "cframe", packed: true } } },
+							{ name: "one", field: { kind: "cframe", packed: true } },
+						],
+					},
+				},
+				{ name: "plain", field: { kind: "cframe" } },
+			],
+		});
+	});
+
 	test("DataType.Packed<T> bit-packs its boolean fields", () => {
 		const { field } = walkDeclaration(
 			`import { DataType } from "@rbxts/surge";

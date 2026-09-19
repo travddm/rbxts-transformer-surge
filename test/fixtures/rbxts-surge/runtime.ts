@@ -12,5 +12,7 @@ export declare function pushBlob(value: defined): void;
 export declare function finishWriteBlobs(): Array<defined>;
 export declare function beginReadBlobs(blobs: Array<defined> | undefined): void;
 export declare function nextBlob(): defined;
+export declare function writePackedCFrame(value: CFrame): void;
+export declare function readPackedCFrame(): CFrame;
 export declare function packBit(buf: buffer, byteOffset: number, bitIndex: number, value: boolean): void;
 export declare function unpackBit(buf: buffer, byteOffset: number, bitIndex: number): boolean;

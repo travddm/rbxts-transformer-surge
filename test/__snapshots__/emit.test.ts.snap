@@ -128,6 +128,15 @@ const rotation15 = CFrame.fromAxisAngle(angle14 > 1e-6 ? rv13.Unit : Vector3.zAx
 return rotation15.add(pos10);"
 `;
 
+exports[`Emitter per-kind write/read snapshots cframe inside Packed 1`] = `
+"// write
+__surge_writePackedCFrame(value);
+
+// read
+const val1 = __surge_readPackedCFrame();
+return val1;"
+`;
+
 exports[`Emitter per-kind write/read snapshots color3 1`] = `
 "// write
 const [buf1, pos2] = __surge_alloc(3);

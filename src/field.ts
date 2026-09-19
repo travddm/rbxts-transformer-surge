@@ -29,7 +29,9 @@ export type Field =
 	// A row of `FIXED_DATATYPES` in datatypes.ts.
 	| { readonly kind: "datatype"; readonly name: string }
 	| { readonly kind: "vector3" }
-	| { readonly kind: "cframe" }
+	// `packed`: inside `Packed<T>`, where a header byte replaces an axis-aligned
+	// rotation and a zero or one position. Absent, not `false`, outside it.
+	| { readonly kind: "cframe"; readonly packed?: true }
 	| { readonly kind: "color3" }
 	| { readonly kind: "colorSequence" }
 	| { readonly kind: "numberSequence" }

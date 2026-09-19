@@ -49,6 +49,10 @@ describe("Emitter per-kind write/read snapshots", () => {
 		expect(emitSnapshot({ kind: "num", width })).toMatchSnapshot();
 	});
 
+	test("cframe inside Packed", () => {
+		expect(emitSnapshot({ kind: "cframe", packed: true })).toMatchSnapshot();
+	});
+
 	test("buffer", () => {
 		expect(emitSnapshot({ kind: "buffer" })).toMatchSnapshot();
 	});
