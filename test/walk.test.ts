@@ -253,6 +253,18 @@ describe("TypeWalker classification with fixture packages", () => {
 		});
 	});
 
+	test("two datatypes in one union are told apart by name and sorted by it", () => {
+		const { field, diagnostics } = walkDeclaration("type T = Vector3int16 | UDim;", "T", { roblox: true });
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toEqual({
+			kind: "guardedUnion",
+			variants: [
+				{ kind: "datatype", name: "UDim" },
+				{ kind: "datatype", name: "Vector3int16" },
+			],
+		});
+	});
+
 	test("a user type named after a datatype walks as an object", () => {
 		const { field } = walkDeclaration(
 			"interface Vector3int16 { label: string; } interface T { v: Vector3int16; }",
