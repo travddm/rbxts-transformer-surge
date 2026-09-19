@@ -125,6 +125,15 @@ describe("TypeWalker classification with fixture packages", () => {
 		});
 	});
 
+	test.each(["u24", "i24"])("DataType.%s classifies by its declared width", (width) => {
+		const { field } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { n: DataType.${width}; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(field).toEqual({ kind: "object", fields: [{ name: "n", field: { kind: "num", width } }] });
+	});
+
 	test("DataType.Packed<T> bit-packs its boolean fields", () => {
 		const { field } = walkDeclaration(
 			`import { DataType } from "@rbxts/surge";

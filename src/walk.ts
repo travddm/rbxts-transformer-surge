@@ -9,7 +9,18 @@ export interface WalkDiagnostic {
 	readonly node: ts.Node;
 }
 
-const NUM_BRAND_WIDTHS: ReadonlySet<string> = new Set(["f32", "f64", "u8", "u16", "u32", "i8", "i16", "i32"]);
+const NUM_BRAND_WIDTHS: ReadonlySet<string> = new Set([
+	"f32",
+	"f64",
+	"u8",
+	"u16",
+	"u24",
+	"u32",
+	"i8",
+	"i16",
+	"i24",
+	"i32",
+]);
 const ROBLOX_SCALAR_KINDS: Readonly<Record<string, Field["kind"]>> = {
 	Vector2: "vector2",
 	Vector3: "vector3",
