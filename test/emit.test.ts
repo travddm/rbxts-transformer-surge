@@ -243,6 +243,32 @@ describe("Emitter read-order for side-effecting fields", () => {
 // booleans must write a whole computed byte (zeroing any unused high bits by
 // construction) instead of one `packBit` call per bit into scratch memory
 // that may still hold a previous payload's bits.
+describe("Emitter packed region", () => {
+	// The region is first on both sides: the read side needs a presence bit
+	// before it reaches the optional's value.
+	test("a packed optional is a presence bit at the head of its object, with no flag byte", () => {
+		const output = emitSnapshot({
+			kind: "object",
+			fields: [
+				{ name: "count", field: { kind: "optional", inner: { kind: "num", width: "u8" }, packed: true } },
+				{ name: "flag", field: { kind: "bool", packed: true } },
+				{ name: "label", field: { kind: "str" } },
+				{ name: "maybeFlag", field: { kind: "optional", inner: { kind: "bool", packed: true }, packed: true } },
+			],
+		});
+		// Bits in name order: count present, flag, maybeFlag present, maybeFlag value.
+		expect(output).toContain(
+			"(value.count !== undefined ? 1 : 0) + (value.flag ? 2 : 0) + (value.maybeFlag !== undefined ? 4 : 0) + (value.maybeFlag === true ? 8 : 0)",
+		);
+		const [write, read] = output.split("// read");
+		expect(write.indexOf("__surge_alloc(1)")).toBeLessThan(write.indexOf("value.label"));
+		expect(read.indexOf("__surge_readAlloc(1)")).toBeLessThan(read.indexOf("readstring"));
+		// One allocation for the region, none for a flag byte or for `maybeFlag`.
+		expect(write.match(/__surge_alloc\(1\)/g)).toHaveLength(2);
+		expect(output).toMatchSnapshot();
+	});
+});
+
 describe("Emitter packed boolean padding", () => {
 	test("packed booleans write one computed byte per group instead of per-bit packBit calls", () => {
 		const field: Field = {

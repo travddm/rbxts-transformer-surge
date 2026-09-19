@@ -38,6 +38,12 @@ function tagKeyOf(field: Extract<Field, { kind: "taggedUnion" }>): FieldKey {
 	return { name: field.tagKey, numericKey: field.tagKeyNumeric };
 }
 
+interface PackedBit {
+	readonly entry: ObjectFieldEntry;
+	/** `present`: whether an optional has a value. `value`: a boolean. */
+	readonly role: "present" | "value";
+}
+
 /** One independently emitted run of statements, with the number of locals it declares in the enclosing scope. */
 interface ScopedItem {
 	readonly statements: ts.Statement[];
@@ -456,39 +462,7 @@ export class Emitter {
 				return;
 			}
 			case "optional": {
-				// Bound to a local first, and narrowed via a direct `!== undefined`
-				// check on that local (not a separately-computed boolean), which is
-				// what lets TS narrow it to non-optional for the inner write below --
-				// narrowing a repeated property-access expression like `value.x`
-				// doesn't survive being routed through an intermediate variable.
-				const tmp = this.fresh("opt");
-				out.push(this.constStatement(tmp, value));
-				const isPresent = (expr: ts.Expression) =>
-					f.createBinaryExpression(
-						expr,
-						this.ts_.SyntaxKind.ExclamationEqualsEqualsToken,
-						f.createIdentifier("undefined"),
-					);
-				const { buf, pos, statement } = this.destructureAlloc("alloc", 1);
-				out.push(statement);
-				out.push(
-					f.createExpressionStatement(
-						this.bufferCall("writeu8", [
-							buf,
-							pos,
-							f.createConditionalExpression(
-								isPresent(tmp),
-								undefined,
-								this.num(1),
-								undefined,
-								this.num(0),
-							),
-						]),
-					),
-				);
-				const innerStatements: ts.Statement[] = [];
-				this.writeField(field.inner, tmp, innerStatements);
-				out.push(f.createIfStatement(isPresent(tmp), f.createBlock(innerStatements, true)));
+				this.writeOptional(field, value, out, true);
 				return;
 			}
 			case "literalConst": {
@@ -990,58 +964,154 @@ export class Emitter {
 		this.writeObjectInline(field.fields, value, out);
 	}
 
+	/**
+	 * The bits of an object's packed region, in wire order. Both sides build
+	 * the region from this one list, so the bit order cannot differ between
+	 * them. A packed `boolean` is one value bit. A packed `optional` is one
+	 * presence bit, and an optional packed `boolean` is a presence bit and a
+	 * value bit with no bytes of its own.
+	 */
+	private packedBits(fields: ReadonlyArray<ObjectFieldEntry>): PackedBit[] {
+		const bits: PackedBit[] = [];
+		for (const entry of fields) {
+			const field = entry.field;
+			if (field.kind === "bool" && field.packed) {
+				bits.push({ entry, role: "value" });
+			} else if (field.kind === "optional" && field.packed) {
+				bits.push({ entry, role: "present" });
+				if (field.inner.kind === "bool" && field.inner.packed) {
+					bits.push({ entry, role: "value" });
+				}
+			}
+		}
+		return bits;
+	}
+
+	/** Whether the packed region holds all of this field, so it writes nothing in the field sequence. */
+	private isAllPackedBits(field: Field): boolean {
+		if (field.kind === "bool") {
+			return field.packed;
+		}
+		return field.kind === "optional" && field.packed && field.inner.kind === "bool" && field.inner.packed;
+	}
+
 	private writeObjectInline(
 		fields: ReadonlyArray<ObjectFieldEntry>,
 		value: ts.Expression,
 		out: ts.Statement[],
 	): void {
-		const f = this.factory;
-		const packedBools = fields.filter((e) => e.field.kind === "bool" && e.field.packed);
-		const normal = fields.filter((e) => !(e.field.kind === "bool" && e.field.packed));
-		const items = normal.map((entry) =>
-			this.measure((itemOut) => this.writeField(entry.field, this.propertyAccess(value, entry), itemOut)),
-		);
-		if (packedBools.length > 0) {
-			items.push(this.measure((itemOut) => this.writePackedBools(packedBools, value, itemOut)));
+		// The packed region comes first: the read side needs an optional's
+		// presence bit before it reaches that optional's value.
+		const bits = this.packedBits(fields);
+		const items: ScopedItem[] = [];
+		if (bits.length > 0) {
+			items.push(this.measure((itemOut) => this.writePackedBits(bits, value, itemOut)));
+		}
+		for (const entry of fields) {
+			const field = entry.field;
+			if (this.isAllPackedBits(field)) {
+				continue;
+			}
+			items.push(
+				this.measure((itemOut) => {
+					const property = this.propertyAccess(value, entry);
+					if (field.kind === "optional" && field.packed) {
+						this.writeOptional(field, property, itemOut, false);
+					} else {
+						this.writeField(field, property, itemOut);
+					}
+				}),
+			);
 		}
 		this.pushScoped(items, out);
 	}
 
-	private writePackedBools(
-		packedBools: ReadonlyArray<ObjectFieldEntry>,
+	private writeOptional(
+		field: Extract<Field, { kind: "optional" }>,
 		value: ts.Expression,
 		out: ts.Statement[],
+		writeFlag: boolean,
 	): void {
 		const f = this.factory;
-		const byteCount = Math.ceil(packedBools.length / 8);
+		// Bound to a local first, and narrowed via a direct `!== undefined`
+		// check on that local (not a separately-computed boolean), which is
+		// what lets TS narrow it to non-optional for the inner write below --
+		// narrowing a repeated property-access expression like `value.x`
+		// doesn't survive being routed through an intermediate variable.
+		const tmp = this.fresh("opt");
+		out.push(this.constStatement(tmp, value));
+		const isPresent = (expr: ts.Expression) =>
+			f.createBinaryExpression(
+				expr,
+				this.ts_.SyntaxKind.ExclamationEqualsEqualsToken,
+				f.createIdentifier("undefined"),
+			);
+		// Without the flag, the presence bit is in the enclosing object's packed region.
+		if (writeFlag) {
+			const { buf, pos, statement } = this.destructureAlloc("alloc", 1);
+			out.push(statement);
+			out.push(
+				f.createExpressionStatement(
+					this.bufferCall("writeu8", [
+						buf,
+						pos,
+						f.createConditionalExpression(isPresent(tmp), undefined, this.num(1), undefined, this.num(0)),
+					]),
+				),
+			);
+		}
+		const innerStatements: ts.Statement[] = [];
+		this.writeField(field.inner, tmp, innerStatements);
+		out.push(f.createIfStatement(isPresent(tmp), f.createBlock(innerStatements, true)));
+	}
+
+	private writePackedBits(bits: ReadonlyArray<PackedBit>, value: ts.Expression, out: ts.Statement[]): void {
+		const f = this.factory;
+		const byteCount = Math.ceil(bits.length / 8);
 		const { buf, pos, statement } = this.destructureAlloc("alloc", byteCount);
 		out.push(statement);
 		// One `writeu8` per byte, computed from all its bits at once, rather
 		// than one `packBit` call per bit into the reused scratch region:
 		// `alloc()` doesn't zero a region it didn't just grow into, so a
-		// bit-at-a-time write would leave any bit past `packedBools.length`
+		// bit-at-a-time write would leave any bit past `bits.length`
 		// holding whatever an earlier `serialize()` call left there (see
 		// wire-format-determinism.md). Computing the whole byte writes every
 		// bit, including the unused high ones (implicitly zero), so the
 		// result is deterministic by construction.
 		for (let byteIndex = 0; byteIndex < byteCount; byteIndex++) {
-			const chunk = packedBools.slice(byteIndex * 8, byteIndex * 8 + 8);
+			const chunk = bits.slice(byteIndex * 8, byteIndex * 8 + 8);
 			const byteExpr = this.packedByteExpr(chunk, value);
-			const offset =
-				byteIndex === 0
-					? pos
-					: f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, this.num(byteIndex));
-			out.push(f.createExpressionStatement(this.bufferCall("writeu8", [buf, offset, byteExpr])));
+			out.push(
+				f.createExpressionStatement(
+					this.bufferCall("writeu8", [buf, this.offsetFrom(pos, byteIndex), byteExpr]),
+				),
+			);
 		}
 	}
 
-	/** Sums `1 << bitIndex` for each true entry in `entries` (bit 0 = the byte's least-significant bit, matching `unpackBit`'s `buffer.readbits`). */
-	private packedByteExpr(entries: ReadonlyArray<ObjectFieldEntry>, value: ts.Expression): ts.Expression {
+	/** Sums `1 << bitIndex` for each set bit in `bits` (bit 0 = the byte's least-significant bit, matching `unpackBit`'s `buffer.readbits`). */
+	private packedByteExpr(bits: ReadonlyArray<PackedBit>, value: ts.Expression): ts.Expression {
 		const f = this.factory;
 		let expr: ts.Expression | undefined;
-		entries.forEach((entry, bitIndex) => {
+		bits.forEach(({ entry, role }, bitIndex) => {
+			const property = this.propertyAccess(value, entry);
+			let condition: ts.Expression = property;
+			if (role === "present") {
+				condition = f.createBinaryExpression(
+					property,
+					this.ts_.SyntaxKind.ExclamationEqualsEqualsToken,
+					f.createIdentifier("undefined"),
+				);
+			} else if (entry.field.kind === "optional") {
+				// The value bit of an optional boolean: `undefined` is not a condition TypeScript accepts.
+				condition = f.createBinaryExpression(
+					property,
+					this.ts_.SyntaxKind.EqualsEqualsEqualsToken,
+					f.createTrue(),
+				);
+			}
 			const term = f.createConditionalExpression(
-				this.propertyAccess(value, entry),
+				condition,
 				undefined,
 				this.num(1 << bitIndex),
 				undefined,
@@ -1384,35 +1454,7 @@ export class Emitter {
 				return this.readDict(field, out);
 			}
 			case "optional": {
-				const { buf, pos, statement } = this.destructureAlloc("readAlloc", 1);
-				out.push(statement);
-				const present = this.fresh("present");
-				out.push(
-					this.constStatement(
-						present,
-						f.createBinaryExpression(
-							this.bufferCall("readu8", [buf, pos]),
-							this.ts_.SyntaxKind.ExclamationEqualsEqualsToken,
-							this.num(0),
-						),
-					),
-				);
-				const result = this.fresh("opt");
-				out.push(
-					f.createVariableStatement(
-						undefined,
-						f.createVariableDeclarationList([f.createVariableDeclaration(result)], this.ts_.NodeFlags.Let),
-					),
-				);
-				const innerStatements: ts.Statement[] = [];
-				const innerExpr = this.readField(field.inner, innerStatements);
-				innerStatements.push(
-					f.createExpressionStatement(
-						f.createBinaryExpression(result, this.ts_.SyntaxKind.EqualsToken, innerExpr),
-					),
-				);
-				out.push(f.createIfStatement(present, f.createBlock(innerStatements, true)));
-				return result;
+				return this.readOptional(field, out, undefined);
 			}
 			case "literalConst": {
 				return this.literalValueExpr(field.value);
@@ -1680,31 +1722,86 @@ export class Emitter {
 		return this.readObjectInline(field.fields, out);
 	}
 
+	private readOptional(
+		field: Extract<Field, { kind: "optional" }>,
+		out: ts.Statement[],
+		// The presence bit of the enclosing object's packed region, or `undefined` to read a flag byte.
+		packedPresent: ts.Expression | undefined,
+	): ts.Expression {
+		const f = this.factory;
+		let present = packedPresent;
+		if (present === undefined) {
+			const { buf, pos, statement } = this.destructureAlloc("readAlloc", 1);
+			out.push(statement);
+			const flag = this.fresh("present");
+			out.push(
+				this.constStatement(
+					flag,
+					f.createBinaryExpression(
+						this.bufferCall("readu8", [buf, pos]),
+						this.ts_.SyntaxKind.ExclamationEqualsEqualsToken,
+						this.num(0),
+					),
+				),
+			);
+			present = flag;
+		}
+		const result = this.fresh("opt");
+		out.push(
+			f.createVariableStatement(
+				undefined,
+				f.createVariableDeclarationList([f.createVariableDeclaration(result)], this.ts_.NodeFlags.Let),
+			),
+		);
+		const innerStatements: ts.Statement[] = [];
+		const innerExpr = this.readField(field.inner, innerStatements);
+		innerStatements.push(
+			f.createExpressionStatement(f.createBinaryExpression(result, this.ts_.SyntaxKind.EqualsToken, innerExpr)),
+		);
+		out.push(f.createIfStatement(present, f.createBlock(innerStatements, true)));
+		return result;
+	}
+
 	private readObjectInline(fields: ReadonlyArray<ObjectFieldEntry>, out: ts.Statement[]): ts.Expression {
 		const f = this.factory;
-		const packedBools = fields.filter((e) => e.field.kind === "bool" && e.field.packed);
-		const normal = fields.filter((e) => !(e.field.kind === "bool" && e.field.packed));
+		// The packed region is read first and outside the scoped items: every
+		// item that follows, in any block, can need one of its bits.
+		const bits = this.packedBits(fields);
+		const bitExprs = new Map<ObjectFieldEntry, { present?: ts.Expression; value?: ts.Expression }>();
+		if (bits.length > 0) {
+			const { buf, pos, statement } = this.destructureAlloc("readAlloc", Math.ceil(bits.length / 8));
+			out.push(statement);
+			bits.forEach(({ entry, role }, i) => {
+				const exprs = bitExprs.get(entry) ?? {};
+				exprs[role] = this.call("unpackBit", [buf, pos, this.num(i)]);
+				bitExprs.set(entry, exprs);
+			});
+		}
 		// Each item's expressions refer to the locals its statements declare.
 		const items: Array<ScopedItem & { readonly props: Array<{ entry: ObjectFieldEntry; expr: ts.Expression }> }> =
 			[];
-		for (const entry of normal) {
+		for (const entry of fields) {
+			const field = entry.field;
+			const entryBits = bitExprs.get(entry);
 			let expr!: ts.Expression;
 			const item = this.measure((itemOut) => {
-				expr = this.readField(entry.field, itemOut);
+				if (entryBits?.present && entryBits.value) {
+					expr = f.createConditionalExpression(
+						entryBits.present,
+						undefined,
+						entryBits.value,
+						undefined,
+						f.createIdentifier("undefined"),
+					);
+				} else if (entryBits?.value) {
+					expr = entryBits.value;
+				} else if (entryBits?.present && field.kind === "optional") {
+					expr = this.readOptional(field, itemOut, entryBits.present);
+				} else {
+					expr = this.readField(field, itemOut);
+				}
 			});
 			items.push({ ...item, props: [{ entry, expr }] });
-		}
-		if (packedBools.length > 0) {
-			const props: Array<{ entry: ObjectFieldEntry; expr: ts.Expression }> = [];
-			const item = this.measure((itemOut) => {
-				const byteCount = Math.ceil(packedBools.length / 8);
-				const { buf, pos, statement } = this.destructureAlloc("readAlloc", byteCount);
-				itemOut.push(statement);
-				packedBools.forEach((entry, i) => {
-					props.push({ entry, expr: this.call("unpackBit", [buf, pos, this.num(i)]) });
-				});
-			});
-			items.push({ ...item, props });
 		}
 		if (!this.needsBlocks()) {
 			this.pushScoped(items, out);

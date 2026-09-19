@@ -14,6 +14,39 @@ return {
 };"
 `;
 
+exports[`Emitter packed region a packed optional is a presence bit at the head of its object, with no flag byte 1`] = `
+"// write
+const [buf1, pos2] = __surge_alloc(1);
+buffer.writeu8(buf1, pos2, (value.count !== undefined ? 1 : 0) + (value.flag ? 2 : 0) + (value.maybeFlag !== undefined ? 4 : 0) + (value.maybeFlag === true ? 8 : 0));
+const opt3 = value.count;
+if (opt3 !== undefined) {
+    const [buf4, pos5] = __surge_alloc(1);
+    buffer.writeu8(buf4, pos5, opt3);
+}
+const s6 = value.label;
+const [buf7, pos8] = __surge_alloc(4);
+buffer.writeu32(buf7, pos8, s6.size());
+const [buf9, pos10] = __surge_alloc(s6.size());
+buffer.writestring(buf9, pos10, s6);
+
+// read
+const [buf11, pos12] = __surge_readAlloc(1);
+let opt13;
+if (__surge_unpackBit(buf11, pos12, 0)) {
+    const [buf14, pos15] = __surge_readAlloc(1);
+    opt13 = buffer.readu8(buf14, pos15);
+}
+const [buf16, pos17] = __surge_readAlloc(4);
+const len18 = buffer.readu32(buf16, pos17);
+const [buf19, pos20] = __surge_readAlloc(len18);
+return {
+    count: opt13,
+    flag: __surge_unpackBit(buf11, pos12, 1),
+    label: buffer.readstring(buf19, pos20, len18),
+    maybeFlag: __surge_unpackBit(buf11, pos12, 2) ? __surge_unpackBit(buf11, pos12, 3) : undefined
+};"
+`;
+
 exports[`Emitter per-kind write/read snapshots array 1`] = `
 "// write
 const arr1 = value;

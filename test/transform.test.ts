@@ -228,6 +228,16 @@ describe("transform generated code", () => {
 		expect(errors).toEqual([]);
 	});
 
+	test("the generated code for packed optionals passes the type check", () => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { DataType, createBinarySerializer } from "@rbxts/surge";
+			interface Inner { count?: number; flag: boolean; label: string; maybeFlag?: boolean; anything?: unknown; }
+			interface T { packed: DataType.Packed<Inner>; variants: DataType.Packed<{ kind: "a"; x?: string } | { kind: "b" }>; }
+			export const s = createBinarySerializer<T>();`,
+		);
+		expect(errors).toEqual([]);
+	});
+
 	test("the generated code for a buffer passes the type check", () => {
 		const errors = typeErrorsOfGeneratedCode(
 			`import { createBinarySerializer } from "@rbxts/surge";
