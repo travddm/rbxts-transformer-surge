@@ -193,6 +193,10 @@ describe("transform generated code", () => {
 			`interface Chain { mode?: "on" | "off"; next?: Chain; } type T = Chain;`,
 		],
 		["a tuple property of a recursive type", `interface Scope { pair?: [Scope, number]; } type T = Scope;`],
+		[
+			"a Record property of a recursive type",
+			`interface Tree { byName: Record<string, Tree>; counts: { [id: number]: number }; } type T = Tree;`,
+		],
 		["a required property of type unknown", `interface T { anything: unknown; }`],
 		["an optional property of type unknown", `interface T { anything?: unknown; list: unknown[]; }`],
 	])("the generated code for %s passes the type check", (_name, declarations) => {
@@ -233,7 +237,7 @@ describe("transform generated code", () => {
 				literal: "a" | "b"; constant: 1; tagged: { kind: "x"; v: number } | { kind: "y" };
 				guarded: string | number | { name: string };
 				position: Vector3; tint: Color3; placement: CFrame; rig: Enum.HumanoidRigType;
-				colors: ColorSequence; part: Instance;
+				colors: ColorSequence; numbers: NumberSequence; part: Instance;
 				flags: DataType.Packed<{ p: boolean; q: boolean }>;
 			}
 			export const s = createBinarySerializer<Everything>();`,

@@ -349,8 +349,9 @@ buffer.writeu8(buf2, pos3, keypoints1.size());
 for (const kp4 of keypoints1) {
     const [buf5, pos6] = __surge_alloc(4);
     buffer.writef32(buf5, pos6, kp4.Time);
-    const [buf7, pos8] = __surge_alloc(4);
+    const [buf7, pos8] = __surge_alloc(8);
     buffer.writef32(buf7, pos8, kp4.Value);
+    buffer.writef32(buf7, pos8 + 4, kp4.Envelope);
 }
 
 // read
@@ -360,8 +361,8 @@ const keypoints12 = [];
 for (let i13 = 0; i13 < count11; i13++) {
     const [buf14, pos15] = __surge_readAlloc(4);
     const time16 = buffer.readf32(buf14, pos15);
-    const [buf17, pos18] = __surge_readAlloc(4);
-    keypoints12.push(new NumberSequenceKeypoint(time16, buffer.readf32(buf17, pos18)));
+    const [buf17, pos18] = __surge_readAlloc(8);
+    keypoints12.push(new NumberSequenceKeypoint(time16, buffer.readf32(buf17, pos18), buffer.readf32(buf17, pos18 + 4)));
 }
 return new NumberSequence(keypoints12);"
 `;
