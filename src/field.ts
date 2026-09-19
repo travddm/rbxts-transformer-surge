@@ -24,6 +24,8 @@ export type Field =
 	| { readonly kind: "bool"; readonly packed: boolean }
 	| { readonly kind: "str" }
 	| { readonly kind: "vector2" }
+	// A row of `FIXED_DATATYPES` in datatypes.ts.
+	| { readonly kind: "datatype"; readonly name: string }
 	| { readonly kind: "vector3" }
 	| { readonly kind: "cframe" }
 	| { readonly kind: "color3" }

@@ -1,5 +1,6 @@
 import type ts from "typescript";
 
+import { FIXED_DATATYPES } from "./datatypes";
 import type { Field, FieldKey, NumWidth, ObjectFieldEntry } from "./field";
 
 const WIDTH_BYTES: Record<NumWidth, number> = {
@@ -318,6 +319,10 @@ export class Emitter {
 				this.writeNum2(value, "X", "Y", "f32", out);
 				return;
 			}
+			case "datatype": {
+				this.writeDatatype(field.name, value, out);
+				return;
+			}
 			case "vector3": {
 				this.writeNum3(value, "X", "Y", "Z", "f32", out);
 				return;
@@ -500,6 +505,55 @@ export class Emitter {
 				return;
 			}
 		}
+	}
+
+	/** `pos`, or `pos + offset` past the first component of a fixed-size value. */
+	private offsetFrom(pos: ts.Expression, offset: number): ts.Expression {
+		return offset === 0
+			? pos
+			: this.factory.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, this.num(offset));
+	}
+
+	private writeDatatype(name: string, value: ts.Expression, out: ts.Statement[]): void {
+		const f = this.factory;
+		const { components } = FIXED_DATATYPES[name];
+		const size = components.reduce((total, component) => total + WIDTH_BYTES[component.width], 0);
+		const { buf, pos, statement } = this.destructureAlloc("alloc", size);
+		out.push(statement);
+		let offset = 0;
+		for (const component of components) {
+			const read = component.path.reduce<ts.Expression>(
+				(target, key) => f.createPropertyAccessExpression(target, key),
+				value,
+			);
+			out.push(
+				f.createExpressionStatement(
+					this.bufferCall(`write${component.width}`, [buf, this.offsetFrom(pos, offset), read]),
+				),
+			);
+			offset += WIDTH_BYTES[component.width];
+		}
+	}
+
+	private readDatatype(name: string, out: ts.Statement[]): ts.Expression {
+		const f = this.factory;
+		const { components, factoryMethod } = FIXED_DATATYPES[name];
+		const size = components.reduce((total, component) => total + WIDTH_BYTES[component.width], 0);
+		const { buf, pos, statement } = this.destructureAlloc("readAlloc", size);
+		out.push(statement);
+		let offset = 0;
+		const args = components.map((component) => {
+			const read = this.bufferCall(`read${component.width}`, [buf, this.offsetFrom(pos, offset)]);
+			offset += WIDTH_BYTES[component.width];
+			return read;
+		});
+		return factoryMethod === undefined
+			? f.createNewExpression(f.createIdentifier(name), undefined, args)
+			: f.createCallExpression(
+					f.createPropertyAccessExpression(f.createIdentifier(name), factoryMethod),
+					undefined,
+					args,
+				);
 	}
 
 	private writeNum2(value: ts.Expression, a: string, b: string, width: "f32", out: ts.Statement[]): void {
@@ -1010,6 +1064,8 @@ export class Emitter {
 				return typeIs("table");
 			case "vector2":
 				return typeIs("Vector2");
+			case "datatype":
+				return typeIs(field.name);
 			case "vector3":
 				return typeIs("Vector3");
 			case "cframe":
@@ -1080,6 +1136,9 @@ export class Emitter {
 			case "vector2": {
 				const [x, y] = this.readNum2("f32", out);
 				return f.createNewExpression(f.createIdentifier("Vector2"), undefined, [x, y]);
+			}
+			case "datatype": {
+				return this.readDatatype(field.name, out);
 			}
 			case "vector3": {
 				const [x, y, z] = this.readNum3("f32", out);
@@ -1720,6 +1779,8 @@ export class Emitter {
 				return kw(this.ts_.SyntaxKind.StringKeyword);
 			case "vector2":
 				return f.createTypeReferenceNode("Vector2");
+			case "datatype":
+				return f.createTypeReferenceNode(field.name);
 			case "vector3":
 				return f.createTypeReferenceNode("Vector3");
 			case "cframe":

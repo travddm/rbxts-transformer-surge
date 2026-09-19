@@ -1,3 +1,4 @@
+import { FIXED_DATATYPES } from "../src/datatypes";
 import { loadDeclaration, walkDeclaration } from "./harness";
 
 describe("TypeWalker classification", () => {
@@ -223,12 +224,41 @@ describe("TypeWalker classification with fixture packages", () => {
 		expect(diagnostics).toEqual([]);
 	});
 
-	test("a Roblox datatype without a dedicated scalar kind (Vector3int16) falls back to blob via its _nominal_ brand", () => {
-		const { field } = walkDeclaration("interface T { v: Vector3int16; }", "T", { roblox: true });
+	test("a Roblox datatype without an encoding (Vector2int16) falls back to blob via its _nominal_ brand", () => {
+		const { field } = walkDeclaration("interface T { v: Vector2int16; }", "T", { roblox: true });
 		expect(field).toEqual({
 			kind: "object",
 			fields: [{ name: "v", field: { kind: "blob" } }],
 		});
+	});
+
+	test.each(Object.keys(FIXED_DATATYPES))("%s classifies as a datatype, alone and as a union member", (name) => {
+		const { field, diagnostics } = walkDeclaration(
+			`interface T { alone: ${name}; member: ${name} | string; }`,
+			"T",
+			{
+				roblox: true,
+			},
+		);
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{ name: "alone", field: { kind: "datatype", name } },
+				{
+					name: "member",
+					field: { kind: "guardedUnion", variants: [{ kind: "datatype", name }, { kind: "str" }] },
+				},
+			],
+		});
+	});
+
+	test("a user type named after a datatype walks as an object", () => {
+		const { field } = walkDeclaration(
+			"interface Vector3int16 { label: string; } interface T { v: Vector3int16; }",
+			"T",
+		);
+		expect(field).toMatchObject({ fields: [{ name: "v", field: { kind: "object" } }] });
 	});
 
 	// `unknown` admits `undefined`, and `u?: unknown` has no `undefined`

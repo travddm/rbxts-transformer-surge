@@ -1,5 +1,6 @@
 import * as ts from "typescript";
 
+import { FIXED_DATATYPES } from "../src/datatypes";
 import transform from "../src/index";
 import { createFixtureProgram, printNodes } from "./harness";
 
@@ -198,6 +199,17 @@ describe("transform generated code", () => {
 		const errors = typeErrorsOfGeneratedCode(
 			`import { createBinarySerializer } from "@rbxts/surge";
 			${declarations}
+			export const s = createBinarySerializer<T>();`,
+		);
+		expect(errors).toEqual([]);
+	});
+
+	// Checks each row of `FIXED_DATATYPES` against `@rbxts/types`: the property
+	// paths, their types, and the constructor's arguments.
+	test.each(Object.keys(FIXED_DATATYPES))("the generated code for %s passes the type check", (name) => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { createBinarySerializer } from "@rbxts/surge";
+			interface T { alone: ${name}; member: ${name} | string; maybe?: ${name}; }
 			export const s = createBinarySerializer<T>();`,
 		);
 		expect(errors).toEqual([]);

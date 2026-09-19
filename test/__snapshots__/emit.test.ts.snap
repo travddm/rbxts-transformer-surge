@@ -116,6 +116,18 @@ for (let i13 = 0; i13 < count11; i13++) {
 return new ColorSequence(keypoints12);"
 `;
 
+exports[`Emitter per-kind write/read snapshots datatype Vector3int16 1`] = `
+"// write
+const [buf1, pos2] = __surge_alloc(6);
+buffer.writei16(buf1, pos2, value.X);
+buffer.writei16(buf1, pos2 + 2, value.Y);
+buffer.writei16(buf1, pos2 + 4, value.Z);
+
+// read
+const [buf3, pos4] = __surge_readAlloc(6);
+return new Vector3int16(buffer.readi16(buf3, pos4), buffer.readi16(buf3, pos4 + 2), buffer.readi16(buf3, pos4 + 4));"
+`;
+
 exports[`Emitter per-kind write/read snapshots dict (map) 1`] = `
 "// write
 const dict1 = value;

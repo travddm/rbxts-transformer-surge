@@ -1,5 +1,6 @@
 import type ts from "typescript";
 
+import { isFixedDatatype } from "./datatypes";
 import { getDataTypeBrand, getPackedInnerType, isFromTypesPackage, isRobloxNominalType } from "./detect";
 import type { Field, FieldKey, NumWidth, ObjectFieldEntry } from "./field";
 
@@ -41,6 +42,11 @@ const RUNTIME_TYPE_TAGS: Partial<Record<Field["kind"], string>> = {
 	numberSequence: "NumberSequence",
 	enum: "EnumItem",
 };
+
+function runtimeTypeTag(field: Field): string | undefined {
+	// A `datatype` is tagged with its own type name, so two different ones can share a union.
+	return field.kind === "datatype" ? field.name : RUNTIME_TYPE_TAGS[field.kind];
+}
 
 let helperCounter = 0;
 function nextHelperName(base: string): string {
@@ -181,6 +187,9 @@ export class TypeWalker {
 		if (symbolName && symbolName in ROBLOX_SCALAR_KINDS && isFromTypesPackage(type.symbol?.declarations)) {
 			return { kind: ROBLOX_SCALAR_KINDS[symbolName] } as Field;
 		}
+		if (symbolName && isFixedDatatype(symbolName) && isFromTypesPackage(type.symbol?.declarations)) {
+			return { kind: "datatype", name: symbolName };
+		}
 
 		// `@rbxts/types` brands `Instance` (and every subclass) and every
 		// Roblox datatype not covered above with its own `_nominal_*`
@@ -188,7 +197,7 @@ export class TypeWalker {
 		// to the blob passthrough channel here, before any structural check
 		// below can walk their declared properties, is the fix for
 		// blob-classification.md: `Instance` has hundreds of properties and
-		// `UDim`/`BrickColor`/etc. have their own, so without this check
+		// `Region3`/`TweenInfo`/etc. have their own, so without this check
 		// they never reach the "opaque type" fallback further down.
 		if (isRobloxNominalType(type)) {
 			return { kind: "blob" };
@@ -640,13 +649,13 @@ export class TypeWalker {
 			);
 			return { kind: "blob" };
 		}
-		const unguardable = fields.find((f) => f.kind !== "literalConst" && RUNTIME_TYPE_TAGS[f.kind] === undefined);
+		const unguardable = fields.find((f) => f.kind !== "literalConst" && runtimeTypeTag(f) === undefined);
 		if (unguardable) {
 			this.report(`a "${unguardable.kind}" variant isn't supported as a member of this union.`, node);
 			return { kind: "blob" };
 		}
 
-		const tableShapedCount = fields.filter((f) => RUNTIME_TYPE_TAGS[f.kind] === "table").length;
+		const tableShapedCount = fields.filter((f) => runtimeTypeTag(f) === "table").length;
 		if (tableShapedCount > 1) {
 			this.report(
 				"this union has two or more table-shaped variants (object/array/tuple/Map/Set/Record) with no " +
@@ -658,7 +667,7 @@ export class TypeWalker {
 		}
 		const seenTags = new Set<string>();
 		for (const variant of fields) {
-			const tag = RUNTIME_TYPE_TAGS[variant.kind];
+			const tag = runtimeTypeTag(variant);
 			if (tag === undefined) {
 				continue;
 			}
@@ -673,8 +682,9 @@ export class TypeWalker {
 			}
 			seenTags.add(tag);
 		}
-		// Sorted by kind, then by value for two `literalConst` variants (the
-		// only kind that can repeat among guarded-union variants): `type.types`
+		// Sorted by kind, then by value for two `literalConst` variants and by
+		// name for two `datatype` variants (the only kinds that can repeat
+		// among guarded-union variants): `type.types`
 		// order is otherwise the checker's unstable type-id order (see
 		// `compareLiteral`'s doc comment), and the variant index is encoded in
 		// the buffer.
@@ -684,6 +694,9 @@ export class TypeWalker {
 			}
 			if (a.kind === "literalConst" && b.kind === "literalConst") {
 				return compareLiteral(a.value, b.value);
+			}
+			if (a.kind === "datatype" && b.kind === "datatype") {
+				return compareLiteral(a.name, b.name);
 			}
 			return 0;
 		});
