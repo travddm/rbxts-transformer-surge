@@ -12,6 +12,8 @@ export {
 	packBit,
 	pushBlob,
 	readAlloc,
+	readPackedCFrame,
 	unpackBit,
+	writePackedCFrame,
 } from "./runtime";
 export { createBinarySerializer, createDeserializer, createSerializer, Serializer } from "./serializer";

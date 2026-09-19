@@ -232,7 +232,7 @@ describe("transform generated code", () => {
 		const errors = typeErrorsOfGeneratedCode(
 			`import { DataType, createBinarySerializer } from "@rbxts/surge";
 			interface Inner { count?: number; flag: boolean; label: string; maybeFlag?: boolean; anything?: unknown; }
-			interface T { packed: DataType.Packed<Inner>; variants: DataType.Packed<{ kind: "a"; x?: string } | { kind: "b" }>; }
+			interface T { packed: DataType.Packed<Inner>; placements: DataType.Packed<{ one: CFrame; maybe?: CFrame; list: CFrame[] }>; variants: DataType.Packed<{ kind: "a"; x?: string } | { kind: "b" }>; }
 			export const s = createBinarySerializer<T>();`,
 		);
 		expect(errors).toEqual([]);
