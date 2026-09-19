@@ -219,6 +219,15 @@ describe("transform generated code", () => {
 		expect(errors).toEqual([]);
 	});
 
+	test("the generated code for the 24-bit widths passes the type check", () => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { DataType, createBinarySerializer } from "@rbxts/surge";
+			interface T { u: DataType.u24; i: DataType.i24; list: DataType.i24[]; }
+			export const s = createBinarySerializer<T>();`,
+		);
+		expect(errors).toEqual([]);
+	});
+
 	test("the generated code for a buffer passes the type check", () => {
 		const errors = typeErrorsOfGeneratedCode(
 			`import { createBinarySerializer } from "@rbxts/surge";

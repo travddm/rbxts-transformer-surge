@@ -5,7 +5,7 @@
  * consumes. Producing this from a `ts.Type` is `walk.ts`'s job; turning it
  * into statements is the emitter's.
  */
-export type NumWidth = "f32" | "f64" | "u8" | "u16" | "u32" | "i8" | "i16" | "i32";
+export type NumWidth = "f32" | "f64" | "u8" | "u16" | "u24" | "u32" | "i8" | "i16" | "i24" | "i32";
 
 export interface FieldKey {
 	readonly name: string;

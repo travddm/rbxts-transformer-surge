@@ -10,9 +10,11 @@ export namespace DataType {
 	export type f64 = number & { readonly _surge_f64?: never };
 	export type u8 = number & { readonly _surge_u8?: never };
 	export type u16 = number & { readonly _surge_u16?: never };
+	export type u24 = number & { readonly _surge_u24?: never };
 	export type u32 = number & { readonly _surge_u32?: never };
 	export type i8 = number & { readonly _surge_i8?: never };
 	export type i16 = number & { readonly _surge_i16?: never };
+	export type i24 = number & { readonly _surge_i24?: never };
 	export type i32 = number & { readonly _surge_i32?: never };
 
 	export type Packed<T> = T & { readonly _surge_packed?: [T] };

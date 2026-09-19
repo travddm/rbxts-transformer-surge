@@ -341,6 +341,28 @@ const [buf3, pos4] = __surge_readAlloc(4);
 return buffer.readf32(buf3, pos4);"
 `;
 
+exports[`Emitter per-kind write/read snapshots num i24 1`] = `
+"// write
+const [buf1, pos2] = __surge_alloc(3);
+buffer.writeu16(buf1, pos2, value & 65535);
+buffer.writeu8(buf1, pos2 + 2, (value >>> 16) & 255);
+
+// read
+const [buf3, pos4] = __surge_readAlloc(3);
+return ((buffer.readu16(buf3, pos4) + buffer.readu8(buf3, pos4 + 2) * 65536) ^ 8388608) - 8388608;"
+`;
+
+exports[`Emitter per-kind write/read snapshots num u24 1`] = `
+"// write
+const [buf1, pos2] = __surge_alloc(3);
+buffer.writeu16(buf1, pos2, value & 65535);
+buffer.writeu8(buf1, pos2 + 2, (value >>> 16) & 255);
+
+// read
+const [buf3, pos4] = __surge_readAlloc(3);
+return buffer.readu16(buf3, pos4) + buffer.readu8(buf3, pos4 + 2) * 65536;"
+`;
+
 exports[`Emitter per-kind write/read snapshots numberSequence 1`] = `
 "// write
 const keypoints1 = value.Keypoints;

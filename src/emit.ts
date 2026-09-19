@@ -8,9 +8,11 @@ const WIDTH_BYTES: Record<NumWidth, number> = {
 	f64: 8,
 	u8: 1,
 	u16: 2,
+	u24: 3,
 	u32: 4,
 	i8: 1,
 	i16: 2,
+	i24: 3,
 	i32: 4,
 };
 
@@ -267,7 +269,7 @@ export class Emitter {
 				const bytes = WIDTH_BYTES[field.width];
 				const { buf, pos, statement } = this.destructureAlloc("alloc", bytes);
 				out.push(statement);
-				out.push(f.createExpressionStatement(this.bufferCall(`write${field.width}`, [buf, pos, value])));
+				out.push(...this.writeNumber(field.width, buf, pos, value));
 				return;
 			}
 			case "bool": {
@@ -518,6 +520,66 @@ export class Emitter {
 				return;
 			}
 		}
+	}
+
+	/**
+	 * Luau's `buffer` has no 24-bit calls, so `u24` and `i24` are a `u16` of
+	 * the low bits and a `u8` of the high bits. `bit32` reduces a negative
+	 * number modulo 2^32, so the same two writes store an `i24` in two's
+	 * complement with no branch on the sign.
+	 */
+	private writeNumber(width: NumWidth, buf: ts.Expression, pos: ts.Expression, value: ts.Expression): ts.Statement[] {
+		const f = this.factory;
+		if (width !== "u24" && width !== "i24") {
+			return [f.createExpressionStatement(this.bufferCall(`write${width}`, [buf, pos, value]))];
+		}
+		const low = f.createBinaryExpression(value, this.ts_.SyntaxKind.AmpersandToken, this.num(0xffff));
+		const high = f.createBinaryExpression(
+			f.createParenthesizedExpression(
+				f.createBinaryExpression(
+					value,
+					this.ts_.SyntaxKind.GreaterThanGreaterThanGreaterThanToken,
+					this.num(16),
+				),
+			),
+			this.ts_.SyntaxKind.AmpersandToken,
+			this.num(0xff),
+		);
+		return [
+			f.createExpressionStatement(this.bufferCall("writeu16", [buf, pos, low])),
+			f.createExpressionStatement(this.bufferCall("writeu8", [buf, this.offsetFrom(pos, 2), high])),
+		];
+	}
+
+	private readNumber(width: NumWidth, buf: ts.Expression, pos: ts.Expression): ts.Expression {
+		const f = this.factory;
+		if (width !== "u24" && width !== "i24") {
+			return this.bufferCall(`read${width}`, [buf, pos]);
+		}
+		const unsigned = f.createBinaryExpression(
+			this.bufferCall("readu16", [buf, pos]),
+			this.ts_.SyntaxKind.PlusToken,
+			f.createBinaryExpression(
+				this.bufferCall("readu8", [buf, this.offsetFrom(pos, 2)]),
+				this.ts_.SyntaxKind.AsteriskToken,
+				this.num(0x10000),
+			),
+		);
+		if (width === "u24") {
+			return unsigned;
+		}
+		// Sign extension: flipping bit 23 and subtracting its weight maps 0x800000..0xFFFFFF to the negatives.
+		return f.createBinaryExpression(
+			f.createParenthesizedExpression(
+				f.createBinaryExpression(
+					f.createParenthesizedExpression(unsigned),
+					this.ts_.SyntaxKind.CaretToken,
+					this.num(0x800000),
+				),
+			),
+			this.ts_.SyntaxKind.MinusToken,
+			this.num(0x800000),
+		);
 	}
 
 	/** `pos`, or `pos + offset` past the first component of a fixed-size value. */
@@ -1119,7 +1181,7 @@ export class Emitter {
 				const bytes = WIDTH_BYTES[field.width];
 				const { buf, pos, statement } = this.destructureAlloc("readAlloc", bytes);
 				out.push(statement);
-				return this.bufferCall(`read${field.width}`, [buf, pos]);
+				return this.readNumber(field.width, buf, pos);
 			}
 			case "bool": {
 				const { buf, pos, statement } = this.destructureAlloc("readAlloc", 1);
