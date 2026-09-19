@@ -22,6 +22,12 @@ export const FIXED_DATATYPES: Readonly<Record<string, DatatypeSpec>> = {
 			{ path: ["Z"], width: "i16" },
 		],
 	},
+	UDim: {
+		components: [
+			{ path: ["Scale"], width: "f32" },
+			{ path: ["Offset"], width: "i32" },
+		],
+	},
 };
 
 export function isFixedDatatype(name: string): boolean {

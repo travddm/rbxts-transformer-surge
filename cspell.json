@@ -9,6 +9,7 @@
 		"backpatching",
 		"cframe",
 		"codegen",
+		"datatypes",
 		"codegens",
 		"colorsequence",
 		"createbinaryserializer",
