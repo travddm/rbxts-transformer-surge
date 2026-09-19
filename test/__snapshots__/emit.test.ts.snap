@@ -137,6 +137,19 @@ const [buf3, pos4] = __surge_readAlloc(8);
 return new NumberRange(buffer.readf32(buf3, pos4), buffer.readf32(buf3, pos4 + 4));"
 `;
 
+exports[`Emitter per-kind write/read snapshots datatype Rect 1`] = `
+"// write
+const [buf1, pos2] = __surge_alloc(16);
+buffer.writef32(buf1, pos2, value.Min.X);
+buffer.writef32(buf1, pos2 + 4, value.Min.Y);
+buffer.writef32(buf1, pos2 + 8, value.Max.X);
+buffer.writef32(buf1, pos2 + 12, value.Max.Y);
+
+// read
+const [buf3, pos4] = __surge_readAlloc(16);
+return new Rect(buffer.readf32(buf3, pos4), buffer.readf32(buf3, pos4 + 4), buffer.readf32(buf3, pos4 + 8), buffer.readf32(buf3, pos4 + 12));"
+`;
+
 exports[`Emitter per-kind write/read snapshots datatype UDim 1`] = `
 "// write
 const [buf1, pos2] = __surge_alloc(8);
