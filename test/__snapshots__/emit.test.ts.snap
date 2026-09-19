@@ -54,6 +54,24 @@ const [buf3, pos4] = __surge_readAlloc(1);
 return buffer.readu8(buf3, pos4) !== 0;"
 `;
 
+exports[`Emitter per-kind write/read snapshots buffer 1`] = `
+"// write
+const src1 = value;
+const len2 = buffer.len(src1);
+const [buf3, pos4] = __surge_alloc(4);
+buffer.writeu32(buf3, pos4, len2);
+const [buf5, pos6] = __surge_alloc(len2);
+buffer.copy(buf5, pos6, src1, 0, len2);
+
+// read
+const [buf7, pos8] = __surge_readAlloc(4);
+const len9 = buffer.readu32(buf7, pos8);
+const [buf10, pos11] = __surge_readAlloc(len9);
+const bytes12 = buffer.create(len9);
+buffer.copy(bytes12, 0, buf10, pos11, len9);
+return bytes12;"
+`;
+
 exports[`Emitter per-kind write/read snapshots cframe 1`] = `
 "// write
 const [buf1, pos2] = __surge_alloc(12);
