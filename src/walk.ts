@@ -148,6 +148,14 @@ export class TypeWalker {
 			return this.walkUnion(type as ts.UnionType, node, packed);
 		}
 
+		// `unknown` and `any` admit `undefined`, and the checker reduces
+		// `unknown | undefined` to `unknown`, so `a?: unknown` never reaches
+		// `walkUnion`. Without a presence flag an `undefined` value pushes no
+		// blob, and every later blob is read one position early.
+		if ((type.flags & (ts_.TypeFlags.Unknown | ts_.TypeFlags.Any)) !== 0) {
+			return { kind: "optional", inner: { kind: "blob" }, packed };
+		}
+
 		if ((type.flags & ts_.TypeFlags.BooleanLiteral) !== 0) {
 			const value = checker.typeToString(type) === "true";
 			return { kind: "literalConst", value };
@@ -439,9 +447,19 @@ export class TypeWalker {
 	// ---- enums ------------------------------------------------------------
 
 	private isEnumItemLike(type: ts.Type): boolean {
+		// The shape alone also matches a user type with these three
+		// properties, which the emitter would then look up under `Enum`.
+		if (!isFromTypesPackage(type.symbol?.declarations)) {
+			return false;
+		}
 		const props = type.getProperties();
 		const names = new Set(props.map((p) => p.name));
 		return names.has("Name") && names.has("Value") && names.has("EnumType");
+	}
+
+	/** The symbol of the enum that declares an item (`Enum.SortOrder` for `Enum.SortOrder.Name`). */
+	private enumOf(item: ts.Type): ts.Symbol | undefined {
+		return (item.symbol as (ts.Symbol & { parent?: ts.Symbol }) | undefined)?.parent;
 	}
 
 	private isEnumItemUnionMember(type: ts.Type): boolean {
@@ -470,9 +488,23 @@ export class TypeWalker {
 		}
 		named.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
+		// One `enum` field indexes the members of one enum. Items of two enums
+		// would all be looked up under the first enum's name, and two items
+		// with the same name (`None`) would share an index and read back as
+		// the first enum's item.
 		const first = constituents[0];
+		const parentSymbol = this.enumOf(first);
+		const other = constituents.find((constituent) => this.enumOf(constituent) !== parentSymbol);
+		if (other) {
+			this.report(
+				`a union of items from two enums ("${parentSymbol?.name}" and "${this.enumOf(other)?.name}") isn't ` +
+					`supported -- use one enum per field, or opt into the blob passthrough channel with "unknown".`,
+				node,
+			);
+			return { kind: "blob" };
+		}
+
 		const aliasName = (first as ts.Type & { aliasSymbol?: ts.Symbol }).aliasSymbol?.name;
-		const parentSymbol = (first.symbol as (ts.Symbol & { parent?: ts.Symbol }) | undefined)?.parent;
 		const enumName = aliasName ?? parentSymbol?.name ?? "Enum";
 		return { kind: "enum", enumName, members: named };
 	}

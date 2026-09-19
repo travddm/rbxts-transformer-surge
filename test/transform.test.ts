@@ -187,8 +187,13 @@ describe("transform generated code", () => {
 			"an optional property of a recursive discriminated union variant",
 			`type T = { kind: "leaf"; label?: string } | { kind: "pair"; l: T; r: T };`,
 		],
+		[
+			"an optional literal union property of a recursive type",
+			`interface Chain { mode?: "on" | "off"; next?: Chain; } type T = Chain;`,
+		],
 		["a tuple property of a recursive type", `interface Scope { pair?: [Scope, number]; } type T = Scope;`],
 		["a required property of type unknown", `interface T { anything: unknown; }`],
+		["an optional property of type unknown", `interface T { anything?: unknown; list: unknown[]; }`],
 	])("the generated code for %s passes the type check", (_name, declarations) => {
 		const errors = typeErrorsOfGeneratedCode(
 			`import { createBinarySerializer } from "@rbxts/surge";
