@@ -58,6 +58,9 @@ export type Field =
 			readonly kind: "taggedUnion";
 			readonly tagKey: string;
 			readonly tagKeyNumeric?: boolean;
+			// Inside `Packed<T>`. With two variants and as a direct property of an
+			// object, the tag is one bit of that object's packed region.
+			readonly packed?: true;
 			readonly variants: ReadonlyArray<{
 				readonly tagValue: string | number | boolean;
 				readonly fields: ReadonlyArray<ObjectFieldEntry>;

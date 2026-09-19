@@ -40,8 +40,8 @@ function tagKeyOf(field: Extract<Field, { kind: "taggedUnion" }>): FieldKey {
 
 interface PackedBit {
 	readonly entry: ObjectFieldEntry;
-	/** `present`: whether an optional has a value. `value`: a boolean. */
-	readonly role: "present" | "value";
+	/** `present`: whether an optional has a value. `value`: a boolean. `tag`: which of a tagged union's two variants. */
+	readonly role: "present" | "value" | "tag";
 }
 
 /** One independently emitted run of statements, with the number of locals it declares in the enclosing scope. */
@@ -974,7 +974,8 @@ export class Emitter {
 	 * the region from this one list, so the bit order cannot differ between
 	 * them. A packed `boolean` is one value bit. A packed `optional` is one
 	 * presence bit, and an optional packed `boolean` is a presence bit and a
-	 * value bit with no bytes of its own.
+	 * value bit with no bytes of its own. A packed tagged union with two
+	 * variants is one tag bit, set for the second variant.
 	 */
 	private packedBits(fields: ReadonlyArray<ObjectFieldEntry>): PackedBit[] {
 		const bits: PackedBit[] = [];
@@ -987,6 +988,8 @@ export class Emitter {
 				if (field.inner.kind === "bool" && field.inner.packed) {
 					bits.push({ entry, role: "value" });
 				}
+			} else if (field.kind === "taggedUnion" && field.packed && field.variants.length === 2) {
+				bits.push({ entry, role: "tag" });
 			}
 		}
 		return bits;
@@ -1022,6 +1025,13 @@ export class Emitter {
 					const property = this.propertyAccess(value, entry);
 					if (field.kind === "optional" && field.packed) {
 						this.writeOptional(field, property, itemOut, false);
+					} else if (bits.some((bit) => bit.entry === entry && bit.role === "tag")) {
+						this.writeTaggedUnion(
+							field as Extract<Field, { kind: "taggedUnion" }>,
+							property,
+							itemOut,
+							false,
+						);
 					} else {
 						this.writeField(field, property, itemOut);
 					}
@@ -1101,7 +1111,13 @@ export class Emitter {
 		bits.forEach(({ entry, role }, bitIndex) => {
 			const property = this.propertyAccess(value, entry);
 			let condition: ts.Expression = property;
-			if (role === "present") {
+			if (role === "tag" && entry.field.kind === "taggedUnion") {
+				condition = f.createBinaryExpression(
+					this.propertyAccess(property, tagKeyOf(entry.field)),
+					this.ts_.SyntaxKind.EqualsEqualsEqualsToken,
+					this.literalValueExpr(entry.field.variants[1].tagValue),
+				);
+			} else if (role === "present") {
 				condition = f.createBinaryExpression(
 					property,
 					this.ts_.SyntaxKind.ExclamationEqualsEqualsToken,
@@ -1131,6 +1147,8 @@ export class Emitter {
 		field: Extract<Field, { kind: "taggedUnion" }>,
 		value: ts.Expression,
 		out: ts.Statement[],
+		// `false` when the enclosing object's packed region holds the tag as one bit.
+		writeIndex = true,
 	): void {
 		const f = this.factory;
 		const tagExpr = this.propertyAccess(value, tagKeyOf(field));
@@ -1145,11 +1163,13 @@ export class Emitter {
 				),
 			),
 		);
-		const { buf, pos, statement } = this.destructureAlloc("alloc", idxBytes);
-		out.push(statement);
-		out.push(
-			f.createExpressionStatement(this.bufferCall(idxBytes === 1 ? "writeu8" : "writeu16", [buf, pos, idx])),
-		);
+		if (writeIndex) {
+			const { buf, pos, statement } = this.destructureAlloc("alloc", idxBytes);
+			out.push(statement);
+			out.push(
+				f.createExpressionStatement(this.bufferCall(idxBytes === 1 ? "writeu8" : "writeu16", [buf, pos, idx])),
+			);
+		}
 
 		let chain: ts.Statement | undefined;
 		for (let i = field.variants.length - 1; i >= 0; i--) {
@@ -1774,7 +1794,10 @@ export class Emitter {
 		// The packed region is read first and outside the scoped items: every
 		// item that follows, in any block, can need one of its bits.
 		const bits = this.packedBits(fields);
-		const bitExprs = new Map<ObjectFieldEntry, { present?: ts.Expression; value?: ts.Expression }>();
+		const bitExprs = new Map<
+			ObjectFieldEntry,
+			{ present?: ts.Expression; value?: ts.Expression; tag?: ts.Expression }
+		>();
 		if (bits.length > 0) {
 			const { buf, pos, statement } = this.destructureAlloc("readAlloc", Math.ceil(bits.length / 8));
 			out.push(statement);
@@ -1792,7 +1815,9 @@ export class Emitter {
 			const entryBits = bitExprs.get(entry);
 			let expr!: ts.Expression;
 			const item = this.measure((itemOut) => {
-				if (entryBits?.present && entryBits.value) {
+				if (entryBits?.tag && field.kind === "taggedUnion") {
+					expr = this.readTaggedUnion(field, itemOut, entryBits.tag);
+				} else if (entryBits?.present && entryBits.value) {
 					expr = f.createConditionalExpression(
 						entryBits.present,
 						undefined,
@@ -1846,13 +1871,29 @@ export class Emitter {
 		return result;
 	}
 
-	private readTaggedUnion(field: Extract<Field, { kind: "taggedUnion" }>, out: ts.Statement[]): ts.Expression {
+	private readTaggedUnion(
+		field: Extract<Field, { kind: "taggedUnion" }>,
+		out: ts.Statement[],
+		// The tag bit of the enclosing object's packed region, or `undefined` to read an index.
+		packedTag?: ts.Expression,
+	): ts.Expression {
 		const f = this.factory;
-		const idxBytes = field.variants.length <= 256 ? 1 : 2;
-		const { buf, pos, statement } = this.destructureAlloc("readAlloc", idxBytes);
-		out.push(statement);
-		const idx = this.fresh("idx");
-		out.push(this.constStatement(idx, this.bufferCall(idxBytes === 1 ? "readu8" : "readu16", [buf, pos])));
+		let idx: ts.Identifier;
+		if (packedTag) {
+			idx = this.fresh("idx");
+			out.push(
+				this.constStatement(
+					idx,
+					f.createConditionalExpression(packedTag, undefined, this.num(1), undefined, this.num(0)),
+				),
+			);
+		} else {
+			const idxBytes = field.variants.length <= 256 ? 1 : 2;
+			const { buf, pos, statement } = this.destructureAlloc("readAlloc", idxBytes);
+			out.push(statement);
+			idx = this.fresh("idx");
+			out.push(this.constStatement(idx, this.bufferCall(idxBytes === 1 ? "readu8" : "readu16", [buf, pos])));
+		}
 		const result = this.fresh("result");
 		out.push(
 			f.createVariableStatement(
