@@ -1,5 +1,6 @@
 import * as ts from "typescript";
 
+import { FIXED_DATATYPES } from "../src/datatypes";
 import { Emitter } from "../src/emit";
 import type { Field } from "../src/field";
 import { printNodes } from "./harness";
@@ -38,6 +39,10 @@ describe("Emitter per-kind write/read snapshots", () => {
 
 	test("vector2", () => {
 		expect(emitSnapshot({ kind: "vector2" })).toMatchSnapshot();
+	});
+
+	test.each(Object.keys(FIXED_DATATYPES))("datatype %s", (name) => {
+		expect(emitSnapshot({ kind: "datatype", name })).toMatchSnapshot();
 	});
 
 	test("vector3", () => {
