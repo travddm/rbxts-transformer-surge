@@ -47,6 +47,57 @@ return {
 };"
 `;
 
+exports[`Emitter packed tag bit a packed two-variant tagged union property is one tag bit, with no index byte 1`] = `
+"// write
+const [buf1, pos2] = __surge_alloc(1);
+buffer.writeu8(buf1, pos2, value.shape.kind === "b" ? 1 : 0);
+const idx3 = value.shape.kind === "a" ? 0 : 1;
+if (idx3 === 0) {
+    const [buf6, pos7] = __surge_alloc(1);
+    buffer.writeu8(buf6, pos7, (value.shape as unknown as {
+        n: number;
+    }).n);
+}
+else if (idx3 === 1) {
+    const [buf4, pos5] = __surge_alloc(1);
+    buffer.writeu8(buf4, pos5, (value.shape as unknown as {
+        n: number;
+    }).n);
+}
+
+// read
+const [buf8, pos9] = __surge_readAlloc(1);
+const idx10 = __surge_unpackBit(buf8, pos9, 0) ? 1 : 0;
+let result11: {
+    kind: "a";
+    n: number;
+} | {
+    kind: "b";
+    n: number;
+};
+if (idx10 === 1) {
+    const [buf14, pos15] = __surge_readAlloc(1);
+    result11 = {
+        ...{
+            n: buffer.readu8(buf14, pos15)
+        },
+        kind: "b"
+    };
+}
+else {
+    const [buf12, pos13] = __surge_readAlloc(1);
+    result11 = {
+        ...{
+            n: buffer.readu8(buf12, pos13)
+        },
+        kind: "a"
+    };
+}
+return {
+    shape: result11
+};"
+`;
+
 exports[`Emitter per-kind write/read snapshots array 1`] = `
 "// write
 const arr1 = value;

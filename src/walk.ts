@@ -780,6 +780,12 @@ export class TypeWalker {
 		// equivalent types, and the variant index is encoded in the buffer.
 		builtVariants.sort((a, b) => compareLiteral(a.tagValue, b.tagValue));
 		const tagKeyNumeric = this.keyOf(variants[0].getProperty(tagKey)!).numericKey;
-		return { kind: "taggedUnion", tagKey, ...(tagKeyNumeric ? { tagKeyNumeric } : {}), variants: builtVariants };
+		return {
+			kind: "taggedUnion",
+			tagKey,
+			...(tagKeyNumeric ? { tagKeyNumeric } : {}),
+			...(packed ? { packed } : {}),
+			variants: builtVariants,
+		};
 	}
 }

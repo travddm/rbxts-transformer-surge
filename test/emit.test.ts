@@ -273,6 +273,35 @@ describe("Emitter packed region", () => {
 	});
 });
 
+describe("Emitter packed tag bit", () => {
+	const union = (variantCount: number): Field => ({
+		kind: "taggedUnion",
+		tagKey: "kind",
+		packed: true,
+		variants: ["a", "b", "c"].slice(0, variantCount).map((tagValue) => ({
+			tagValue,
+			fields: [{ name: "n", field: { kind: "num", width: "u8" } }],
+		})),
+	});
+
+	test("a packed two-variant tagged union property is one tag bit, with no index byte", () => {
+		const output = emitSnapshot({ kind: "object", fields: [{ name: "shape", field: union(2) }] });
+		expect(output).toContain('value.shape.kind === "b" ? 1 : 0');
+		expect(output).toContain("__surge_unpackBit(");
+		expect(output).not.toContain("readu8(buf3"); // no index byte is read before the variant
+		expect(output).toMatchSnapshot();
+	});
+
+	test("a packed tagged union with three variants keeps its index byte", () => {
+		const output = emitSnapshot({ kind: "object", fields: [{ name: "shape", field: union(3) }] });
+		expect(output).not.toContain("__surge_unpackBit(");
+	});
+
+	test("a packed two-variant tagged union that is not an object property keeps its index byte", () => {
+		expect(emitSnapshot(union(2))).not.toContain("__surge_unpackBit(");
+	});
+});
+
 describe("Emitter packed boolean padding", () => {
 	test("packed booleans write one computed byte per group instead of per-bit packBit calls", () => {
 		const field: Field = {
