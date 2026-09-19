@@ -127,6 +127,19 @@ const [buf3, pos4] = __surge_readAlloc(8);
 return new UDim(buffer.readf32(buf3, pos4), buffer.readi32(buf3, pos4 + 4));"
 `;
 
+exports[`Emitter per-kind write/read snapshots datatype UDim2 1`] = `
+"// write
+const [buf1, pos2] = __surge_alloc(16);
+buffer.writef32(buf1, pos2, value.X.Scale);
+buffer.writei32(buf1, pos2 + 4, value.X.Offset);
+buffer.writef32(buf1, pos2 + 8, value.Y.Scale);
+buffer.writei32(buf1, pos2 + 12, value.Y.Offset);
+
+// read
+const [buf3, pos4] = __surge_readAlloc(16);
+return new UDim2(buffer.readf32(buf3, pos4), buffer.readi32(buf3, pos4 + 4), buffer.readf32(buf3, pos4 + 8), buffer.readi32(buf3, pos4 + 12));"
+`;
+
 exports[`Emitter per-kind write/read snapshots datatype Vector3int16 1`] = `
 "// write
 const [buf1, pos2] = __surge_alloc(6);
