@@ -215,6 +215,15 @@ describe("transform generated code", () => {
 		expect(errors).toEqual([]);
 	});
 
+	test("the generated code for a buffer passes the type check", () => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { createBinarySerializer } from "@rbxts/surge";
+			interface T { alone: buffer; member: buffer | string; maybe?: buffer; list: buffer[]; }
+			export const s = createBinarySerializer<T>();`,
+		);
+		expect(errors).toEqual([]);
+	});
+
 	test("the generated code for a shape of every common kind passes the type check", () => {
 		const errors = typeErrorsOfGeneratedCode(
 			`import { DataType, createBinarySerializer } from "@rbxts/surge";

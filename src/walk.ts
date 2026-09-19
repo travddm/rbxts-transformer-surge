@@ -17,6 +17,7 @@ const ROBLOX_SCALAR_KINDS: Readonly<Record<string, Field["kind"]>> = {
 	Color3: "color3",
 	ColorSequence: "colorSequence",
 	NumberSequence: "numberSequence",
+	buffer: "buffer",
 };
 
 // What `typeIs(value, tag)` reports for each kind that can be a member of a
@@ -39,6 +40,7 @@ const RUNTIME_TYPE_TAGS: Partial<Record<Field["kind"], string>> = {
 	cframe: "CFrame",
 	color3: "Color3",
 	colorSequence: "ColorSequence",
+	buffer: "buffer",
 	numberSequence: "NumberSequence",
 	enum: "EnumItem",
 };

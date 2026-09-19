@@ -253,6 +253,20 @@ describe("TypeWalker classification with fixture packages", () => {
 		});
 	});
 
+	test("buffer classifies as its own kind, alone and as a union member", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { alone: buffer; member: buffer | string; }", "T", {
+			roblox: true,
+		});
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{ name: "alone", field: { kind: "buffer" } },
+				{ name: "member", field: { kind: "guardedUnion", variants: [{ kind: "buffer" }, { kind: "str" }] } },
+			],
+		});
+	});
+
 	test("two datatypes in one union are told apart by name and sorted by it", () => {
 		const { field, diagnostics } = walkDeclaration("type T = Vector3int16 | UDim;", "T", { roblox: true });
 		expect(diagnostics).toHaveLength(0);

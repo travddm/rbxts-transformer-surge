@@ -199,7 +199,7 @@ export class Emitter {
 
 	private destructureAlloc(
 		fnName: "alloc" | "readAlloc",
-		size: number,
+		size: number | ts.Expression,
 	): { buf: ts.Identifier; pos: ts.Identifier; statement: ts.Statement } {
 		const buf = this.fresh("buf");
 		const pos = this.fresh("pos");
@@ -214,7 +214,7 @@ export class Emitter {
 						]),
 						undefined,
 						undefined,
-						this.call(fnName, [this.num(size)]),
+						this.call(fnName, [typeof size === "number" ? this.num(size) : size]),
 					),
 				],
 				this.ts_.NodeFlags.Const,
@@ -321,6 +321,19 @@ export class Emitter {
 			}
 			case "datatype": {
 				this.writeDatatype(field.name, value, out);
+				return;
+			}
+			case "buffer": {
+				const source = this.fresh("src");
+				out.push(this.constStatement(source, value));
+				const len = this.fresh("len");
+				out.push(this.constStatement(len, this.bufferCall("len", [source])));
+				const { buf: lbuf, pos: lpos, statement: lstmt } = this.destructureAlloc("alloc", 4);
+				out.push(lstmt);
+				out.push(f.createExpressionStatement(this.bufferCall("writeu32", [lbuf, lpos, len])));
+				const { buf, pos, statement } = this.destructureAlloc("alloc", len);
+				out.push(statement);
+				out.push(f.createExpressionStatement(this.bufferCall("copy", [buf, pos, source, this.num(0), len])));
 				return;
 			}
 			case "vector3": {
@@ -1066,6 +1079,8 @@ export class Emitter {
 				return typeIs("Vector2");
 			case "datatype":
 				return typeIs(field.name);
+			case "buffer":
+				return typeIs("buffer");
 			case "vector3":
 				return typeIs("Vector3");
 			case "cframe":
@@ -1139,6 +1154,19 @@ export class Emitter {
 			}
 			case "datatype": {
 				return this.readDatatype(field.name, out);
+			}
+			case "buffer": {
+				const { buf: lbuf, pos: lpos, statement: lstmt } = this.destructureAlloc("readAlloc", 4);
+				out.push(lstmt);
+				const len = this.fresh("len");
+				out.push(this.constStatement(len, this.bufferCall("readu32", [lbuf, lpos])));
+				const { buf, pos, statement } = this.destructureAlloc("readAlloc", len);
+				out.push(statement);
+				// A copy: the input buffer holds the whole payload, and the caller owns the result.
+				const result = this.fresh("bytes");
+				out.push(this.constStatement(result, this.bufferCall("create", [len])));
+				out.push(f.createExpressionStatement(this.bufferCall("copy", [result, this.num(0), buf, pos, len])));
+				return result;
 			}
 			case "vector3": {
 				const [x, y, z] = this.readNum3("f32", out);
@@ -1781,6 +1809,8 @@ export class Emitter {
 				return f.createTypeReferenceNode("Vector2");
 			case "datatype":
 				return f.createTypeReferenceNode(field.name);
+			case "buffer":
+				return f.createTypeReferenceNode("buffer");
 			case "vector3":
 				return f.createTypeReferenceNode("Vector3");
 			case "cframe":

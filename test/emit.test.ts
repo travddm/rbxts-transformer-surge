@@ -45,6 +45,10 @@ describe("Emitter per-kind write/read snapshots", () => {
 		expect(emitSnapshot({ kind: "datatype", name })).toMatchSnapshot();
 	});
 
+	test("buffer", () => {
+		expect(emitSnapshot({ kind: "buffer" })).toMatchSnapshot();
+	});
+
 	test("vector3", () => {
 		expect(emitSnapshot({ kind: "vector3" })).toMatchSnapshot();
 	});
