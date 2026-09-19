@@ -1,8 +1,7 @@
 import type ts from "typescript";
 
 import { resolveFactoryName } from "./detect";
-import { Emitter } from "./emit";
-import type { Field } from "./field";
+import { Emitter, importAlias } from "./emit";
 import { TypeWalker } from "./walk";
 
 /**
@@ -25,14 +24,48 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 		return (sourceFile: ts.SourceFile): ts.SourceFile => {
 			const usedImports = new Set<string>();
 
+			// `addDiagnostic` is internal to TypeScript (absent from
+			// `typescript.d.ts`). roblox-ts adds what it collects to its own
+			// diagnostics and stops the build before emit when any is an error
+			// (`compileFiles.js`), so the user sees a file and position instead
+			// of a Node stack trace. The string `code` follows roblox-ts's own
+			// diagnostics, which print as "error TS roblox-ts: ...".
+			function report(node: ts.Node, messageText: string): void {
+				(ctx as unknown as { addDiagnostic(diagnostic: ts.DiagnosticWithLocation): void }).addDiagnostic({
+					category: typescript.DiagnosticCategory.Error,
+					code: " surge" as unknown as number,
+					file: sourceFile,
+					start: node.getStart(sourceFile),
+					length: node.getWidth(sourceFile),
+					messageText,
+				});
+			}
+
 			function visit(node: ts.Node): ts.Node {
-				if (typescript.isCallExpression(node) && node.typeArguments && node.typeArguments.length === 1) {
+				if (typescript.isCallExpression(node)) {
 					const factoryName = resolveFactoryName(typescript, checker, node.expression);
 					if (factoryName) {
-						return buildReplacement(factoryName, node, node.typeArguments[0]);
+						if (node.typeArguments?.length === 1) {
+							return buildReplacement(factoryName, node, node.typeArguments[0]);
+						}
+						report(
+							node,
+							`${factoryName}() needs an explicit type argument, for example "${factoryName}<MyType>()" -- ` +
+								`the type is not inferred from the variable the result is assigned to.`,
+						);
+						return node;
 					}
 				}
 				return typescript.visitEachChild(node, visit, ctx);
+			}
+
+			function surgeCall(name: string, args: ts.Expression[]): ts.Expression {
+				usedImports.add(name);
+				return ctx.factory.createCallExpression(
+					ctx.factory.createIdentifier(importAlias(name)),
+					undefined,
+					args,
+				);
 			}
 
 			function buildReplacement(
@@ -46,8 +79,11 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				const walker = new TypeWalker(typescript, checker);
 				const rootField = walker.walk(type, node, false);
 				if (walker.diagnostics.length > 0) {
-					const messages = walker.diagnostics.map((d) => d.message).join("\n");
-					throw new Error(`surge: ${sourceFile.fileName}: ${messages}`);
+					for (const diagnostic of walker.diagnostics) {
+						report(diagnostic.node, diagnostic.message);
+					}
+					// Left untransformed: the diagnostics fail the build before emit.
+					return node;
 				}
 
 				const emitter = new Emitter(typescript, f, walker.getHelperFields());
@@ -61,26 +97,17 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					undefined,
 				);
 				const writeBody: ts.Statement[] = [
-					f.createExpressionStatement(
-						f.createCallExpression(f.createIdentifier("beginWrite"), undefined, []),
-					),
-					f.createExpressionStatement(
-						f.createCallExpression(f.createIdentifier("beginWriteBlobs"), undefined, []),
-					),
+					f.createExpressionStatement(surgeCall("beginWrite", [])),
+					f.createExpressionStatement(surgeCall("beginWriteBlobs", [])),
 				];
+				emitter.beginFunction();
 				emitter.writeField(rootField, f.createIdentifier("value"), writeBody);
 				writeBody.push(
 					f.createReturnStatement(
 						f.createObjectLiteralExpression(
 							[
-								f.createPropertyAssignment(
-									"buffer",
-									f.createCallExpression(f.createIdentifier("finishWrite"), undefined, []),
-								),
-								f.createPropertyAssignment(
-									"blobs",
-									f.createCallExpression(f.createIdentifier("finishWriteBlobs"), undefined, []),
-								),
+								f.createPropertyAssignment("buffer", surgeCall("finishWrite", [])),
+								f.createPropertyAssignment("blobs", surgeCall("finishWriteBlobs", [])),
 							],
 							false,
 						),
@@ -99,7 +126,6 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					f.createToken(typescript.SyntaxKind.EqualsGreaterThanToken),
 					f.createBlock(writeBody, true),
 				);
-				emitter.usedImports.add("beginWrite").add("beginWriteBlobs").add("finishWrite").add("finishWriteBlobs");
 
 				const inputParam = f.createParameterDeclaration(
 					undefined,
@@ -118,17 +144,10 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					undefined,
 				);
 				const readBody: ts.Statement[] = [
-					f.createExpressionStatement(
-						f.createCallExpression(f.createIdentifier("beginRead"), undefined, [
-							f.createIdentifier("input"),
-						]),
-					),
-					f.createExpressionStatement(
-						f.createCallExpression(f.createIdentifier("beginReadBlobs"), undefined, [
-							f.createIdentifier("inputBlobs"),
-						]),
-					),
+					f.createExpressionStatement(surgeCall("beginRead", [f.createIdentifier("input")])),
+					f.createExpressionStatement(surgeCall("beginReadBlobs", [f.createIdentifier("inputBlobs")])),
 				];
+				emitter.beginFunction();
 				const resultExpr = emitter.readField(rootField, readBody);
 				readBody.push(f.createReturnStatement(resultExpr));
 				const deserializeFn = f.createArrowFunction(
@@ -139,7 +158,6 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					f.createToken(typescript.SyntaxKind.EqualsGreaterThanToken),
 					f.createBlock(readBody, true),
 				);
-				emitter.usedImports.add("beginRead").add("beginReadBlobs");
 
 				let resultValue: ts.Expression;
 				if (factoryName === "createSerializer") {
@@ -189,7 +207,13 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					f.createNamedImports(
 						[...usedImports]
 							.sort()
-							.map((name) => f.createImportSpecifier(false, undefined, f.createIdentifier(name))),
+							.map((name) =>
+								f.createImportSpecifier(
+									false,
+									f.createIdentifier(name),
+									f.createIdentifier(importAlias(name)),
+								),
+							),
 					),
 				),
 				f.createStringLiteral("@rbxts/surge"),

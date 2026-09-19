@@ -118,10 +118,22 @@ export function getDataTypeBrand(type: ts.Type): string | undefined {
 	return aliasSymbol.name;
 }
 
-export function getPackedInnerType(type: ts.Type): ts.Type | undefined {
+/**
+ * If `type` is `DataType.Packed<T>`, returns `T`. A direct reference is
+ * detected by alias identity, like the other brands. A re-alias
+ * (`type PackedFlags = DataType.Packed<Flags>`) carries the re-alias's own
+ * `aliasSymbol` instead, so it is detected through the brand property
+ * `_surge_packed?: [T]`, whose tuple element is `T`.
+ */
+export function getPackedInnerType(checker: ts.TypeChecker, type: ts.Type): ts.Type | undefined {
 	const withArgs = type as ts.Type & { aliasSymbol?: ts.Symbol; aliasTypeArguments?: readonly ts.Type[] };
-	if (getDataTypeBrand(type) !== "Packed") {
+	if (getDataTypeBrand(type) === "Packed") {
+		return withArgs.aliasTypeArguments?.[0];
+	}
+	const brandProperty = type.getProperty("_surge_packed");
+	if (!brandProperty || !isFromSurgePackage(brandProperty.declarations)) {
 		return undefined;
 	}
-	return withArgs.aliasTypeArguments?.[0];
+	const brandType = checker.getNonNullableType(checker.getTypeOfSymbol(brandProperty));
+	return checker.isTupleType(brandType) ? checker.getTypeArguments(brandType as ts.TypeReference)[0] : undefined;
 }

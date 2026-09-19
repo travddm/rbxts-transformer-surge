@@ -100,9 +100,43 @@ describe("getDataTypeBrand / getPackedInnerType", () => {
 			const declarationNode = findDeclaration(sourceFile, "T");
 			const prop = checker.getTypeAtLocation(declarationNode).getProperty("p")!;
 			const propType = checker.getTypeOfSymbolAtLocation(prop, declarationNode);
-			const inner = getPackedInnerType(propType);
+			const inner = getPackedInnerType(checker, propType);
 			expect(inner).toBeDefined();
 			expect(checker.typeToString(inner!)).toBe("Inner");
+		} finally {
+			cleanup();
+		}
+	});
+
+	// A re-alias carries its own `aliasSymbol`, so alias identity alone misses
+	// it; the `_surge_packed` brand property still identifies it.
+	test("unwraps a re-aliased Packed<T> to its inner type", () => {
+		const { checker, sourceFile, cleanup } = createFixtureProgram(
+			`import { DataType } from "@rbxts/surge"; interface Inner { a: boolean; } type PackedInner = DataType.Packed<Inner>; interface T { p: PackedInner; }`,
+			{ surge: true },
+		);
+		try {
+			const declarationNode = findDeclaration(sourceFile, "T");
+			const prop = checker.getTypeAtLocation(declarationNode).getProperty("p")!;
+			const propType = checker.getTypeOfSymbolAtLocation(prop, declarationNode);
+			const inner = getPackedInnerType(checker, propType);
+			expect(inner).toBeDefined();
+			expect(checker.typeToString(inner!)).toBe("Inner");
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("a _surge_packed property declared outside @rbxts/surge is not detected", () => {
+		const { checker, sourceFile, cleanup } = createFixtureProgram(
+			`interface Inner { a: boolean; } type Fake = Inner & { readonly _surge_packed?: [Inner] }; interface T { p: Fake; }`,
+			{ surge: true },
+		);
+		try {
+			const declarationNode = findDeclaration(sourceFile, "T");
+			const prop = checker.getTypeAtLocation(declarationNode).getProperty("p")!;
+			const propType = checker.getTypeOfSymbolAtLocation(prop, declarationNode);
+			expect(getPackedInnerType(checker, propType)).toBeUndefined();
 		} finally {
 			cleanup();
 		}

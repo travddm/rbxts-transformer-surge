@@ -7,8 +7,15 @@
  */
 export type NumWidth = "f32" | "f64" | "u8" | "u16" | "u32" | "i8" | "i16" | "i32";
 
-export interface ObjectFieldEntry {
+export interface FieldKey {
 	readonly name: string;
+	// `{ 0: T }` and `{ "0": T }` are one property to TypeScript but two
+	// different table keys in Luau (`[0]` and `["0"]`), so the emitter must
+	// know which form the type declares.
+	readonly numericKey?: boolean;
+}
+
+export interface ObjectFieldEntry extends FieldKey {
 	readonly field: Field;
 }
 
@@ -44,6 +51,7 @@ export type Field =
 	| {
 			readonly kind: "taggedUnion";
 			readonly tagKey: string;
+			readonly tagKeyNumeric?: boolean;
 			readonly variants: ReadonlyArray<{
 				readonly tagValue: string | number | boolean;
 				readonly fields: ReadonlyArray<ObjectFieldEntry>;
@@ -55,7 +63,3 @@ export type Field =
 	// a call into a named module-scoped helper instead of infinite inlining
 	// (Transformer Design §6).
 	| { readonly kind: "recursiveRef"; readonly helperName: string };
-
-export function isPackable(field: Field): boolean {
-	return field.kind === "bool";
-}
