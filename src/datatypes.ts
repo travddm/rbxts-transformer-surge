@@ -53,6 +53,10 @@ export const FIXED_DATATYPES: Readonly<Record<string, DatatypeSpec>> = {
 			{ path: ["Max", "Y"], width: "f32" },
 		],
 	},
+	DateTime: {
+		components: [{ path: ["UnixTimestampMillis"], width: "f64" }],
+		factoryMethod: "fromUnixTimestampMillis",
+	},
 };
 
 export function isFixedDatatype(name: string): boolean {
