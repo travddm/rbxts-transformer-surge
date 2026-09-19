@@ -1,7 +1,7 @@
 import type ts from "typescript";
 
 import { getDataTypeBrand, getPackedInnerType, isFromTypesPackage, isRobloxNominalType } from "./detect";
-import type { Field, NumWidth, ObjectFieldEntry } from "./field";
+import type { Field, FieldKey, NumWidth, ObjectFieldEntry } from "./field";
 
 export interface WalkDiagnostic {
 	readonly message: string;
@@ -16,6 +16,30 @@ const ROBLOX_SCALAR_KINDS: Readonly<Record<string, Field["kind"]>> = {
 	Color3: "color3",
 	ColorSequence: "colorSequence",
 	NumberSequence: "numberSequence",
+};
+
+// What `typeIs(value, tag)` reports for each kind that can be a member of a
+// guarded union. Two variants with the same tag can't be told apart on the
+// write side. `literalConst` is absent because it is guarded by value, and
+// `blob` because an opaque value has no tag to check.
+const RUNTIME_TYPE_TAGS: Partial<Record<Field["kind"], string>> = {
+	num: "number",
+	str: "string",
+	bool: "boolean",
+	object: "table",
+	array: "table",
+	tuple: "table",
+	dict: "table",
+	// Only an object type or a union is ever in progress (`tryWalkObject`,
+	// `walkUnion`), and a union is never a member of another union.
+	recursiveRef: "table",
+	vector2: "Vector2",
+	vector3: "Vector3",
+	cframe: "CFrame",
+	color3: "Color3",
+	colorSequence: "ColorSequence",
+	numberSequence: "NumberSequence",
+	enum: "EnumItem",
 };
 
 let helperCounter = 0;
@@ -111,7 +135,7 @@ export class TypeWalker {
 		// so they must be checked before anything else can misclassify them
 		// (a plain `number & {...}` brand would otherwise just look like
 		// `number`).
-		const packedInner = getPackedInnerType(type);
+		const packedInner = getPackedInnerType(checker, type);
 		if (packedInner) {
 			return this.walk(packedInner, node, true);
 		}
@@ -168,28 +192,28 @@ export class TypeWalker {
 		// routed to blob so a typo'd type doesn't disappear without a trace.
 		if ((type.flags & ts_.TypeFlags.TemplateLiteral) !== 0) {
 			this.report(
-				`surge: a template literal type can't be structurally encoded -- widen it to "string" or opt into the blob passthrough channel with "unknown".`,
+				`a template literal type can't be structurally encoded -- widen it to "string" or opt into the blob passthrough channel with "unknown".`,
 				node,
 			);
 			return { kind: "blob" };
 		}
 		if ((type.flags & ts_.TypeFlags.ESSymbolLike) !== 0) {
 			this.report(
-				`surge: "symbol" can't be structurally encoded -- opt into the blob passthrough channel with "unknown".`,
+				`"symbol" can't be structurally encoded -- opt into the blob passthrough channel with "unknown".`,
 				node,
 			);
 			return { kind: "blob" };
 		}
 		if ((type.flags & ts_.TypeFlags.BigIntLike) !== 0) {
 			this.report(
-				`surge: "bigint" can't be structurally encoded -- opt into the blob passthrough channel with "unknown".`,
+				`"bigint" can't be structurally encoded -- opt into the blob passthrough channel with "unknown".`,
 				node,
 			);
 			return { kind: "blob" };
 		}
 		if ((type.flags & ts_.TypeFlags.Null) !== 0) {
 			this.report(
-				`surge: "null" can't be structurally encoded -- opt into the blob passthrough channel with "unknown".`,
+				`"null" can't be structurally encoded -- opt into the blob passthrough channel with "unknown".`,
 				node,
 			);
 			return { kind: "blob" };
@@ -199,7 +223,7 @@ export class TypeWalker {
 			checker.getSignaturesOfType(type, ts_.SignatureKind.Construct).length > 0
 		) {
 			this.report(
-				`surge: a function type can't be encoded -- it would round-trip as a stale reference in-process at best and be meaningless over a RemoteEvent at worst. Opt into the blob passthrough channel with "unknown" if this is intentional.`,
+				`a function type can't be encoded -- it would round-trip as a stale reference in-process at best and be meaningless over a RemoteEvent at worst. Opt into the blob passthrough channel with "unknown" if this is intentional.`,
 				node,
 			);
 			return { kind: "blob" };
@@ -222,7 +246,7 @@ export class TypeWalker {
 		const indexInfos = checker.getIndexInfosOfType(type);
 		if (type.getProperties().length > 0 && indexInfos.length > 0) {
 			this.report(
-				`surge: a type with both declared properties and an index signature isn't supported -- split the index ` +
+				`a type with both declared properties and an index signature isn't supported -- split the index ` +
 					`signature into its own "Record"/"Map" field, or opt into the blob passthrough channel with "unknown".`,
 				node,
 			);
@@ -248,6 +272,33 @@ export class TypeWalker {
 		}
 
 		return this.tryWalkObject(type, node, packed) ?? { kind: "blob" };
+	}
+
+	/**
+	 * The node a diagnostic about `prop`'s type points at: the property's own
+	 * declaration when it is in the file being transformed, otherwise `node`
+	 * (a declaration in a library's `.d.ts` is not where the user fixes it).
+	 */
+	private nodeForProperty(prop: ts.Symbol, node: ts.Node): ts.Node {
+		const declaration = prop.valueDeclaration ?? prop.declarations?.[0];
+		return declaration && declaration.getSourceFile() === node.getSourceFile() ? declaration : node;
+	}
+
+	/** `numericKey` is left out, not `false`, for an ordinary name, so the common `Field` stays `{ name, field }`. */
+	private keyOf(prop: ts.Symbol): FieldKey {
+		return this.isNumericKey(prop) ? { name: prop.name, numericKey: true } : { name: prop.name };
+	}
+
+	private isNumericKey(prop: ts.Symbol): boolean {
+		const declaredName = (prop.valueDeclaration as ts.NamedDeclaration | undefined)?.name;
+		if (declaredName) {
+			const nameNode = this.typescript.isComputedPropertyName(declaredName)
+				? declaredName.expression
+				: declaredName;
+			return this.typescript.isNumericLiteral(nameNode);
+		}
+		// No declared name to inspect (a mapped type such as `Record<0 | 1, T>`).
+		return String(Number(prop.name)) === prop.name && Number(prop.name) >= 0;
 	}
 
 	private hasNoIndexOrProperties(type: ts.Type): boolean {
@@ -276,7 +327,10 @@ export class TypeWalker {
 		for (const name of names) {
 			const prop = properties.find((p) => p.name === name)!;
 			const propType = this.checker.getTypeOfSymbolAtLocation(prop, node);
-			fields.push({ name, field: this.walk(propType, node, packed) });
+			fields.push({
+				...this.keyOf(prop),
+				field: this.walk(propType, this.nodeForProperty(prop, node), packed),
+			});
 		}
 
 		this.inProgress.delete(type);
@@ -327,6 +381,14 @@ export class TypeWalker {
 			let rest: Field | undefined;
 			for (let i = 0; i < typeArgs.length; i++) {
 				const flags = elementFlags[i];
+				if ((flags & this.typescript.ElementFlags.Variable) !== 0 && i !== typeArgs.length - 1) {
+					this.report(
+						`a tuple with a rest element that isn't last (for example "[...number[], string]") isn't ` +
+							`supported -- move the rest element to the end.`,
+						node,
+					);
+					return { kind: "blob" };
+				}
 				const elementField = this.walk(typeArgs[i], node, packed);
 				if ((flags & this.typescript.ElementFlags.Rest) !== 0) {
 					rest = elementField;
@@ -399,7 +461,7 @@ export class TypeWalker {
 				// classified, since the alternative is `Enum.Enum.EnumItem` on the
 				// read side, which errors at runtime (see enum-encoding.md).
 				this.report(
-					`surge: a bare "EnumItem" field isn't supported -- narrow it to a specific enum type, e.g. "Enum.KeyCode".`,
+					`a bare "EnumItem" field isn't supported -- narrow it to a specific enum type, e.g. "Enum.KeyCode".`,
 					node,
 				);
 				return { kind: "blob" };
@@ -515,7 +577,6 @@ export class TypeWalker {
 	}
 
 	private classifyUnion(constituents: ts.Type[], node: ts.Node, packed: boolean): Field {
-		const checker = this.checker;
 		const objectLike = constituents.filter((t) => t.getProperties().length > 0);
 		if (objectLike.length === constituents.length) {
 			const discriminant = this.findDiscriminant(objectLike, node);
@@ -531,27 +592,55 @@ export class TypeWalker {
 		// nominally detected -- see blob-classification.md): there is
 		// nothing left to guard on, since `pushBlob`/`nextBlob` write and
 		// read identically regardless of which variant produced the value.
-		// `emit.ts`'s `guardFor` has no case for `"blob"` (that gap is
-		// walker-emitter-robustness.md's, for the general union-guard
-		// model), so collapsing here avoids a crash for what is otherwise
-		// ordinary Roblox code.
 		if (fields.length > 0 && fields.every((f) => f.kind === "blob")) {
 			return { kind: "blob" };
 		}
 
-		const tableShapedCount = fields.filter(
-			(f) => f.kind === "object" || f.kind === "array" || f.kind === "tuple" || f.kind === "dict",
-		).length;
+		// The write side picks a variant with a runtime type check (`guardFor`
+		// in emit.ts), so every shape that check can't decide is rejected here.
+		if (fields.some((f) => f.kind === "blob")) {
+			this.report(
+				"this union mixes an opaque variant (an Instance, a Roblox datatype without its own encoding, or " +
+					'"unknown") with other variants. An opaque value has no runtime type to check, so the write side cannot ' +
+					'tell the variants apart -- type the field as "unknown" to send the whole value through the blob ' +
+					"passthrough channel.",
+				node,
+			);
+			return { kind: "blob" };
+		}
+		const unguardable = fields.find((f) => f.kind !== "literalConst" && RUNTIME_TYPE_TAGS[f.kind] === undefined);
+		if (unguardable) {
+			this.report(`a "${unguardable.kind}" variant isn't supported as a member of this union.`, node);
+			return { kind: "blob" };
+		}
+
+		const tableShapedCount = fields.filter((f) => RUNTIME_TYPE_TAGS[f.kind] === "table").length;
 		if (tableShapedCount > 1) {
 			this.report(
-				"surge: this union has two or more table-shaped variants (object/array/tuple/Map/Set/Record) with no " +
+				"this union has two or more table-shaped variants (object/array/tuple/Map/Set/Record) with no " +
 					"shared literal discriminant. Structural union guards for this case aren't implemented -- add a " +
 					"unique literal discriminant property to each variant instead.",
 				node,
 			);
 			return { kind: "blob" };
 		}
-		void checker;
+		const seenTags = new Set<string>();
+		for (const variant of fields) {
+			const tag = RUNTIME_TYPE_TAGS[variant.kind];
+			if (tag === undefined) {
+				continue;
+			}
+			if (seenTags.has(tag)) {
+				this.report(
+					`this union has two or more variants that are all "${tag}" at runtime (for example two ` +
+						`"DataType" number widths, or an enum with several members next to another type), so the ` +
+						`write side can't tell them apart.`,
+					node,
+				);
+				return { kind: "blob" };
+			}
+			seenTags.add(tag);
+		}
 		// Sorted by kind, then by value for two `literalConst` variants (the
 		// only kind that can repeat among guarded-union variants): `type.types`
 		// order is otherwise the checker's unstable type-id order (see
@@ -618,7 +707,10 @@ export class TypeWalker {
 			const fields = names.map((name) => {
 				const propSymbol = properties.find((p) => p.name === name)!;
 				const propType2 = checker.getTypeOfSymbolAtLocation(propSymbol, node);
-				return { name, field: this.walk(propType2, node, packed) };
+				return {
+					...this.keyOf(propSymbol),
+					field: this.walk(propType2, this.nodeForProperty(propSymbol, node), packed),
+				};
 			});
 			return { tagValue, fields };
 		});
@@ -628,6 +720,7 @@ export class TypeWalker {
 		// anything guaranteed stable across differently-constructed
 		// equivalent types, and the variant index is encoded in the buffer.
 		builtVariants.sort((a, b) => compareLiteral(a.tagValue, b.tagValue));
-		return { kind: "taggedUnion", tagKey, variants: builtVariants };
+		const tagKeyNumeric = this.keyOf(variants[0].getProperty(tagKey)!).numericKey;
+		return { kind: "taggedUnion", tagKey, ...(tagKeyNumeric ? { tagKeyNumeric } : {}), variants: builtVariants };
 	}
 }

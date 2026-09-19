@@ -445,7 +445,7 @@ describe("TypeWalker blob classification", () => {
 		expect(diagnostics.length).toBeGreaterThan(0);
 	});
 
-	// Regression test for walker-emitter-robustness.md's `in` operator bullet:
+	// Regression test for the `in` operator lookup:
 	// `symbolName in ROBLOX_SCALAR_KINDS` matches through the prototype chain,
 	// so a method named after an `Object.prototype` member used to look up
 	// truthy regardless of `ROBLOX_SCALAR_KINDS`'s own keys. Gating that
@@ -504,5 +504,118 @@ describe("TypeWalker blob classification", () => {
 			fields: [{ name: "m", field: { kind: "blob" } }],
 		});
 		expect(diagnostics.length).toBeGreaterThan(0);
+	});
+});
+
+describe("TypeWalker property keys", () => {
+	test("a numeric property name is flagged numericKey; a quoted numeric name and an ordinary name are not", () => {
+		const { field } = walkDeclaration(`interface T { 0: string; "1": string; "my-key": number; }`, "T");
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{ name: "0", numericKey: true, field: { kind: "str" } },
+				{ name: "1", field: { kind: "str" } },
+				{ name: "my-key", field: { kind: "num", width: "f64" } },
+			],
+		});
+	});
+});
+
+describe("TypeWalker tuples", () => {
+	test("a leading rest element is rejected with a diagnostic instead of being walked as a trailing rest", () => {
+		const { diagnostics } = walkDeclaration("type T = [...number[], string];", "T");
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain("rest element that isn't last");
+	});
+
+	test("a middle rest element is rejected with a diagnostic", () => {
+		const { diagnostics } = walkDeclaration("type T = [boolean, ...number[], string];", "T");
+		expect(diagnostics).toHaveLength(1);
+	});
+
+	test("a trailing rest element and an optional trailing element are still supported", () => {
+		const rest = walkDeclaration("type T = [string, ...number[]];", "T");
+		expect(rest.diagnostics).toHaveLength(0);
+		expect(rest.field).toEqual({ kind: "tuple", fixed: [{ kind: "str" }], rest: { kind: "num", width: "f64" } });
+		expect(walkDeclaration("type T = [number, string?];", "T").diagnostics).toHaveLength(0);
+	});
+});
+
+describe("TypeWalker union guards", () => {
+	test("a Roblox datatype with its own kind is a guardable union member", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { v: CFrame | Vector2 | string; }", "T", {
+			roblox: true,
+		});
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{
+					name: "v",
+					field: {
+						kind: "guardedUnion",
+						variants: [{ kind: "cframe" }, { kind: "str" }, { kind: "vector2" }],
+					},
+				},
+			],
+		});
+	});
+
+	test("a recursive object type next to a primitive is a guardable union member", () => {
+		const { diagnostics } = walkDeclaration("interface Chain { next: Chain | string; }", "Chain");
+		expect(diagnostics).toHaveLength(0);
+	});
+
+	test("a recursive object type next to another table-shaped variant is rejected", () => {
+		const { diagnostics } = walkDeclaration("interface Chain { next: Chain | string[]; }", "Chain");
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain("table-shaped");
+	});
+
+	test("an opaque variant next to a non-opaque variant is rejected", () => {
+		const { diagnostics } = walkDeclaration("interface T { v: Instance | string; }", "T", { roblox: true });
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain("opaque");
+	});
+
+	test("two variants with the same runtime type are rejected", () => {
+		const { diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { v: DataType.u8 | DataType.u16 | string; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain('"number" at runtime');
+	});
+});
+
+describe("TypeWalker diagnostic position", () => {
+	test("a diagnostic points at the offending property's declaration, not at the root node", () => {
+		const { diagnostics } = walkDeclaration("interface Inner { bad: symbol; } interface T { inner: Inner; }", "T");
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].node.getText()).toBe("bad: symbol;");
+	});
+});
+
+describe("TypeWalker Packed<T>", () => {
+	test("a re-aliased Packed<T> packs its booleans and does not serialize the brand property", () => {
+		const { field, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			interface Flags { a: boolean; }
+			type PackedFlags = DataType.Packed<Flags>;
+			interface T { flags: PackedFlags; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{
+					name: "flags",
+					field: { kind: "object", fields: [{ name: "a", field: { kind: "bool", packed: true } }] },
+				},
+			],
+		});
 	});
 });

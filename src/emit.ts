@@ -1,6 +1,6 @@
 import type ts from "typescript";
 
-import type { Field, NumWidth, ObjectFieldEntry } from "./field";
+import type { Field, FieldKey, NumWidth, ObjectFieldEntry } from "./field";
 
 const WIDTH_BYTES: Record<NumWidth, number> = {
 	f32: 4,
@@ -13,6 +13,34 @@ const WIDTH_BYTES: Record<NumWidth, number> = {
 	i32: 4,
 };
 
+// Luau allows 200 registers per function, and every local the emitter
+// declares holds one until its scope ends (confirmed with Lune's
+// `luau.compile`: 100 `const [buf, pos] = alloc(n)` pairs in one function
+// fail with "Out of local registers"). Past `LOCALS_BUDGET` live locals the
+// emitter wraps runs of at most `LOCALS_PER_BLOCK` locals in a block, which
+// roblox-ts compiles to `do ... end`; Luau frees a block's registers at its
+// `end`. The budget leaves the rest of the 200 to parameters, loop state,
+// expression temporaries, and the temporaries roblox-ts adds itself.
+const LOCALS_BUDGET = 120;
+const LOCALS_PER_BLOCK = 32;
+
+// The injected `@rbxts/surge` imports are aliased so that a user's own
+// `alloc` (or any other export's name), at the top level or in a scope
+// enclosing the call site, can neither collide with nor shadow them.
+export function importAlias(name: string): string {
+	return `__surge_${name}`;
+}
+
+function tagKeyOf(field: Extract<Field, { kind: "taggedUnion" }>): FieldKey {
+	return { name: field.tagKey, numericKey: field.tagKeyNumeric };
+}
+
+/** One independently emitted run of statements, with the number of locals it declares in the enclosing scope. */
+interface ScopedItem {
+	readonly statements: ts.Statement[];
+	readonly locals: number;
+}
+
 /**
  * Turns a `Field` IR tree into `write`/`read` statements (Transformer
  * Design §5). Every field, fixed or variable-size, is inlined in source
@@ -24,6 +52,10 @@ const WIDTH_BYTES: Record<NumWidth, number> = {
  */
 export class Emitter {
 	private tempCounter = 0;
+	// Locals declared so far in the function being emitted. Locals declared
+	// inside a loop or branch body are never subtracted, so this overcounts;
+	// the only effect is that `pushScoped` starts using blocks earlier.
+	private liveLocals = 0;
 	public readonly usedImports = new Set<string>();
 	private readonly generatedHelpers = new Set<string>();
 	private readonly helperDecls: ts.Statement[] = [];
@@ -38,18 +70,98 @@ export class Emitter {
 
 	private fresh(base: string): ts.Identifier {
 		this.tempCounter += 1;
+		this.liveLocals += 1;
 		return this.factory.createIdentifier(`${base}${this.tempCounter}`);
 	}
 
 	/** Calls a real `@rbxts/surge` export, tracked so the file-level import statement includes it. */
 	private call(name: string, args: ts.Expression[]): ts.CallExpression {
 		this.usedImports.add(name);
-		return this.factory.createCallExpression(this.factory.createIdentifier(name), undefined, args);
+		return this.factory.createCallExpression(this.factory.createIdentifier(importAlias(name)), undefined, args);
 	}
 
 	/** Calls a locally-generated helper function (never an import from @rbxts/surge). */
 	private callLocal(name: string, args: ts.Expression[]): ts.CallExpression {
 		return this.factory.createCallExpression(this.factory.createIdentifier(name), undefined, args);
+	}
+
+	/** `value.name`, or `value["my-key"]`/`value[0]` when the name isn't a valid identifier. */
+	private propertyAccess(value: ts.Expression, key: FieldKey): ts.Expression {
+		const name = this.propertyName(key);
+		return this.ts_.isIdentifier(name)
+			? this.factory.createPropertyAccessExpression(value, name)
+			: this.factory.createElementAccessExpression(value, name);
+	}
+
+	private propertyName(key: FieldKey): ts.Identifier | ts.StringLiteral | ts.NumericLiteral {
+		if (key.numericKey) {
+			return this.factory.createNumericLiteral(key.name);
+		}
+		return this.isIdentifierName(key.name)
+			? this.factory.createIdentifier(key.name)
+			: this.factory.createStringLiteral(key.name);
+	}
+
+	private isIdentifierName(name: string): boolean {
+		const target = this.ts_.ScriptTarget.ESNext;
+		const chars = [...name];
+		return (
+			chars.length > 0 &&
+			chars.every((char, i) =>
+				i === 0
+					? this.ts_.isIdentifierStart(char.codePointAt(0)!, target)
+					: this.ts_.isIdentifierPart(char.codePointAt(0)!, target),
+			)
+		);
+	}
+
+	/** Must be called before emitting the body of each generated function: the local budget is per function. */
+	public beginFunction(): void {
+		this.liveLocals = 0;
+	}
+
+	private measure(emit: (out: ts.Statement[]) => void): ScopedItem {
+		const before = this.liveLocals;
+		const statements: ts.Statement[] = [];
+		emit(statements);
+		return { statements, locals: this.liveLocals - before };
+	}
+
+	/** Whether the items just measured took the current function past `LOCALS_BUDGET`, so `pushScoped` will use blocks. */
+	private needsBlocks(): boolean {
+		return this.liveLocals > LOCALS_BUDGET;
+	}
+
+	/**
+	 * Appends independently emitted items to `out`: inline while the function
+	 * is within `LOCALS_BUDGET`, otherwise as consecutive blocks. No item may
+	 * refer to a local that another item declares.
+	 */
+	private pushScoped(items: ReadonlyArray<ScopedItem>, out: ts.Statement[]): void {
+		if (!this.needsBlocks()) {
+			for (const item of items) {
+				out.push(...item.statements);
+			}
+			return;
+		}
+		let group: ts.Statement[] = [];
+		let groupLocals = 0;
+		const flush = () => {
+			if (group.length > 0) {
+				out.push(this.factory.createBlock(group, true));
+			}
+			group = [];
+			groupLocals = 0;
+		};
+		for (const item of items) {
+			if (groupLocals > 0 && groupLocals + item.locals > LOCALS_PER_BLOCK) {
+				flush();
+			}
+			group.push(...item.statements);
+			groupLocals += item.locals;
+			this.liveLocals -= item.locals;
+		}
+		flush();
 	}
 
 	private num(n: number): ts.Expression {
@@ -278,9 +390,14 @@ export class Emitter {
 			case "tuple": {
 				const tup = this.fresh("tup");
 				out.push(this.constStatement(tup, value));
-				field.fixed.forEach((elementField, i) => {
-					this.writeField(elementField, f.createElementAccessExpression(tup, this.num(i)), out);
-				});
+				this.pushScoped(
+					field.fixed.map((elementField, i) =>
+						this.measure((itemOut) =>
+							this.writeField(elementField, f.createElementAccessExpression(tup, this.num(i)), itemOut),
+						),
+					),
+					out,
+				);
 				if (field.rest) {
 					const fixedCount = field.fixed.length;
 					const restCountExpr = f.createBinaryExpression(
@@ -734,30 +851,40 @@ export class Emitter {
 		const f = this.factory;
 		const packedBools = fields.filter((e) => e.field.kind === "bool" && e.field.packed);
 		const normal = fields.filter((e) => !(e.field.kind === "bool" && e.field.packed));
-		for (const entry of normal) {
-			this.writeField(entry.field, f.createPropertyAccessExpression(value, entry.name), out);
-		}
+		const items = normal.map((entry) =>
+			this.measure((itemOut) => this.writeField(entry.field, this.propertyAccess(value, entry), itemOut)),
+		);
 		if (packedBools.length > 0) {
-			const byteCount = Math.ceil(packedBools.length / 8);
-			const { buf, pos, statement } = this.destructureAlloc("alloc", byteCount);
-			out.push(statement);
-			// One `writeu8` per byte, computed from all its bits at once, rather
-			// than one `packBit` call per bit into the reused scratch region:
-			// `alloc()` doesn't zero a region it didn't just grow into, so a
-			// bit-at-a-time write would leave any bit past `packedBools.length`
-			// holding whatever an earlier `serialize()` call left there (see
-			// wire-format-determinism.md). Computing the whole byte writes every
-			// bit, including the unused high ones (implicitly zero), so the
-			// result is deterministic by construction.
-			for (let byteIndex = 0; byteIndex < byteCount; byteIndex++) {
-				const chunk = packedBools.slice(byteIndex * 8, byteIndex * 8 + 8);
-				const byteExpr = this.packedByteExpr(chunk, value);
-				const offset =
-					byteIndex === 0
-						? pos
-						: f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, this.num(byteIndex));
-				out.push(f.createExpressionStatement(this.bufferCall("writeu8", [buf, offset, byteExpr])));
-			}
+			items.push(this.measure((itemOut) => this.writePackedBools(packedBools, value, itemOut)));
+		}
+		this.pushScoped(items, out);
+	}
+
+	private writePackedBools(
+		packedBools: ReadonlyArray<ObjectFieldEntry>,
+		value: ts.Expression,
+		out: ts.Statement[],
+	): void {
+		const f = this.factory;
+		const byteCount = Math.ceil(packedBools.length / 8);
+		const { buf, pos, statement } = this.destructureAlloc("alloc", byteCount);
+		out.push(statement);
+		// One `writeu8` per byte, computed from all its bits at once, rather
+		// than one `packBit` call per bit into the reused scratch region:
+		// `alloc()` doesn't zero a region it didn't just grow into, so a
+		// bit-at-a-time write would leave any bit past `packedBools.length`
+		// holding whatever an earlier `serialize()` call left there (see
+		// wire-format-determinism.md). Computing the whole byte writes every
+		// bit, including the unused high ones (implicitly zero), so the
+		// result is deterministic by construction.
+		for (let byteIndex = 0; byteIndex < byteCount; byteIndex++) {
+			const chunk = packedBools.slice(byteIndex * 8, byteIndex * 8 + 8);
+			const byteExpr = this.packedByteExpr(chunk, value);
+			const offset =
+				byteIndex === 0
+					? pos
+					: f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, this.num(byteIndex));
+			out.push(f.createExpressionStatement(this.bufferCall("writeu8", [buf, offset, byteExpr])));
 		}
 	}
 
@@ -767,7 +894,7 @@ export class Emitter {
 		let expr: ts.Expression | undefined;
 		entries.forEach((entry, bitIndex) => {
 			const term = f.createConditionalExpression(
-				f.createPropertyAccessExpression(value, entry.name),
+				this.propertyAccess(value, entry),
 				undefined,
 				this.num(1 << bitIndex),
 				undefined,
@@ -784,7 +911,7 @@ export class Emitter {
 		out: ts.Statement[],
 	): void {
 		const f = this.factory;
-		const tagExpr = f.createPropertyAccessExpression(value, field.tagKey);
+		const tagExpr = this.propertyAccess(value, tagKeyOf(field));
 		const idxBytes = field.variants.length <= 256 ? 1 : 2;
 		const idx = this.fresh("idx");
 		out.push(
@@ -864,16 +991,33 @@ export class Emitter {
 					this.ts_.SyntaxKind.EqualsEqualsEqualsToken,
 					this.literalValueExpr(field.value),
 				);
+			// A `recursiveRef` is a table too: only an object type or a union is
+			// ever walked into a helper, and a union is never a member of
+			// another union.
 			case "object":
 			case "array":
 			case "tuple":
 			case "dict":
+			case "recursiveRef":
 				return typeIs("table");
+			case "vector2":
+				return typeIs("Vector2");
+			case "vector3":
+				return typeIs("Vector3");
+			case "cframe":
+				return typeIs("CFrame");
+			case "color3":
+				return typeIs("Color3");
+			case "colorSequence":
+				return typeIs("ColorSequence");
+			case "numberSequence":
+				return typeIs("NumberSequence");
+			case "enum":
+				return typeIs("EnumItem");
 			default:
-				throw new Error(
-					`surge: guarded unions only support string/number/boolean/literal primitives plus at most one table-shaped ` +
-						`variant (object/array/tuple/Map/Set/Record) -- "${field.kind}" as a bare union member isn't supported.`,
-				);
+				// `classifyUnion` in walk.ts reports a diagnostic for every other
+				// kind, so none of them reaches the emitter.
+				throw new Error(`surge: internal error -- no union guard for a "${field.kind}" variant`);
 		}
 	}
 
@@ -1021,16 +1165,23 @@ export class Emitter {
 						),
 					),
 				);
-				for (const elementField of field.fixed) {
-					const elementExpr = this.readField(elementField, out);
-					out.push(
-						f.createExpressionStatement(
-							f.createCallExpression(f.createPropertyAccessExpression(result, "push"), undefined, [
-								elementExpr,
-							]),
-						),
-					);
-				}
+				this.pushScoped(
+					field.fixed.map((elementField) =>
+						this.measure((itemOut) => {
+							const elementExpr = this.readField(elementField, itemOut);
+							itemOut.push(
+								f.createExpressionStatement(
+									f.createCallExpression(
+										f.createPropertyAccessExpression(result, "push"),
+										undefined,
+										[elementExpr],
+									),
+								),
+							);
+						}),
+					),
+					out,
+				);
 				if (field.rest) {
 					const { buf, pos, statement } = this.destructureAlloc("readAlloc", 4);
 					out.push(statement);
@@ -1363,20 +1514,62 @@ export class Emitter {
 		const f = this.factory;
 		const packedBools = fields.filter((e) => e.field.kind === "bool" && e.field.packed);
 		const normal = fields.filter((e) => !(e.field.kind === "bool" && e.field.packed));
-		const props: ts.ObjectLiteralElementLike[] = [];
+		// Each item's expressions refer to the locals its statements declare.
+		const items: Array<ScopedItem & { readonly props: Array<{ entry: ObjectFieldEntry; expr: ts.Expression }> }> =
+			[];
 		for (const entry of normal) {
-			const expr = this.readField(entry.field, out);
-			props.push(f.createPropertyAssignment(entry.name, expr));
+			let expr!: ts.Expression;
+			const item = this.measure((itemOut) => {
+				expr = this.readField(entry.field, itemOut);
+			});
+			items.push({ ...item, props: [{ entry, expr }] });
 		}
 		if (packedBools.length > 0) {
-			const byteCount = Math.ceil(packedBools.length / 8);
-			const { buf, pos, statement } = this.destructureAlloc("readAlloc", byteCount);
-			out.push(statement);
-			packedBools.forEach((entry, i) => {
-				props.push(f.createPropertyAssignment(entry.name, this.call("unpackBit", [buf, pos, this.num(i)])));
+			const props: Array<{ entry: ObjectFieldEntry; expr: ts.Expression }> = [];
+			const item = this.measure((itemOut) => {
+				const byteCount = Math.ceil(packedBools.length / 8);
+				const { buf, pos, statement } = this.destructureAlloc("readAlloc", byteCount);
+				itemOut.push(statement);
+				packedBools.forEach((entry, i) => {
+					props.push({ entry, expr: this.call("unpackBit", [buf, pos, this.num(i)]) });
+				});
 			});
+			items.push({ ...item, props });
 		}
-		return f.createObjectLiteralExpression(props, true);
+		if (!this.needsBlocks()) {
+			this.pushScoped(items, out);
+			return f.createObjectLiteralExpression(
+				items.flatMap((item) =>
+					item.props.map(({ entry, expr }) => f.createPropertyAssignment(this.propertyName(entry), expr)),
+				),
+				true,
+			);
+		}
+		// A block's locals end with the block, so an object literal after the
+		// blocks can't refer to them: each block assigns its own fields into
+		// `result` instead.
+		const result = this.fresh("result");
+		out.push(
+			this.constStatement(
+				result,
+				this.castTo(f.createObjectLiteralExpression([]), this.objectShapeTypeNode(fields)),
+			),
+		);
+		for (const item of items) {
+			for (const { entry, expr } of item.props) {
+				item.statements.push(
+					f.createExpressionStatement(
+						f.createBinaryExpression(
+							this.propertyAccess(result, entry),
+							this.ts_.SyntaxKind.EqualsToken,
+							expr,
+						),
+					),
+				);
+			}
+		}
+		this.pushScoped(items, out);
+		return result;
 	}
 
 	private readTaggedUnion(field: Extract<Field, { kind: "taggedUnion" }>, out: ts.Statement[]): ts.Expression {
@@ -1404,7 +1597,10 @@ export class Emitter {
 			const withTag = f.createObjectLiteralExpression(
 				[
 					f.createSpreadAssignment(objExpr),
-					f.createPropertyAssignment(field.tagKey, this.literalValueExpr(variant.tagValue)),
+					f.createPropertyAssignment(
+						this.propertyName(tagKeyOf(field)),
+						this.literalValueExpr(variant.tagValue),
+					),
 				],
 				true,
 			);
@@ -1482,7 +1678,12 @@ export class Emitter {
 		const f = this.factory;
 		return f.createTypeLiteralNode(
 			fields.map((entry) =>
-				f.createPropertySignature(undefined, entry.name, undefined, this.fieldToTypeNode(entry.field)),
+				f.createPropertySignature(
+					undefined,
+					this.propertyName(entry),
+					undefined,
+					this.fieldToTypeNode(entry.field),
+				),
 			),
 		);
 	}
@@ -1557,7 +1758,7 @@ export class Emitter {
 						f.createTypeLiteralNode([
 							f.createPropertySignature(
 								undefined,
-								field.tagKey,
+								this.propertyName(tagKeyOf(field)),
 								undefined,
 								f.createLiteralTypeNode(
 									this.literalValueExpr(variant.tagValue) as ts.LiteralExpression | ts.BooleanLiteral,
@@ -1566,7 +1767,7 @@ export class Emitter {
 							...variant.fields.map((entry) =>
 								f.createPropertySignature(
 									undefined,
-									entry.name,
+									this.propertyName(entry),
 									undefined,
 									this.fieldToTypeNode(entry.field),
 								),
@@ -1602,11 +1803,16 @@ export class Emitter {
 		// very `field` will be.
 		const f = this.factory;
 
+		// The helper's functions are emitted in the middle of whichever function
+		// first refers to them, but their locals are their own.
+		const callerLocals = this.liveLocals;
+
 		const typeNode = field.kind === "object" ? this.objectShapeTypeNode(field.fields) : this.fieldToTypeNode(field);
 		this.helperDecls.push(f.createTypeAliasDeclaration(undefined, `${name}_Type`, undefined, typeNode));
 		const typeRef = f.createTypeReferenceNode(`${name}_Type`);
 
 		const valueParam = f.createParameterDeclaration(undefined, undefined, "value", undefined, typeRef, undefined);
+		this.beginFunction();
 		const writeBody: ts.Statement[] = [];
 		if (field.kind === "object") {
 			this.writeObjectInline(field.fields, f.createIdentifier("value"), writeBody);
@@ -1625,10 +1831,12 @@ export class Emitter {
 			),
 		);
 
+		this.beginFunction();
 		const readBody: ts.Statement[] = [];
 		const resultExpr =
 			field.kind === "object" ? this.readObjectInline(field.fields, readBody) : this.readField(field, readBody);
 		readBody.push(f.createReturnStatement(resultExpr));
+		this.liveLocals = callerLocals;
 		this.helperDecls.push(
 			f.createFunctionDeclaration(
 				undefined,

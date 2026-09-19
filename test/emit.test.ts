@@ -271,3 +271,136 @@ describe("Emitter enum index width and lookup table", () => {
 		expect(output).toMatch(/_items\[idx\d+\]/);
 	});
 });
+
+describe("Emitter property names that are not identifiers", () => {
+	test("a non-identifier name uses element access and a quoted key; a numeric key stays a number", () => {
+		const output = emitSnapshot({
+			kind: "object",
+			fields: [
+				{ name: "0", numericKey: true, field: { kind: "num", width: "u8" } },
+				{ name: "1", field: { kind: "num", width: "u8" } },
+				{ name: "my-key", field: { kind: "num", width: "u8" } },
+				{ name: "plain", field: { kind: "num", width: "u8" } },
+			],
+		});
+		expect(output).toContain("value[0])");
+		expect(output).toContain('value["1"])');
+		expect(output).toContain('value["my-key"])');
+		expect(output).toContain("value.plain)");
+		expect(output).toMatch(/\b0: buffer\.readu8/);
+		expect(output).toMatch(/"1": buffer\.readu8/);
+		expect(output).toMatch(/"my-key": buffer\.readu8/);
+		expect(output).toMatch(/plain: buffer\.readu8/);
+	});
+
+	test("a non-identifier tag key and variant field name are quoted in a tagged union", () => {
+		const output = emitSnapshot({
+			kind: "taggedUnion",
+			tagKey: "the-kind",
+			variants: [
+				{ tagValue: "a", fields: [{ name: "a-value", field: { kind: "str" } }] },
+				{ tagValue: "b", fields: [] },
+			],
+		});
+		expect(output).toContain('value["the-kind"] === "a"');
+		expect(output).toContain('"the-kind": "a"');
+		expect(output).toContain('"a-value": string');
+		expect(output).not.toContain("value.the-kind");
+	});
+});
+
+describe("Emitter union guards", () => {
+	test("Roblox datatype, enum, and recursive-object variants are guarded by their runtime type", () => {
+		const node: Field = { kind: "object", fields: [{ name: "x", field: { kind: "num", width: "u8" } }] };
+		const output = emitSnapshot(
+			{
+				kind: "guardedUnion",
+				variants: [
+					{ kind: "cframe" },
+					{ kind: "color3" },
+					{ kind: "colorSequence" },
+					{ kind: "enum", enumName: "SortOrder", members: ["Name"] },
+					{ kind: "numberSequence" },
+					{ kind: "recursiveRef", helperName: "surge_Node_1" },
+					{ kind: "vector2" },
+					{ kind: "vector3" },
+					{ kind: "str" },
+				],
+			},
+			new Map([["surge_Node_1", node]]),
+		);
+		for (const tag of [
+			"CFrame",
+			"Color3",
+			"ColorSequence",
+			"EnumItem",
+			"NumberSequence",
+			"table",
+			"Vector2",
+			"Vector3",
+		]) {
+			expect(output).toContain(`typeIs(value, "${tag}")`);
+		}
+	});
+});
+
+// Luau allows 200 registers per function; 100 `const [buf, pos]` pairs in one
+// scope exceed it (see generated-code-performance.md in the surge repo).
+describe("Emitter local-register ceiling", () => {
+	const manyFields = (count: number): Field => ({
+		kind: "object",
+		fields: Array.from({ length: count }, (_, i) => ({
+			name: `f${i}`,
+			field: { kind: "num", width: "f64" } as Field,
+		})),
+	});
+
+	/** The largest number of `const` declarations that are live at once in one block scope of `printed`. */
+	function maxLocalsInOneScope(printed: string): number {
+		let max = 0;
+		const stack = [0];
+		for (const line of printed.split("\n")) {
+			const trimmed = line.trim();
+			if (trimmed === "{") {
+				stack.push(0);
+			} else if (trimmed === "}") {
+				stack.pop();
+			} else if (trimmed.startsWith("const [")) {
+				stack[stack.length - 1] += 2;
+			} else if (trimmed.startsWith("const ")) {
+				stack[stack.length - 1] += 1;
+			}
+			max = Math.max(
+				max,
+				stack.reduce((a, b) => a + b, 0),
+			);
+		}
+		return max;
+	}
+
+	test("a small object is emitted flat, with no blocks and an object literal on the read side", () => {
+		const output = emitSnapshot(manyFields(20));
+		expect(output).not.toMatch(/^\{$/m);
+		expect(output).not.toContain("result");
+	});
+
+	test("a 150-field object is split into blocks that keep each scope far below the limit", () => {
+		const output = emitSnapshot(manyFields(150));
+		expect(output).toMatch(/^\{$/m);
+		expect(maxLocalsInOneScope(output)).toBeLessThanOrEqual(40);
+		// Every field is still written and read exactly once.
+		expect(output.match(/buffer\.writef64/g)).toHaveLength(150);
+		expect(output.match(/buffer\.readf64/g)).toHaveLength(150);
+		expect(output).toMatch(/result\d+\.f149 = buffer\.readf64\(/);
+	});
+
+	test("a 150-element tuple is split into blocks the same way", () => {
+		const output = emitSnapshot({
+			kind: "tuple",
+			fixed: Array.from({ length: 150 }, () => ({ kind: "num", width: "f64" }) as Field),
+			rest: undefined,
+		});
+		expect(maxLocalsInOneScope(output)).toBeLessThanOrEqual(40);
+		expect(output.match(/buffer\.writef64/g)).toHaveLength(150);
+	});
+});
