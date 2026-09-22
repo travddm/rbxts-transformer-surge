@@ -41,6 +41,44 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				});
 			}
 
+			/**
+			 * Move the file's leading comments onto the injected import.
+			 *
+			 * Luau honours a `--!` hot comment only ahead of the first line of
+			 * code, and roblox-ts hoists one above its own banner only while it
+			 * still leads the first statement in the emitted list
+			 * (`transformSourceFile.js`). The injected import takes that
+			 * position, so without this a user's `//!native` or `//!optimize 2`
+			 * is emitted behind `local TS = require(...)`, where Luau ignores
+			 * it. Every leading comment moves, not only the directives, so that
+			 * a file header keeps its order.
+			 */
+			function hoistLeadingComments(importDecl: ts.ImportDeclaration, first: ts.Statement | undefined): void {
+				if (!first) {
+					return;
+				}
+				const ranges = typescript.getLeadingCommentRanges(sourceFile.text, first.pos) ?? [];
+				if (ranges.length === 0) {
+					return;
+				}
+				typescript.setSyntheticLeadingComments(
+					importDecl,
+					ranges.map((range) => ({
+						kind: range.kind,
+						// A synthesized comment carries its text without the
+						// `//` or `/* */` that delimits it in the source.
+						text: sourceFile.text.slice(
+							range.pos + 2,
+							range.kind === typescript.SyntaxKind.SingleLineCommentTrivia ? range.end : range.end - 2,
+						),
+						hasTrailingNewLine: true,
+						pos: -1,
+						end: -1,
+					})),
+				);
+				typescript.setEmitFlags(first, typescript.EmitFlags.NoLeadingComments);
+			}
+
 			function visit(node: ts.Node): ts.Node {
 				if (typescript.isCallExpression(node)) {
 					const factoryName = resolveFactoryName(typescript, checker, node.expression);
@@ -255,6 +293,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				),
 				f.createStringLiteral("@rbxts/surge"),
 			);
+			hoistLeadingComments(importDecl, visited.statements[0]);
 			return f.updateSourceFile(visited, [importDecl, ...visited.statements]);
 		};
 	};

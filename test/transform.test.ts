@@ -314,4 +314,58 @@ describe("transform generated code", () => {
 		);
 		expect(errors).toEqual([]);
 	});
+
+	test("a file directive stays ahead of the injected import", () => {
+		// Luau honours a `--!` hot comment only ahead of the first line of code,
+		// and roblox-ts hoists one above its own banner only while it leads the
+		// first statement. The injected import takes that position, so the
+		// comments have to move with it.
+		const { printed, cleanup } = runTransform(
+			`//!optimize 2
+			import { createBinarySerializer } from "@rbxts/surge";
+			interface P { x: number; }
+			const s = createBinarySerializer<P>();`,
+		);
+		try {
+			expect(printed.indexOf("//!optimize 2")).toBeLessThan(printed.indexOf("import { alloc as __surge_alloc"));
+			expect(printed.split("//!optimize 2")).toHaveLength(2);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("a directive survives when the first statement is the one being rewritten", () => {
+		// The import does not have to be first: whatever statement the header
+		// comments are attached to is the one they have to be taken off.
+		const { printed, cleanup } = runTransform(
+			`//!optimize 2
+			const s = createBinarySerializer<P>();
+			import { createBinarySerializer } from "@rbxts/surge";
+			interface P { x: number; }`,
+		);
+		try {
+			expect(printed.indexOf("//!optimize 2")).toBeLessThan(printed.indexOf("import { alloc as __surge_alloc"));
+			expect(printed.split("//!optimize 2")).toHaveLength(2);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("a header comment above a directive keeps its order", () => {
+		const { printed, cleanup } = runTransform(
+			`//!native
+			// What this file is for.
+			import { createBinarySerializer } from "@rbxts/surge";
+			interface P { x: number; }
+			const s = createBinarySerializer<P>();`,
+		);
+		try {
+			expect(printed.indexOf("//!native")).toBeLessThan(printed.indexOf("// What this file is for."));
+			expect(printed.indexOf("// What this file is for.")).toBeLessThan(
+				printed.indexOf("import { alloc as __surge_alloc"),
+			);
+		} finally {
+			cleanup();
+		}
+	});
 });
