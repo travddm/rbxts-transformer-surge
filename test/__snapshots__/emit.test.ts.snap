@@ -154,25 +154,23 @@ return bytes12;"
 
 exports[`Emitter per-kind write/read snapshots cframe 1`] = `
 "// write
-const [buf1, pos2] = __surge_alloc(12);
+const [buf1, pos2] = __surge_alloc(24);
 buffer.writef32(buf1, pos2, value.Position.X);
 buffer.writef32(buf1, pos2 + 4, value.Position.Y);
 buffer.writef32(buf1, pos2 + 8, value.Position.Z);
 const [axis3, angle4] = value.ToAxisAngle();
 const rv5 = axis3.mul(angle4);
-const [buf6, pos7] = __surge_alloc(12);
-buffer.writef32(buf6, pos7, rv5.X);
-buffer.writef32(buf6, pos7 + 4, rv5.Y);
-buffer.writef32(buf6, pos7 + 8, rv5.Z);
+buffer.writef32(buf1, pos2 + 12, rv5.X);
+buffer.writef32(buf1, pos2 + 16, rv5.Y);
+buffer.writef32(buf1, pos2 + 20, rv5.Z);
 
 // read
-const [buf8, pos9] = __surge_readAlloc(12);
-const pos10 = new Vector3(buffer.readf32(buf8, pos9), buffer.readf32(buf8, pos9 + 4), buffer.readf32(buf8, pos9 + 8));
-const [buf11, pos12] = __surge_readAlloc(12);
-const rv13 = new Vector3(buffer.readf32(buf11, pos12), buffer.readf32(buf11, pos12 + 4), buffer.readf32(buf11, pos12 + 8));
-const angle14 = rv13.Magnitude;
-const rotation15 = CFrame.fromAxisAngle(angle14 > 1e-6 ? rv13.Unit : Vector3.zAxis, angle14);
-return rotation15.add(pos10);"
+const [buf6, pos7] = __surge_readAlloc(24);
+const pos8 = new Vector3(buffer.readf32(buf6, pos7), buffer.readf32(buf6, pos7 + 4), buffer.readf32(buf6, pos7 + 8));
+const rv9 = new Vector3(buffer.readf32(buf6, pos7 + 12), buffer.readf32(buf6, pos7 + 16), buffer.readf32(buf6, pos7 + 20));
+const angle10 = rv9.Magnitude;
+const rotation11 = CFrame.fromAxisAngle(angle10 > 1e-6 ? rv9.Unit : Vector3.zAxis, angle10);
+return rotation11.add(pos8);"
 `;
 
 exports[`Emitter per-kind write/read snapshots cframe inside Packed 1`] = `

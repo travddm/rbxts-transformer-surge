@@ -44,6 +44,18 @@ interface PackedBit {
 	readonly role: "present" | "value" | "tag";
 }
 
+/**
+ * A reserved region of the buffer: the two locals one `alloc`/`readAlloc`
+ * returns, and a byte offset into what it reserved. The offset is what lets
+ * one reservation cover more than one value -- a `CFrame` reserves 24 bytes
+ * once and writes its position at 0 and its rotation vector at 12.
+ */
+interface Slot {
+	readonly buf: ts.Identifier;
+	readonly pos: ts.Identifier;
+	readonly offset: number;
+}
+
 /** One independently emitted run of statements, with the number of locals it declares in the enclosing scope. */
 interface ScopedItem {
 	readonly statements: ts.Statement[];
@@ -371,7 +383,9 @@ export class Emitter {
 				return;
 			}
 			case "vector3": {
-				this.writeNum3(value, "X", "Y", "Z", "f32", out);
+				const { buf, pos, statement } = this.destructureAlloc("alloc", 12);
+				out.push(statement);
+				this.writeNum3(value, "X", "Y", "Z", "f32", { buf, pos, offset: 0 }, out);
 				return;
 			}
 			case "color3": {
@@ -588,6 +602,11 @@ export class Emitter {
 	}
 
 	/** `pos`, or `pos + offset` past the first component of a fixed-size value. */
+	/** The position `offset` bytes into `slot`, as one addition and not two. */
+	private at(slot: Slot, offset: number): ts.Expression {
+		return this.offsetFrom(slot.pos, slot.offset + offset);
+	}
+
 	private offsetFrom(pos: ts.Expression, offset: number): ts.Expression {
 		return offset === 0
 			? pos
@@ -656,33 +675,28 @@ export class Emitter {
 		);
 	}
 
-	private writeNum3(value: ts.Expression, a: string, b: string, c: string, width: "f32", out: ts.Statement[]): void {
+	/** Writes three components into the 12 bytes `slot` starts at. The caller reserves them. */
+	private writeNum3(
+		value: ts.Expression,
+		a: string,
+		b: string,
+		c: string,
+		width: "f32",
+		slot: Slot,
+		out: ts.Statement[],
+	): void {
 		const f = this.factory;
-		const { buf, pos, statement } = this.destructureAlloc("alloc", 12);
-		out.push(statement);
-		out.push(
-			f.createExpressionStatement(
-				this.bufferCall(`write${width}`, [buf, pos, f.createPropertyAccessExpression(value, a)]),
-			),
-		);
-		out.push(
-			f.createExpressionStatement(
-				this.bufferCall(`write${width}`, [
-					buf,
-					f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, this.num(4)),
-					f.createPropertyAccessExpression(value, b),
-				]),
-			),
-		);
-		out.push(
-			f.createExpressionStatement(
-				this.bufferCall(`write${width}`, [
-					buf,
-					f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, this.num(8)),
-					f.createPropertyAccessExpression(value, c),
-				]),
-			),
-		);
+		[a, b, c].forEach((component, i) => {
+			out.push(
+				f.createExpressionStatement(
+					this.bufferCall(`write${width}`, [
+						slot.buf,
+						this.at(slot, i * 4),
+						f.createPropertyAccessExpression(value, component),
+					]),
+				),
+			);
+		});
 	}
 
 	private writeColor3(value: ts.Expression, out: ts.Statement[]): void {
@@ -715,7 +729,21 @@ export class Emitter {
 
 	private writeCFrame(value: ts.Expression, out: ts.Statement[]): void {
 		const f = this.factory;
-		this.writeNum3(f.createPropertyAccessExpression(value, "Position"), "X", "Y", "Z", "f32", out);
+		// One reservation for both halves. `ToAxisAngle` and `Vector3.mul`
+		// sit between the two writes, and neither can grow the scratch
+		// buffer, so `buf` is still the buffer `alloc` handed back when the
+		// rotation is written.
+		const { buf, pos, statement } = this.destructureAlloc("alloc", 24);
+		out.push(statement);
+		this.writeNum3(
+			f.createPropertyAccessExpression(value, "Position"),
+			"X",
+			"Y",
+			"Z",
+			"f32",
+			{ buf, pos, offset: 0 },
+			out,
+		);
 		const axis = this.fresh("axis");
 		const angle = this.fresh("angle");
 		out.push(
@@ -748,7 +776,7 @@ export class Emitter {
 				f.createCallExpression(f.createPropertyAccessExpression(axis, "mul"), undefined, [angle]),
 			),
 		);
-		this.writeNum3(rv, "X", "Y", "Z", "f32", out);
+		this.writeNum3(rv, "X", "Y", "Z", "f32", { buf, pos, offset: 12 }, out);
 	}
 
 	private writeSequence(value: ts.Expression, kind: "ColorSequence" | "NumberSequence", out: ts.Statement[]): void {
@@ -1362,7 +1390,9 @@ export class Emitter {
 				return result;
 			}
 			case "vector3": {
-				const [x, y, z] = this.readNum3("f32", out);
+				const { buf, pos, statement } = this.destructureAlloc("readAlloc", 12);
+				out.push(statement);
+				const [x, y, z] = this.readNum3("f32", { buf, pos, offset: 0 });
 				return f.createNewExpression(f.createIdentifier("Vector3"), undefined, [x, y, z]);
 			}
 			case "color3": {
@@ -1523,19 +1553,13 @@ export class Emitter {
 		return [x, y];
 	}
 
-	private readNum3(width: "f32", out: ts.Statement[]): [ts.Expression, ts.Expression, ts.Expression] {
-		const { buf, pos, statement } = this.destructureAlloc("readAlloc", 12);
-		out.push(statement);
-		const x = this.bufferCall(`read${width}`, [buf, pos]);
-		const y = this.bufferCall(`read${width}`, [
-			buf,
-			this.factory.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, this.num(4)),
-		]);
-		const z = this.bufferCall(`read${width}`, [
-			buf,
-			this.factory.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, this.num(8)),
-		]);
-		return [x, y, z];
+	/** Reads three components from the 12 bytes `slot` starts at. The caller reserves them. */
+	private readNum3(width: "f32", slot: Slot): [ts.Expression, ts.Expression, ts.Expression] {
+		return [
+			this.bufferCall(`read${width}`, [slot.buf, this.at(slot, 0)]),
+			this.bufferCall(`read${width}`, [slot.buf, this.at(slot, 4)]),
+			this.bufferCall(`read${width}`, [slot.buf, this.at(slot, 8)]),
+		];
 	}
 
 	private readColor3(out: ts.Statement[]): ts.Expression {
@@ -1556,7 +1580,10 @@ export class Emitter {
 
 	private readCFrame(out: ts.Statement[]): ts.Expression {
 		const f = this.factory;
-		const [px, py, pz] = this.readNum3("f32", out);
+		// One reservation for both halves, mirroring `writeCFrame`.
+		const { buf, pos, statement } = this.destructureAlloc("readAlloc", 24);
+		out.push(statement);
+		const [px, py, pz] = this.readNum3("f32", { buf, pos, offset: 0 });
 		const position = this.fresh("pos");
 		out.push(
 			this.constStatement(
@@ -1564,7 +1591,7 @@ export class Emitter {
 				f.createNewExpression(f.createIdentifier("Vector3"), undefined, [px, py, pz]),
 			),
 		);
-		const [rx, ry, rz] = this.readNum3("f32", out);
+		const [rx, ry, rz] = this.readNum3("f32", { buf, pos, offset: 12 });
 		const rv = this.fresh("rv");
 		out.push(
 			this.constStatement(rv, f.createNewExpression(f.createIdentifier("Vector3"), undefined, [rx, ry, rz])),
