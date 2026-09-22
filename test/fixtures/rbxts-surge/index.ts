@@ -1,17 +1,13 @@
 export { DataType } from "./data-type";
 export {
-	alloc,
-	backpatchU32,
-	beginRead,
 	beginReadBlobs,
-	beginWrite,
 	beginWriteBlobs,
 	finishWrite,
 	finishWriteBlobs,
+	grow,
 	nextBlob,
 	packBit,
 	pushBlob,
-	readAlloc,
 	readPackedCFrame,
 	unpackBit,
 	writePackedCFrame,

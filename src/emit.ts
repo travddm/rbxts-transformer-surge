@@ -33,11 +33,27 @@ const LOCALS_PER_BLOCK = 32;
 const ALLOC_RUN_FIELDS = LOCALS_PER_BLOCK - 1;
 
 // The injected `@rbxts/surge` imports are aliased so that a user's own
-// `alloc` (or any other export's name), at the top level or in a scope
+// `grow` (or any other export's name), at the top level or in a scope
 // enclosing the call site, can neither collide with nor shadow them.
 export function importAlias(name: string): string {
 	return `__surge_${name}`;
 }
+
+// The cursor state, declared in the closure each serializer is emitted into
+// rather than owned by `@rbxts/surge`. A reservation is then a compare and two
+// moves here instead of a call into another module, which is the whole of the
+// cost on a shape with one field per element (Transformer Design §4 in
+// transformer.md). They carry the import prefix for the same reason the
+// aliases do: nothing a user wrote can collide with them.
+const SCRATCH = importAlias("scratch");
+const CAPACITY = importAlias("capacity");
+const CURSOR = importAlias("cursor");
+const READ_BUFFER = importAlias("input");
+const READ_CURSOR = importAlias("readCursor");
+/** What a serializer starts with, doubled by `grow` from there. */
+const INITIAL_CAPACITY = 64;
+/** The largest form `writePackedCFrame` can write: header, position, rotation. */
+const PACKED_CFRAME_MAX_BYTES = 25;
 
 function tagKeyOf(field: Extract<Field, { kind: "taggedUnion" }>): FieldKey {
 	return { name: field.tagKey, numericKey: field.tagKeyNumeric };
@@ -96,6 +112,14 @@ export class Emitter {
 	// the only effect is that `pushScoped` starts using blocks earlier.
 	private liveLocals = 0;
 	public readonly usedImports = new Set<string>();
+	/**
+	 * Whether either side reserved any bytes at all. A shape whose fields are
+	 * all blobs reserves none, and declaring cursor state it never reads would
+	 * fail a consumer's `noUnusedLocals` -- the same reason `_inputBlobs`
+	 * carries an underscore.
+	 */
+	public usesWriteBytes = false;
+	public usesReadBytes = false;
 	private readonly generatedHelpers = new Set<string>();
 	private readonly helperDecls: ts.Statement[] = [];
 	private readonly enumTables = new Map<string, { itemsName: string; indexName: string }>();
@@ -165,6 +189,72 @@ export class Emitter {
 	/** Must be called before emitting the body of each generated function: the local budget is per function. */
 	public beginFunction(): void {
 		this.liveLocals = 0;
+	}
+
+	/**
+	 * The scratch buffer, its capacity and the write cursor, for the head of
+	 * the closure the serializer is emitted into. One buffer per serializer,
+	 * not one per place: two serializers can then be in flight at once, which
+	 * a single module-scoped buffer never allowed.
+	 */
+	public writeStateDecls(): ts.Statement[] {
+		if (!this.usesWriteBytes) {
+			return [];
+		}
+		return [
+			this.letStatement(SCRATCH, this.bufferCall("create", [this.num(INITIAL_CAPACITY)])),
+			this.letStatement(CAPACITY, this.num(INITIAL_CAPACITY)),
+			this.letStatement(CURSOR, this.num(0)),
+		];
+	}
+
+	/** The input buffer and the read cursor, as {@link writeStateDecls}. */
+	public readStateDecls(): ts.Statement[] {
+		if (!this.usesReadBytes) {
+			return [];
+		}
+		return [
+			this.letStatement(READ_BUFFER, this.bufferCall("create", [this.num(0)])),
+			this.letStatement(READ_CURSOR, this.num(0)),
+		];
+	}
+
+	/** Opens a `serialize()`: everything written last call is forgotten by moving one number. */
+	public beginWriteStatements(): ts.Statement[] {
+		return this.usesWriteBytes ? [this.assign(CURSOR, this.num(0))] : [];
+	}
+
+	/** Opens a `deserialize()`, taking the buffer the caller passed. */
+	public beginReadStatements(input: ts.Expression): ts.Statement[] {
+		return this.usesReadBytes ? [this.assign(READ_BUFFER, input), this.assign(READ_CURSOR, this.num(0))] : [];
+	}
+
+	/**
+	 * Closes a `serialize()`. A shape that reserved nothing -- every field a
+	 * blob -- has no scratch buffer to copy out of, and an empty result is what
+	 * the copy would have produced.
+	 */
+	public finishWriteExpression(): ts.Expression {
+		return this.usesWriteBytes
+			? this.call("finishWrite", [this.factory.createIdentifier(SCRATCH), this.factory.createIdentifier(CURSOR)])
+			: this.bufferCall("create", [this.num(0)]);
+	}
+
+	private letStatement(name: string, initializer: ts.Expression): ts.Statement {
+		return this.factory.createVariableStatement(
+			undefined,
+			this.factory.createVariableDeclarationList(
+				[
+					this.factory.createVariableDeclaration(
+						this.factory.createIdentifier(name),
+						undefined,
+						undefined,
+						initializer,
+					),
+				],
+				this.ts_.NodeFlags.Let,
+			),
+		);
 	}
 
 	private measure(emit: (out: ts.Statement[]) => void): ScopedItem {
@@ -271,19 +361,18 @@ export class Emitter {
 
 	/**
 	 * Reserves `size` bytes and returns the buffer and the position to use,
-	 * plus the statement that declares them, which the caller pushes.
+	 * plus the statements that declare them, which the caller pushes.
 	 *
 	 * While a run is open (see {@link withAllocRun}) the bytes come out of
 	 * the run's single reservation instead: the first caller emits the one
-	 * `alloc`/`readAlloc` for the whole run, and each later caller gets a
-	 * position local computed from it. That local is a register move, not a
-	 * call, which is the whole point -- the call is what a field was paying
-	 * for.
+	 * reservation for the whole run, and each later caller gets a position
+	 * local computed from it -- a register move, not even the four
+	 * instructions below.
 	 */
 	private destructureAlloc(
 		fnName: "alloc" | "readAlloc",
 		size: number | ts.Expression,
-	): { buf: ts.Identifier; pos: ts.Identifier; statement: ts.Statement } {
+	): { buf: ts.Identifier; pos: ts.Identifier; statements: ts.Statement[] } {
 		const run = this.run;
 		if (run !== undefined) {
 			// `fixedBytes` admits only fields that reserve a constant number
@@ -308,36 +397,122 @@ export class Emitter {
 			return {
 				buf: run.buf!,
 				pos,
-				statement: this.constStatement(pos, this.offsetFrom(run.pos!, offset)),
+				statements: [this.constStatement(pos, this.offsetFrom(run.pos!, offset))],
 			};
 		}
 		return this.rawDestructureAlloc(fnName, size);
 	}
 
+	/**
+	 * The reservation itself, inline: take the cursor, advance it, and on the
+	 * write side compare against the capacity and grow on the branch that is
+	 * not taken. The cursor and the buffer are locals of the closure this code
+	 * is emitted into, not module state in `@rbxts/surge`, which is what makes
+	 * this four instructions instead of a call into another module. Measured,
+	 * that call was worth 2.64x on a row with one field per element (What
+	 * rolling the hot paths into the generated code is worth, in
+	 * future-work/generated-code-performance.md).
+	 *
+	 * `buf` is the state identifier itself rather than a fresh local, so every
+	 * `buffer.writeXX` reads whichever buffer is current -- which is what makes
+	 * a growth between two reservations safe, and what `backpatchU32` used to
+	 * need a runtime function for.
+	 */
 	private rawDestructureAlloc(
 		fnName: "alloc" | "readAlloc",
 		size: number | ts.Expression,
-	): { buf: ts.Identifier; pos: ts.Identifier; statement: ts.Statement } {
-		const buf = this.fresh("buf");
+	): { buf: ts.Identifier; pos: ts.Identifier; statements: ts.Statement[] } {
+		const f = this.factory;
 		const pos = this.fresh("pos");
-		const statement = this.factory.createVariableStatement(
-			undefined,
-			this.factory.createVariableDeclarationList(
-				[
-					this.factory.createVariableDeclaration(
-						this.factory.createArrayBindingPattern([
-							this.factory.createBindingElement(undefined, undefined, buf),
-							this.factory.createBindingElement(undefined, undefined, pos),
-						]),
-						undefined,
-						undefined,
-						this.call(fnName, [typeof size === "number" ? this.num(size) : size]),
-					),
+		const sizeExpr = typeof size === "number" ? this.num(size) : size;
+		if (fnName === "readAlloc") {
+			this.usesReadBytes = true;
+			return {
+				buf: f.createIdentifier(READ_BUFFER),
+				pos,
+				statements: [
+					this.constStatement(pos, f.createIdentifier(READ_CURSOR)),
+					this.assign(READ_CURSOR, f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, sizeExpr)),
 				],
-				this.ts_.NodeFlags.Const,
+			};
+		}
+		this.usesWriteBytes = true;
+		return {
+			buf: f.createIdentifier(SCRATCH),
+			pos,
+			statements: [
+				this.constStatement(pos, f.createIdentifier(CURSOR)),
+				this.assign(CURSOR, f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, sizeExpr)),
+				f.createIfStatement(
+					f.createBinaryExpression(
+						f.createIdentifier(CURSOR),
+						this.ts_.SyntaxKind.GreaterThanToken,
+						f.createIdentifier(CAPACITY),
+					),
+					f.createBlock(
+						[
+							this.assign(
+								SCRATCH,
+								this.call("grow", [f.createIdentifier(SCRATCH), pos, f.createIdentifier(CURSOR)]),
+							),
+							this.assign(CAPACITY, this.bufferCall("len", [f.createIdentifier(SCRATCH)])),
+						],
+						true,
+					),
+				),
+			],
+		};
+	}
+
+	/**
+	 * Reads a packed `CFrame`, whose size is in its own header, so the read
+	 * cursor can only be advanced by what the call reports back.
+	 */
+	private readPackedCFrame(out: ts.Statement[]): ts.Expression {
+		const f = this.factory;
+		this.usesReadBytes = true;
+		const value = this.fresh("val");
+		const used = this.fresh("size");
+		out.push(
+			f.createVariableStatement(
+				undefined,
+				f.createVariableDeclarationList(
+					[
+						f.createVariableDeclaration(
+							f.createArrayBindingPattern([
+								f.createBindingElement(undefined, undefined, value),
+								f.createBindingElement(undefined, undefined, used),
+							]),
+							undefined,
+							undefined,
+							this.call("readPackedCFrame", [
+								f.createIdentifier(READ_BUFFER),
+								f.createIdentifier(READ_CURSOR),
+							]),
+						),
+					],
+					this.ts_.NodeFlags.Const,
+				),
 			),
 		);
-		return { buf, pos, statement };
+		out.push(
+			this.assign(
+				READ_CURSOR,
+				f.createBinaryExpression(f.createIdentifier(READ_CURSOR), this.ts_.SyntaxKind.PlusToken, used),
+			),
+		);
+		return value;
+	}
+
+	/** `name = value;`, for the closure-scoped cursor state. */
+	private assign(name: string, value: ts.Expression): ts.Statement {
+		return this.factory.createExpressionStatement(
+			this.factory.createBinaryExpression(
+				this.factory.createIdentifier(name),
+				this.ts_.SyntaxKind.EqualsToken,
+				value,
+			),
+		);
 	}
 
 	/**
@@ -382,14 +557,14 @@ export class Emitter {
 		switch (field.kind) {
 			case "num": {
 				const bytes = WIDTH_BYTES[field.width];
-				const { buf, pos, statement } = this.destructureAlloc("alloc", bytes);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("alloc", bytes);
+				out.push(...statements);
 				out.push(...this.writeNumber(field.width, buf, pos, value));
 				return;
 			}
 			case "bool": {
-				const { buf, pos, statement } = this.destructureAlloc("alloc", 1);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("alloc", 1);
+				out.push(...statements);
 				out.push(
 					f.createExpressionStatement(
 						this.bufferCall("writeu8", [
@@ -405,30 +580,11 @@ export class Emitter {
 				const s = this.fresh("s");
 				out.push(this.constStatement(s, value));
 				const lenExpr = f.createCallExpression(f.createPropertyAccessExpression(s, "size"), undefined, []);
-				const { buf: lbuf, pos: lpos, statement: lstmt } = this.destructureAlloc("alloc", 4);
-				out.push(lstmt);
+				const { buf: lbuf, pos: lpos, statements: lstmt } = this.destructureAlloc("alloc", 4);
+				out.push(...lstmt);
 				out.push(f.createExpressionStatement(this.bufferCall("writeu32", [lbuf, lpos, lenExpr])));
-				const sbuf = this.fresh("buf");
-				const spos = this.fresh("pos");
-				out.push(
-					f.createVariableStatement(
-						undefined,
-						f.createVariableDeclarationList(
-							[
-								f.createVariableDeclaration(
-									f.createArrayBindingPattern([
-										f.createBindingElement(undefined, undefined, sbuf),
-										f.createBindingElement(undefined, undefined, spos),
-									]),
-									undefined,
-									undefined,
-									this.call("alloc", [lenExpr]),
-								),
-							],
-							this.ts_.NodeFlags.Const,
-						),
-					),
-				);
+				const { buf: sbuf, pos: spos, statements: sstmt } = this.destructureAlloc("alloc", lenExpr);
+				out.push(...sstmt);
 				out.push(f.createExpressionStatement(this.bufferCall("writestring", [sbuf, spos, s])));
 				return;
 			}
@@ -445,17 +601,17 @@ export class Emitter {
 				out.push(this.constStatement(source, value));
 				const len = this.fresh("len");
 				out.push(this.constStatement(len, this.bufferCall("len", [source])));
-				const { buf: lbuf, pos: lpos, statement: lstmt } = this.destructureAlloc("alloc", 4);
-				out.push(lstmt);
+				const { buf: lbuf, pos: lpos, statements: lstmt } = this.destructureAlloc("alloc", 4);
+				out.push(...lstmt);
 				out.push(f.createExpressionStatement(this.bufferCall("writeu32", [lbuf, lpos, len])));
-				const { buf, pos, statement } = this.destructureAlloc("alloc", len);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("alloc", len);
+				out.push(...statements);
 				out.push(f.createExpressionStatement(this.bufferCall("copy", [buf, pos, source, this.num(0), len])));
 				return;
 			}
 			case "vector3": {
-				const { buf, pos, statement } = this.destructureAlloc("alloc", 12);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("alloc", 12);
+				out.push(...statements);
 				this.writeNum3(value, "X", "Y", "Z", "f32", { buf, pos, offset: 0 }, out);
 				return;
 			}
@@ -465,8 +621,22 @@ export class Emitter {
 			}
 			case "cframe": {
 				if (field.packed) {
-					// The packed form branches on the value, so it is a runtime function (cframe.ts in @rbxts/surge).
-					out.push(this.factory.createExpressionStatement(this.call("writePackedCFrame", [value])));
+					// The packed form branches on the value, so it is a runtime function
+					// (cframe.ts in @rbxts/surge) and not inlined code. It writes 1, 13 or
+					// 25 bytes: reserve the largest, then pull the cursor back to what it
+					// actually used. Reserving first is what guarantees the room.
+					const { buf, pos, statements } = this.destructureAlloc("alloc", PACKED_CFRAME_MAX_BYTES);
+					out.push(...statements);
+					out.push(
+						this.assign(
+							CURSOR,
+							this.factory.createBinaryExpression(
+								pos,
+								this.ts_.SyntaxKind.PlusToken,
+								this.call("writePackedCFrame", [buf, pos, value]),
+							),
+						),
+					);
 					return;
 				}
 				this.writeCFrame(value, out);
@@ -482,8 +652,8 @@ export class Emitter {
 			}
 			case "enum": {
 				const bytes = field.members.length <= 256 ? 1 : 2;
-				const { buf, pos, statement } = this.destructureAlloc("alloc", bytes);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("alloc", bytes);
+				out.push(...statements);
 				out.push(
 					f.createExpressionStatement(
 						this.bufferCall(bytes === 1 ? "writeu8" : "writeu16", [
@@ -513,8 +683,8 @@ export class Emitter {
 			case "array": {
 				const arr = this.fresh("arr");
 				out.push(this.constStatement(arr, value));
-				const { buf, pos, statement } = this.destructureAlloc("alloc", 4);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("alloc", 4);
+				out.push(...statements);
 				out.push(f.createExpressionStatement(this.bufferCall("writeu32", [buf, pos, this.sizeOf(arr)])));
 				const item = this.fresh("item");
 				const body: ts.Statement[] = [];
@@ -547,8 +717,8 @@ export class Emitter {
 						this.ts_.SyntaxKind.MinusToken,
 						this.num(fixedCount),
 					);
-					const { buf, pos, statement } = this.destructureAlloc("alloc", 4);
-					out.push(statement);
+					const { buf, pos, statements } = this.destructureAlloc("alloc", 4);
+					out.push(...statements);
 					out.push(f.createExpressionStatement(this.bufferCall("writeu32", [buf, pos, restCountExpr])));
 					const i = this.fresh("i");
 					const body: ts.Statement[] = [];
@@ -585,8 +755,8 @@ export class Emitter {
 				return; // zero bytes -- known on both ends at compile time.
 			}
 			case "literal": {
-				const { buf, pos, statement } = this.destructureAlloc("alloc", field.values.length <= 256 ? 1 : 2);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("alloc", field.values.length <= 256 ? 1 : 2);
+				out.push(...statements);
 				const method = field.values.length <= 256 ? "writeu8" : "writeu16";
 				out.push(
 					f.createExpressionStatement(
@@ -774,8 +944,8 @@ export class Emitter {
 		const f = this.factory;
 		const { components } = FIXED_DATATYPES[name];
 		const size = components.reduce((total, component) => total + WIDTH_BYTES[component.width], 0);
-		const { buf, pos, statement } = this.destructureAlloc("alloc", size);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("alloc", size);
+		out.push(...statements);
 		let offset = 0;
 		for (const component of components) {
 			const read = component.path.reduce<ts.Expression>(
@@ -795,8 +965,8 @@ export class Emitter {
 		const f = this.factory;
 		const { components, factoryMethod } = FIXED_DATATYPES[name];
 		const size = components.reduce((total, component) => total + WIDTH_BYTES[component.width], 0);
-		const { buf, pos, statement } = this.destructureAlloc("readAlloc", size);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", size);
+		out.push(...statements);
 		let offset = 0;
 		const args = components.map((component) => {
 			const read = this.bufferCall(`read${component.width}`, [buf, this.offsetFrom(pos, offset)]);
@@ -814,8 +984,8 @@ export class Emitter {
 
 	private writeNum2(value: ts.Expression, a: string, b: string, width: "f32", out: ts.Statement[]): void {
 		const f = this.factory;
-		const { buf, pos, statement } = this.destructureAlloc("alloc", 8);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("alloc", 8);
+		out.push(...statements);
 		out.push(
 			f.createExpressionStatement(
 				this.bufferCall(`write${width}`, [buf, pos, f.createPropertyAccessExpression(value, a)]),
@@ -858,8 +1028,8 @@ export class Emitter {
 
 	private writeColor3(value: ts.Expression, out: ts.Statement[]): void {
 		const f = this.factory;
-		const { buf, pos, statement } = this.destructureAlloc("alloc", 3);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("alloc", 3);
+		out.push(...statements);
 		(["R", "G", "B"] as const).forEach((channel, i) => {
 			const byteExpr = f.createCallExpression(
 				f.createPropertyAccessExpression(f.createIdentifier("math"), "floor"),
@@ -890,8 +1060,8 @@ export class Emitter {
 		// sit between the two writes, and neither can grow the scratch
 		// buffer, so `buf` is still the buffer `alloc` handed back when the
 		// rotation is written.
-		const { buf, pos, statement } = this.destructureAlloc("alloc", 24);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("alloc", 24);
+		out.push(...statements);
 		this.writeNum3(
 			f.createPropertyAccessExpression(value, "Position"),
 			"X",
@@ -940,13 +1110,13 @@ export class Emitter {
 		const f = this.factory;
 		const keypoints = this.fresh("keypoints");
 		out.push(this.constStatement(keypoints, f.createPropertyAccessExpression(value, "Keypoints")));
-		const { buf, pos, statement } = this.destructureAlloc("alloc", 1);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("alloc", 1);
+		out.push(...statements);
 		out.push(f.createExpressionStatement(this.bufferCall("writeu8", [buf, pos, this.sizeOf(keypoints)])));
 		const kp = this.fresh("kp");
 		const body: ts.Statement[] = [];
-		const { buf: kbuf, pos: kpos, statement: kstmt } = this.destructureAlloc("alloc", 4);
-		body.push(kstmt);
+		const { buf: kbuf, pos: kpos, statements: kstmt } = this.destructureAlloc("alloc", 4);
+		body.push(...kstmt);
 		body.push(
 			f.createExpressionStatement(
 				this.bufferCall("writef32", [kbuf, kpos, f.createPropertyAccessExpression(kp, "Time")]),
@@ -957,8 +1127,8 @@ export class Emitter {
 			this.writeColor3(f.createPropertyAccessExpression(kp, "Value"), colorBody);
 			body.push(...colorBody);
 		} else {
-			const { buf: vbuf, pos: vpos, statement: vstmt } = this.destructureAlloc("alloc", 8);
-			body.push(vstmt);
+			const { buf: vbuf, pos: vpos, statements: vstmt } = this.destructureAlloc("alloc", 8);
+			body.push(...vstmt);
 			body.push(
 				f.createExpressionStatement(
 					this.bufferCall("writef32", [vbuf, vpos, f.createPropertyAccessExpression(kp, "Value")]),
@@ -1115,8 +1285,8 @@ export class Emitter {
 		const isSet = field.value === undefined;
 		const dictTmp = this.fresh("dict");
 		out.push(this.constStatement(dictTmp, value));
-		const { buf: cbuf, pos: cpos, statement: cstmt } = this.destructureAlloc("alloc", 4);
-		out.push(cstmt);
+		const { buf: cbuf, pos: cpos, statements: cstmt } = this.destructureAlloc("alloc", 4);
+		out.push(...cstmt);
 		const count = this.fresh("count");
 		out.push(
 			f.createVariableStatement(
@@ -1167,8 +1337,7 @@ export class Emitter {
 				),
 			);
 		}
-		out.push(f.createExpressionStatement(this.call("backpatchU32", [cpos, count])));
-		void cbuf;
+		out.push(f.createExpressionStatement(this.bufferCall("writeu32", [cbuf, cpos, count])));
 	}
 
 	private writeObject(field: Extract<Field, { kind: "object" }>, value: ts.Expression, out: ts.Statement[]): void {
@@ -1291,8 +1460,8 @@ export class Emitter {
 			);
 		// Without the flag, the presence bit is in the enclosing object's packed region.
 		if (writeFlag) {
-			const { buf, pos, statement } = this.destructureAlloc("alloc", 1);
-			out.push(statement);
+			const { buf, pos, statements } = this.destructureAlloc("alloc", 1);
+			out.push(...statements);
 			out.push(
 				f.createExpressionStatement(
 					this.bufferCall("writeu8", [
@@ -1311,8 +1480,8 @@ export class Emitter {
 	private writePackedBits(bits: ReadonlyArray<PackedBit>, value: ts.Expression, out: ts.Statement[]): void {
 		const f = this.factory;
 		const byteCount = Math.ceil(bits.length / 8);
-		const { buf, pos, statement } = this.destructureAlloc("alloc", byteCount);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("alloc", byteCount);
+		out.push(...statements);
 		// One `writeu8` per byte, computed from all its bits at once, rather
 		// than one `packBit` call per bit into the reused scratch region:
 		// `alloc()` doesn't zero a region it didn't just grow into, so a
@@ -1392,8 +1561,8 @@ export class Emitter {
 			),
 		);
 		if (writeIndex) {
-			const { buf, pos, statement } = this.destructureAlloc("alloc", idxBytes);
-			out.push(statement);
+			const { buf, pos, statements } = this.destructureAlloc("alloc", idxBytes);
+			out.push(...statements);
 			out.push(
 				f.createExpressionStatement(this.bufferCall(idxBytes === 1 ? "writeu8" : "writeu16", [buf, pos, idx])),
 			);
@@ -1429,8 +1598,8 @@ export class Emitter {
 			);
 		}
 		out.push(this.constStatement(idx, idxExpr));
-		const { buf, pos, statement } = this.destructureAlloc("alloc", idxBytes);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("alloc", idxBytes);
+		out.push(...statements);
 		out.push(
 			f.createExpressionStatement(this.bufferCall(idxBytes === 1 ? "writeu8" : "writeu16", [buf, pos, idx])),
 		);
@@ -1502,13 +1671,13 @@ export class Emitter {
 		switch (field.kind) {
 			case "num": {
 				const bytes = WIDTH_BYTES[field.width];
-				const { buf, pos, statement } = this.destructureAlloc("readAlloc", bytes);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("readAlloc", bytes);
+				out.push(...statements);
 				return this.readNumber(field.width, buf, pos);
 			}
 			case "bool": {
-				const { buf, pos, statement } = this.destructureAlloc("readAlloc", 1);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("readAlloc", 1);
+				out.push(...statements);
 				return f.createBinaryExpression(
 					this.bufferCall("readu8", [buf, pos]),
 					this.ts_.SyntaxKind.ExclamationEqualsEqualsToken,
@@ -1516,31 +1685,12 @@ export class Emitter {
 				);
 			}
 			case "str": {
-				const { buf: lbuf, pos: lpos, statement: lstmt } = this.destructureAlloc("readAlloc", 4);
-				out.push(lstmt);
+				const { buf: lbuf, pos: lpos, statements: lstmt } = this.destructureAlloc("readAlloc", 4);
+				out.push(...lstmt);
 				const len = this.fresh("len");
 				out.push(this.constStatement(len, this.bufferCall("readu32", [lbuf, lpos])));
-				const sbuf = this.fresh("buf");
-				const spos = this.fresh("pos");
-				out.push(
-					f.createVariableStatement(
-						undefined,
-						f.createVariableDeclarationList(
-							[
-								f.createVariableDeclaration(
-									f.createArrayBindingPattern([
-										f.createBindingElement(undefined, undefined, sbuf),
-										f.createBindingElement(undefined, undefined, spos),
-									]),
-									undefined,
-									undefined,
-									this.call("readAlloc", [len]),
-								),
-							],
-							this.ts_.NodeFlags.Const,
-						),
-					),
-				);
+				const { buf: sbuf, pos: spos, statements: sstmt } = this.destructureAlloc("readAlloc", len);
+				out.push(...sstmt);
 				return this.bufferCall("readstring", [sbuf, spos, len]);
 			}
 			case "vector2": {
@@ -1551,12 +1701,12 @@ export class Emitter {
 				return this.readDatatype(field.name, out);
 			}
 			case "buffer": {
-				const { buf: lbuf, pos: lpos, statement: lstmt } = this.destructureAlloc("readAlloc", 4);
-				out.push(lstmt);
+				const { buf: lbuf, pos: lpos, statements: lstmt } = this.destructureAlloc("readAlloc", 4);
+				out.push(...lstmt);
 				const len = this.fresh("len");
 				out.push(this.constStatement(len, this.bufferCall("readu32", [lbuf, lpos])));
-				const { buf, pos, statement } = this.destructureAlloc("readAlloc", len);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("readAlloc", len);
+				out.push(...statements);
 				// A copy: the input buffer holds the whole payload, and the caller owns the result.
 				const result = this.fresh("bytes");
 				out.push(this.constStatement(result, this.bufferCall("create", [len])));
@@ -1564,8 +1714,8 @@ export class Emitter {
 				return result;
 			}
 			case "vector3": {
-				const { buf, pos, statement } = this.destructureAlloc("readAlloc", 12);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("readAlloc", 12);
+				out.push(...statements);
 				const [x, y, z] = this.readNum3("f32", { buf, pos, offset: 0 });
 				return f.createNewExpression(f.createIdentifier("Vector3"), undefined, [x, y, z]);
 			}
@@ -1573,9 +1723,7 @@ export class Emitter {
 				return this.readColor3(out);
 			}
 			case "cframe": {
-				return field.packed
-					? this.bindSideEffect(this.call("readPackedCFrame", []), out)
-					: this.readCFrame(out);
+				return field.packed ? this.readPackedCFrame(out) : this.readCFrame(out);
 			}
 			case "colorSequence": {
 				return this.readSequence("ColorSequence", out);
@@ -1585,8 +1733,8 @@ export class Emitter {
 			}
 			case "enum": {
 				const bytes = field.members.length <= 256 ? 1 : 2;
-				const { buf, pos, statement } = this.destructureAlloc("readAlloc", bytes);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("readAlloc", bytes);
+				out.push(...statements);
 				const idx = this.fresh("idx");
 				out.push(this.constStatement(idx, this.bufferCall(bytes === 1 ? "readu8" : "readu16", [buf, pos])));
 				return this.enumFromIndexExpr(field.enumName, field.members, idx);
@@ -1599,8 +1747,8 @@ export class Emitter {
 				return this.bindSideEffect(this.callLocal(`${field.helperName}_read`, []), out);
 			}
 			case "array": {
-				const { buf, pos, statement } = this.destructureAlloc("readAlloc", 4);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("readAlloc", 4);
+				out.push(...statements);
 				const count = this.fresh("count");
 				out.push(this.constStatement(count, this.bufferCall("readu32", [buf, pos])));
 				const result = this.fresh("result");
@@ -1667,8 +1815,8 @@ export class Emitter {
 					out,
 				);
 				if (field.rest) {
-					const { buf, pos, statement } = this.destructureAlloc("readAlloc", 4);
-					out.push(statement);
+					const { buf, pos, statements } = this.destructureAlloc("readAlloc", 4);
+					out.push(...statements);
 					const count = this.fresh("count");
 					out.push(this.constStatement(count, this.bufferCall("readu32", [buf, pos])));
 					const i = this.fresh("_i");
@@ -1698,8 +1846,8 @@ export class Emitter {
 			}
 			case "literal": {
 				const bytes = field.values.length <= 256 ? 1 : 2;
-				const { buf, pos, statement } = this.destructureAlloc("readAlloc", bytes);
-				out.push(statement);
+				const { buf, pos, statements } = this.destructureAlloc("readAlloc", bytes);
+				out.push(...statements);
 				const idx = this.fresh("idx");
 				out.push(this.constStatement(idx, this.bufferCall(bytes === 1 ? "readu8" : "readu16", [buf, pos])));
 				return this.literalFromIndexExpr(field.values, idx);
@@ -1717,8 +1865,8 @@ export class Emitter {
 	}
 
 	private readNum2(width: "f32", out: ts.Statement[]): [ts.Expression, ts.Expression] {
-		const { buf, pos, statement } = this.destructureAlloc("readAlloc", 8);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", 8);
+		out.push(...statements);
 		const x = this.bufferCall(`read${width}`, [buf, pos]);
 		const y = this.bufferCall(`read${width}`, [
 			buf,
@@ -1738,8 +1886,8 @@ export class Emitter {
 
 	private readColor3(out: ts.Statement[]): ts.Expression {
 		const f = this.factory;
-		const { buf, pos, statement } = this.destructureAlloc("readAlloc", 3);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", 3);
+		out.push(...statements);
 		const channel = (i: number) =>
 			f.createBinaryExpression(
 				this.bufferCall("readu8", [
@@ -1755,8 +1903,8 @@ export class Emitter {
 	private readCFrame(out: ts.Statement[]): ts.Expression {
 		const f = this.factory;
 		// One reservation for both halves, mirroring `writeCFrame`.
-		const { buf, pos, statement } = this.destructureAlloc("readAlloc", 24);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", 24);
+		out.push(...statements);
 		const [px, py, pz] = this.readNum3("f32", { buf, pos, offset: 0 });
 		const position = this.fresh("pos");
 		out.push(
@@ -1795,8 +1943,8 @@ export class Emitter {
 
 	private readSequence(kind: "ColorSequence" | "NumberSequence", out: ts.Statement[]): ts.Expression {
 		const f = this.factory;
-		const { buf, pos, statement } = this.destructureAlloc("readAlloc", 1);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", 1);
+		out.push(...statements);
 		const count = this.fresh("count");
 		out.push(this.constStatement(count, this.bufferCall("readu8", [buf, pos])));
 		const keypoints = this.fresh("keypoints");
@@ -1811,16 +1959,16 @@ export class Emitter {
 		);
 		const i = this.fresh("_i");
 		const body: ts.Statement[] = [];
-		const { buf: tbuf, pos: tpos, statement: tstmt } = this.destructureAlloc("readAlloc", 4);
-		body.push(tstmt);
+		const { buf: tbuf, pos: tpos, statements: tstmt } = this.destructureAlloc("readAlloc", 4);
+		body.push(...tstmt);
 		const time = this.fresh("time");
 		body.push(this.constStatement(time, this.bufferCall("readf32", [tbuf, tpos])));
 		const keypointArgs: ts.Expression[] = [time];
 		if (kind === "ColorSequence") {
 			keypointArgs.push(this.readColor3(body));
 		} else {
-			const { buf: vbuf, pos: vpos, statement: vstmt } = this.destructureAlloc("readAlloc", 8);
-			body.push(vstmt);
+			const { buf: vbuf, pos: vpos, statements: vstmt } = this.destructureAlloc("readAlloc", 8);
+			body.push(...vstmt);
 			keypointArgs.push(this.bufferCall("readf32", [vbuf, vpos]));
 			keypointArgs.push(this.bufferCall("readf32", [vbuf, this.offsetFrom(vpos, 4)]));
 		}
@@ -1863,8 +2011,8 @@ export class Emitter {
 	private readDict(field: Extract<Field, { kind: "dict" }>, out: ts.Statement[]): ts.Expression {
 		const f = this.factory;
 		const isSet = field.value === undefined;
-		const { buf, pos, statement } = this.destructureAlloc("readAlloc", 4);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", 4);
+		out.push(...statements);
 		const count = this.fresh("count");
 		out.push(this.constStatement(count, this.bufferCall("readu32", [buf, pos])));
 		const result = this.fresh("result");
@@ -1945,8 +2093,8 @@ export class Emitter {
 		const f = this.factory;
 		let present = packedPresent;
 		if (present === undefined) {
-			const { buf, pos, statement } = this.destructureAlloc("readAlloc", 1);
-			out.push(statement);
+			const { buf, pos, statements } = this.destructureAlloc("readAlloc", 1);
+			out.push(...statements);
 			const flag = this.fresh("present");
 			out.push(
 				this.constStatement(
@@ -1994,8 +2142,8 @@ export class Emitter {
 			{ present?: ts.Expression; value?: ts.Expression; tag?: ts.Expression }
 		>();
 		if (bits.length > 0) {
-			const { buf, pos, statement } = this.destructureAlloc("readAlloc", Math.ceil(bits.length / 8));
-			out.push(statement);
+			const { buf, pos, statements } = this.destructureAlloc("readAlloc", Math.ceil(bits.length / 8));
+			out.push(...statements);
 			bits.forEach(({ entry, role }, i) => {
 				const exprs = bitExprs.get(entry) ?? {};
 				exprs[role] = this.call("unpackBit", [buf, pos, this.num(i)]);
@@ -2118,8 +2266,8 @@ export class Emitter {
 			);
 		} else {
 			const idxBytes = field.variants.length <= 256 ? 1 : 2;
-			const { buf, pos, statement } = this.destructureAlloc("readAlloc", idxBytes);
-			out.push(statement);
+			const { buf, pos, statements } = this.destructureAlloc("readAlloc", idxBytes);
+			out.push(...statements);
 			idx = this.fresh("idx");
 			out.push(this.constStatement(idx, this.bufferCall(idxBytes === 1 ? "readu8" : "readu16", [buf, pos])));
 		}
@@ -2162,8 +2310,8 @@ export class Emitter {
 	private readGuardedUnion(field: Extract<Field, { kind: "guardedUnion" }>, out: ts.Statement[]): ts.Expression {
 		const f = this.factory;
 		const idxBytes = field.variants.length <= 256 ? 1 : 2;
-		const { buf, pos, statement } = this.destructureAlloc("readAlloc", idxBytes);
-		out.push(statement);
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", idxBytes);
+		out.push(...statements);
 		const idx = this.fresh("idx");
 		out.push(this.constStatement(idx, this.bufferCall(idxBytes === 1 ? "readu8" : "readu16", [buf, pos])));
 		const result = this.fresh("result");

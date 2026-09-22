@@ -1,18 +1,18 @@
 // The signatures of the real `@rbxts/surge` runtime exports that generated
 // code calls, so a test can type-check transformed output the way roblox-ts
 // does. Declarations only: nothing here runs.
-export declare function alloc(size: number): LuaTuple<[buf: buffer, offset: number]>;
-export declare function readAlloc(size: number): LuaTuple<[buf: buffer, offset: number]>;
-export declare function backpatchU32(offset: number, value: number): void;
-export declare function beginWrite(): void;
-export declare function finishWrite(): buffer;
-export declare function beginRead(inputBuffer: buffer): void;
+//
+// Reserving bytes is not among them: a generated serializer keeps its own
+// buffer and cursors and does that inline, so the only write-side exports left
+// are the two cold ones.
+export declare function grow(current: buffer, live: number, needed: number): buffer;
+export declare function finishWrite(written: buffer, size: number): buffer;
 export declare function beginWriteBlobs(): void;
 export declare function pushBlob(value: defined): void;
 export declare function finishWriteBlobs(): Array<defined>;
 export declare function beginReadBlobs(blobs: Array<defined> | undefined): void;
 export declare function nextBlob(): defined;
-export declare function writePackedCFrame(value: CFrame): void;
-export declare function readPackedCFrame(): CFrame;
+export declare function writePackedCFrame(buf: buffer, pos: number, value: CFrame): number;
+export declare function readPackedCFrame(buf: buffer, pos: number): LuaTuple<[value: CFrame, size: number]>;
 export declare function packBit(buf: buffer, byteOffset: number, bitIndex: number, value: boolean): void;
 export declare function unpackBit(buf: buffer, byteOffset: number, bitIndex: number): boolean;

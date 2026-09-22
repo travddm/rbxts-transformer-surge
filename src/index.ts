@@ -152,7 +152,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 
 				const usesBlobs = emitter.usedImports.has("pushBlob") || emitter.usedImports.has("nextBlob");
 
-				const writeBody: ts.Statement[] = [f.createExpressionStatement(surgeCall("beginWrite", []))];
+				const writeBody: ts.Statement[] = [...emitter.beginWriteStatements()];
 				if (usesBlobs) {
 					writeBody.push(f.createExpressionStatement(surgeCall("beginWriteBlobs", [])));
 				}
@@ -161,7 +161,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					f.createReturnStatement(
 						f.createObjectLiteralExpression(
 							[
-								f.createPropertyAssignment("buffer", surgeCall("finishWrite", [])),
+								f.createPropertyAssignment("buffer", emitter.finishWriteExpression()),
 								f.createPropertyAssignment(
 									"blobs",
 									usesBlobs
@@ -215,9 +215,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
 					undefined,
 				);
-				const readBody: ts.Statement[] = [
-					f.createExpressionStatement(surgeCall("beginRead", [f.createIdentifier("input")])),
-				];
+				const readBody: ts.Statement[] = [...emitter.beginReadStatements(f.createIdentifier("input"))];
 				if (usesBlobs) {
 					readBody.push(
 						f.createExpressionStatement(surgeCall("beginReadBlobs", [f.createIdentifier("inputBlobs")])),
@@ -251,7 +249,14 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 
 				emitter.usedImports.forEach((name) => usedImports.add(name));
 
-				const iifeBody = [...emitter.getHelperDecls(), f.createReturnStatement(resultValue)];
+				const needsWrite = factoryName !== "createDeserializer";
+				const needsRead = factoryName !== "createSerializer";
+				const iifeBody = [
+					...(needsWrite ? emitter.writeStateDecls() : []),
+					...(needsRead ? emitter.readStateDecls() : []),
+					...emitter.getHelperDecls(),
+					f.createReturnStatement(resultValue),
+				];
 				const iife = f.createCallExpression(
 					f.createFunctionExpression(
 						undefined,

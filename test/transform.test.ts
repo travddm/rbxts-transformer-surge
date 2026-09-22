@@ -100,7 +100,7 @@ describe("transform (end-to-end)", () => {
 		try {
 			// No blob field, so nothing from the blob side channel is imported.
 			expect(printed).toContain(
-				'import { alloc as __surge_alloc, beginRead as __surge_beginRead, beginWrite as __surge_beginWrite, finishWrite as __surge_finishWrite, readAlloc as __surge_readAlloc } from "@rbxts/surge";',
+				'import { finishWrite as __surge_finishWrite, grow as __surge_grow } from "@rbxts/surge";',
 			);
 			expect(printed).toContain("const s = function () {");
 			expect(printed).toContain("serialize:");
@@ -136,7 +136,7 @@ describe("transform (end-to-end)", () => {
 			// One combined injected import (distinct from the fixture source's own
 			// `import { createSerializer, createDeserializer }` line) covering the
 			// helpers both call sites need.
-			expect(printed.match(/^import \{ alloc as __surge_alloc,/gm)?.length).toBe(1);
+			expect(printed.match(/^import [{] finishWrite as __surge_finishWrite,/gm)?.length).toBe(1);
 		} finally {
 			cleanup();
 		}
@@ -212,13 +212,13 @@ describe("transform injected imports", () => {
 		const { printed, cleanup } = runTransform(
 			`import { createSerializer } from "@rbxts/surge";
 			interface P { x: number; }
-			function alloc(): void {}
+			function grow(): void {}
 			const s = createSerializer<P>();`,
 		);
 		try {
-			expect(printed).toContain("import { alloc as __surge_alloc,");
-			expect(printed).toContain("__surge_alloc(8)");
-			expect(printed).not.toMatch(/[^_]alloc\(8\)/);
+			expect(printed).toContain("grow as __surge_grow");
+			expect(printed).toContain("__surge_grow(__surge_scratch,");
+			expect(printed).not.toMatch(/[^_]grow[(]__surge_scratch/);
 		} finally {
 			cleanup();
 		}
@@ -327,7 +327,9 @@ describe("transform generated code", () => {
 			const s = createBinarySerializer<P>();`,
 		);
 		try {
-			expect(printed.indexOf("//!optimize 2")).toBeLessThan(printed.indexOf("import { alloc as __surge_alloc"));
+			expect(printed.indexOf("//!optimize 2")).toBeLessThan(
+				printed.indexOf("import { finishWrite as __surge_finishWrite"),
+			);
 			expect(printed.split("//!optimize 2")).toHaveLength(2);
 		} finally {
 			cleanup();
@@ -344,7 +346,9 @@ describe("transform generated code", () => {
 			interface P { x: number; }`,
 		);
 		try {
-			expect(printed.indexOf("//!optimize 2")).toBeLessThan(printed.indexOf("import { alloc as __surge_alloc"));
+			expect(printed.indexOf("//!optimize 2")).toBeLessThan(
+				printed.indexOf("import { finishWrite as __surge_finishWrite"),
+			);
 			expect(printed.split("//!optimize 2")).toHaveLength(2);
 		} finally {
 			cleanup();
@@ -362,7 +366,7 @@ describe("transform generated code", () => {
 		try {
 			expect(printed.indexOf("//!native")).toBeLessThan(printed.indexOf("// What this file is for."));
 			expect(printed.indexOf("// What this file is for.")).toBeLessThan(
-				printed.indexOf("import { alloc as __surge_alloc"),
+				printed.indexOf("import { finishWrite as __surge_finishWrite"),
 			);
 		} finally {
 			cleanup();

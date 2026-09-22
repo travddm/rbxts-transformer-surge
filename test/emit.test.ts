@@ -217,7 +217,7 @@ describe("Emitter read-order for side-effecting fields", () => {
 		const output = emitSnapshot(field, helperFields);
 		const readSection = output.slice(output.indexOf("// read"));
 		const helperCallIndex = readSection.indexOf("surge_Tree_1_read()");
-		const zebraAllocIndex = readSection.indexOf("readAlloc(8)");
+		const zebraAllocIndex = readSection.indexOf("__surge_readCursor = pos");
 		expect(helperCallIndex).toBeGreaterThan(-1);
 		expect(zebraAllocIndex).toBeGreaterThan(-1);
 		expect(helperCallIndex).toBeLessThan(zebraAllocIndex);
@@ -235,7 +235,7 @@ describe("Emitter read-order for side-effecting fields", () => {
 		const output = emitSnapshot(field);
 		const readSection = output.slice(output.indexOf("// read"));
 		const blobIndex = readSection.indexOf("nextBlob()");
-		const bAllocIndex = readSection.indexOf("readAlloc(8)");
+		const bAllocIndex = readSection.indexOf("__surge_readCursor = pos");
 		expect(blobIndex).toBeGreaterThan(-1);
 		expect(bAllocIndex).toBeGreaterThan(-1);
 		expect(blobIndex).toBeLessThan(bAllocIndex);
@@ -265,10 +265,12 @@ describe("Emitter packed region", () => {
 			"(value.count !== undefined ? 1 : 0) + (value.flag ? 2 : 0) + (value.maybeFlag !== undefined ? 4 : 0) + (value.maybeFlag === true ? 8 : 0)",
 		);
 		const [write, read] = output.split("// read");
-		expect(write.indexOf("__surge_alloc(1)")).toBeLessThan(write.indexOf("value.label"));
-		expect(read.indexOf("__surge_readAlloc(1)")).toBeLessThan(read.indexOf("readstring"));
-		// One allocation for the region, none for a flag byte or for `maybeFlag`.
-		expect(write.match(/__surge_alloc\(1\)/g)).toHaveLength(2);
+		expect(write.indexOf("__surge_cursor = pos")).toBeLessThan(write.indexOf("value.label"));
+		expect(read.indexOf("__surge_readCursor = pos")).toBeLessThan(read.indexOf("readstring"));
+		// One byte for the region and one for `count`, then the string's length
+		// prefix. No flag byte, and nothing of its own for `maybeFlag`.
+		expect(reservations(write, "write")).toEqual([1, 1, 4]);
+		expect(reservations(read, "read")).toEqual([1, 1, 4]);
 		expect(output).toMatchSnapshot();
 	});
 });
@@ -418,6 +420,18 @@ describe("Emitter union guards", () => {
 
 // One reservation per run of consecutive fixed-size fields, rather than one
 // per field (see generated-code-performance.md in the surge repo).
+/**
+ * The constant sizes a body reserves, in order. A reservation is inline now
+ * -- `cursor = posN + <size>;` -- so this is what stands in for counting
+ * `alloc` calls. A variable-size reservation adds an identifier rather than a
+ * literal and is deliberately not matched.
+ */
+function reservations(source: string, side: "write" | "read"): Array<number> {
+	const cursor = side === "write" ? "__surge_cursor" : "__surge_readCursor";
+	const pattern = new RegExp(`${cursor} = pos[0-9]+ [+] ([0-9]+);`, "g");
+	return [...source.matchAll(pattern)].map((match) => Number(match[1]));
+}
+
 describe("Emitter shared reservations", () => {
 	test("consecutive fixed-size fields share one alloc, at their own offsets", () => {
 		const output = emitSnapshot({
@@ -429,11 +443,9 @@ describe("Emitter shared reservations", () => {
 			],
 		});
 		expect(output).toMatchSnapshot();
-		// 1 + 4 + 12, reserved once on each side.
-		expect(output).toContain("__surge_alloc(17)");
-		expect(output).toContain("__surge_readAlloc(17)");
-		expect(output.match(/__surge_alloc\(/g)).toHaveLength(1);
-		expect(output.match(/__surge_readAlloc\(/g)).toHaveLength(1);
+		// 1 + 4 + 12, reserved once on each side and nowhere else.
+		expect(reservations(output, "write")).toEqual([17]);
+		expect(reservations(output, "read")).toEqual([17]);
 	});
 
 	test("a variable-size field ends the run, and the fields after it start another", () => {
@@ -447,12 +459,11 @@ describe("Emitter shared reservations", () => {
 				{ name: "z", field: { kind: "num", width: "f32" } },
 			],
 		});
-		// `alloc` order is byte order, so the two fields after the string
-		// cannot join the two before it.
-		expect(output).toContain("__surge_alloc(2)");
-		expect(output).toContain("__surge_alloc(8)");
-		expect(output).toContain("__surge_readAlloc(2)");
-		expect(output).toContain("__surge_readAlloc(8)");
+		// Reservation order is byte order, so the two fields after the string
+		// cannot join the two before it. The 4 between them is its length prefix;
+		// its own bytes are the variable reservation this does not count.
+		expect(reservations(output, "write")).toEqual([2, 4, 8]);
+		expect(reservations(output, "read")).toEqual([2, 4, 8]);
 	});
 
 	test("a field whose bytes the packed region holds does not join a run", () => {
@@ -466,9 +477,8 @@ describe("Emitter shared reservations", () => {
 		});
 		// One byte for the packed region, then 4 + 1 shared by the two that
 		// write their own bytes.
-		expect(output).toContain("__surge_alloc(1)");
-		expect(output).toContain("__surge_alloc(5)");
-		expect(output).toContain("__surge_readAlloc(5)");
+		expect(reservations(output, "write")).toEqual([1, 5]);
+		expect(reservations(output, "read")).toEqual([1, 5]);
 	});
 });
 
