@@ -41,6 +41,56 @@ function typeErrorsOfGeneratedCode(source: string): string[] {
 }
 
 describe("transform (end-to-end)", () => {
+	test("a shape with no blob field pays nothing for the blob side channel", () => {
+		const { printed, cleanup } = runTransform(
+			`import { createBinarySerializer } from "@rbxts/surge";
+			interface P { x: number; flag: boolean; }
+			const s = createBinarySerializer<P>();`,
+		);
+		try {
+			for (const name of ["beginWriteBlobs", "finishWriteBlobs", "beginReadBlobs"]) {
+				expect(printed).not.toContain(name);
+			}
+			// The property is still there, because `Serializer<T>` declares it.
+			expect(printed).toContain("blobs: [] as Array<defined>");
+			// Nothing reads the parameter, so its name keeps a consumer's
+			// `noUnusedParameters` quiet.
+			expect(printed).toContain("_inputBlobs");
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("a shape with a blob field still carries the side channel", () => {
+		const { printed, cleanup } = runTransform(
+			`import { createBinarySerializer } from "@rbxts/surge";
+			interface P { x: number; part: Instance; }
+			const s = createBinarySerializer<P>();`,
+		);
+		try {
+			for (const name of ["beginWriteBlobs", "finishWriteBlobs", "beginReadBlobs", "pushBlob", "nextBlob"]) {
+				expect(printed).toContain(name);
+			}
+			expect(printed).not.toContain("_inputBlobs");
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("a blob reachable only through a recursion helper still carries the side channel", () => {
+		const { printed, cleanup } = runTransform(
+			`import { createBinarySerializer } from "@rbxts/surge";
+			interface Node { part: Instance; kids: Node[]; }
+			const s = createBinarySerializer<Node>();`,
+		);
+		try {
+			expect(printed).toContain("beginWriteBlobs");
+			expect(printed).toContain("pushBlob");
+		} finally {
+			cleanup();
+		}
+	});
+
 	test("createBinarySerializer<T>() becomes an IIFE and injects a sorted @rbxts/surge import", () => {
 		const { printed, cleanup } = runTransform(
 			`import { createBinarySerializer } from "@rbxts/surge";
@@ -48,8 +98,9 @@ describe("transform (end-to-end)", () => {
 			const s = createBinarySerializer<P>();`,
 		);
 		try {
+			// No blob field, so nothing from the blob side channel is imported.
 			expect(printed).toContain(
-				'import { alloc as __surge_alloc, beginRead as __surge_beginRead, beginReadBlobs as __surge_beginReadBlobs, beginWrite as __surge_beginWrite, beginWriteBlobs as __surge_beginWriteBlobs, finishWrite as __surge_finishWrite, finishWriteBlobs as __surge_finishWriteBlobs, readAlloc as __surge_readAlloc } from "@rbxts/surge";',
+				'import { alloc as __surge_alloc, beginRead as __surge_beginRead, beginWrite as __surge_beginWrite, finishWrite as __surge_finishWrite, readAlloc as __surge_readAlloc } from "@rbxts/surge";',
 			);
 			expect(printed).toContain("const s = function () {");
 			expect(printed).toContain("serialize:");

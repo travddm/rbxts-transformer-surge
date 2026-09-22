@@ -96,18 +96,49 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					typeArgumentNode,
 					undefined,
 				);
-				const writeBody: ts.Statement[] = [
-					f.createExpressionStatement(surgeCall("beginWrite", [])),
-					f.createExpressionStatement(surgeCall("beginWriteBlobs", [])),
-				];
+				// Both bodies are emitted before either is assembled, because
+				// whether this shape uses the blob side channel at all is only
+				// known once they are: the emitter records `pushBlob`/`nextBlob`
+				// in `usedImports` as it emits them, including from inside any
+				// recursion helper it generates on the way. A shape with no blob
+				// field -- which is most of them -- then pays nothing for the
+				// channel: no `beginWriteBlobs` table allocation per call, and
+				// no `finishWriteBlobs`/`beginReadBlobs` call either.
 				emitter.beginFunction();
-				emitter.writeField(rootField, f.createIdentifier("value"), writeBody);
+				const writeStatements: ts.Statement[] = [];
+				emitter.writeField(rootField, f.createIdentifier("value"), writeStatements);
+
+				emitter.beginFunction();
+				const readStatements: ts.Statement[] = [];
+				const resultExpr = emitter.readField(rootField, readStatements);
+
+				const usesBlobs = emitter.usedImports.has("pushBlob") || emitter.usedImports.has("nextBlob");
+
+				const writeBody: ts.Statement[] = [f.createExpressionStatement(surgeCall("beginWrite", []))];
+				if (usesBlobs) {
+					writeBody.push(f.createExpressionStatement(surgeCall("beginWriteBlobs", [])));
+				}
+				writeBody.push(...writeStatements);
 				writeBody.push(
 					f.createReturnStatement(
 						f.createObjectLiteralExpression(
 							[
 								f.createPropertyAssignment("buffer", surgeCall("finishWrite", [])),
-								f.createPropertyAssignment("blobs", surgeCall("finishWriteBlobs", [])),
+								f.createPropertyAssignment(
+									"blobs",
+									usesBlobs
+										? surgeCall("finishWriteBlobs", [])
+										: // `Serializer<T>` still declares the property, so it
+											// needs a value; an empty literal is what the channel
+											// would have returned. Asserted, because an empty array
+											// literal is `never[]`.
+											f.createAsExpression(
+												f.createArrayLiteralExpression([]),
+												f.createTypeReferenceNode("Array", [
+													f.createTypeReferenceNode("defined"),
+												]),
+											),
+								),
 							],
 							false,
 						),
@@ -138,17 +169,23 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				const inputBlobsParam = f.createParameterDeclaration(
 					undefined,
 					undefined,
-					"inputBlobs",
+					// The parameter stays, because `Serializer<T>` declares it and a
+					// caller may pass one; an underscore keeps it from failing a
+					// consumer's `noUnusedParameters` when nothing reads it.
+					usesBlobs ? "inputBlobs" : "_inputBlobs",
 					f.createToken(typescript.SyntaxKind.QuestionToken),
 					f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
 					undefined,
 				);
 				const readBody: ts.Statement[] = [
 					f.createExpressionStatement(surgeCall("beginRead", [f.createIdentifier("input")])),
-					f.createExpressionStatement(surgeCall("beginReadBlobs", [f.createIdentifier("inputBlobs")])),
 				];
-				emitter.beginFunction();
-				const resultExpr = emitter.readField(rootField, readBody);
+				if (usesBlobs) {
+					readBody.push(
+						f.createExpressionStatement(surgeCall("beginReadBlobs", [f.createIdentifier("inputBlobs")])),
+					);
+				}
+				readBody.push(...readStatements);
 				readBody.push(f.createReturnStatement(resultExpr));
 				const deserializeFn = f.createArrowFunction(
 					undefined,
