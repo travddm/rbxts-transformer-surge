@@ -26,6 +26,11 @@ const WIDTH_BYTES: Record<NumWidth, number> = {
 // expression temporaries, and the temporaries roblox-ts adds itself.
 const LOCALS_BUDGET = 120;
 const LOCALS_PER_BLOCK = 32;
+// A run of K fields declares K + 1 locals: the two the reservation returns,
+// then one position for each field after the first. `pushScoped` cannot
+// split a run, because every field after the first reads the reservation's
+// locals, so a run has to fit in the block `pushScoped` would give it.
+const ALLOC_RUN_FIELDS = LOCALS_PER_BLOCK - 1;
 
 // The injected `@rbxts/surge` imports are aliased so that a user's own
 // `alloc` (or any other export's name), at the top level or in a scope
@@ -56,6 +61,19 @@ interface Slot {
 	readonly offset: number;
 }
 
+/**
+ * One `alloc`/`readAlloc` shared by several consecutive fields. `buf` and
+ * `pos` are set by the first field that asks for bytes, which is where the
+ * call is emitted; `used` tracks how much of `total` the fields have taken.
+ */
+interface AllocRun {
+	readonly fnName: "alloc" | "readAlloc";
+	readonly total: number;
+	used: number;
+	buf?: ts.Identifier;
+	pos?: ts.Identifier;
+}
+
 /** One independently emitted run of statements, with the number of locals it declares in the enclosing scope. */
 interface ScopedItem {
 	readonly statements: ts.Statement[];
@@ -82,6 +100,14 @@ export class Emitter {
 	private readonly helperDecls: ts.Statement[] = [];
 	private readonly enumTables = new Map<string, { itemsName: string; indexName: string }>();
 	private enumTableCounter = 0;
+	/**
+	 * The reservation a run of consecutive fixed-size fields shares, while
+	 * one is open. `alloc` order is byte order, so a run may only cover
+	 * fields that reserve a constant number of bytes with nothing between
+	 * them that reserves for itself: `fixedBytes` decides which those are,
+	 * and `withAllocRun` sizes the run before opening it.
+	 */
+	private run: AllocRun | undefined;
 
 	public constructor(
 		private readonly ts_: typeof ts,
@@ -243,7 +269,52 @@ export class Emitter {
 		return tmp;
 	}
 
+	/**
+	 * Reserves `size` bytes and returns the buffer and the position to use,
+	 * plus the statement that declares them, which the caller pushes.
+	 *
+	 * While a run is open (see {@link withAllocRun}) the bytes come out of
+	 * the run's single reservation instead: the first caller emits the one
+	 * `alloc`/`readAlloc` for the whole run, and each later caller gets a
+	 * position local computed from it. That local is a register move, not a
+	 * call, which is the whole point -- the call is what a field was paying
+	 * for.
+	 */
 	private destructureAlloc(
+		fnName: "alloc" | "readAlloc",
+		size: number | ts.Expression,
+	): { buf: ts.Identifier; pos: ts.Identifier; statement: ts.Statement } {
+		const run = this.run;
+		if (run !== undefined) {
+			// `fixedBytes` admits only fields that reserve a constant number
+			// of bytes from the matching function, so neither can happen; a
+			// standalone reservation in the middle of a run would put its
+			// bytes after the run's, which is not where the read side looks.
+			if (fnName !== run.fnName || typeof size !== "number") {
+				throw new Error("surge: a field inside an alloc run reserved on its own");
+			}
+			if (run.used + size > run.total) {
+				throw new Error(`surge: an alloc run overran ${run.total} bytes`);
+			}
+			const offset = run.used;
+			run.used += size;
+			if (offset === 0) {
+				const first = this.rawDestructureAlloc(fnName, run.total);
+				run.buf = first.buf;
+				run.pos = first.pos;
+				return first;
+			}
+			const pos = this.fresh("pos");
+			return {
+				buf: run.buf!,
+				pos,
+				statement: this.constStatement(pos, this.offsetFrom(run.pos!, offset)),
+			};
+		}
+		return this.rawDestructureAlloc(fnName, size);
+	}
+
+	private rawDestructureAlloc(
 		fnName: "alloc" | "readAlloc",
 		size: number | ts.Expression,
 	): { buf: ts.Identifier; pos: ts.Identifier; statement: ts.Statement } {
@@ -602,6 +673,92 @@ export class Emitter {
 	}
 
 	/** `pos`, or `pos + offset` past the first component of a fixed-size value. */
+	/**
+	 * The bytes a field always reserves, in one piece, from one
+	 * `alloc`/`readAlloc` at the start of its emission -- or `undefined`
+	 * when it reserves nothing of the kind: a size known only at run time
+	 * (`str`, `buffer`), a reservation around a branch or a loop
+	 * (`optional`, `array`, `dict`, the sequences, both unions), one made
+	 * inside a runtime function (a packed `cframe`) or a generated helper
+	 * (`object`, `recursiveRef`), or a side-table entry (`blob`).
+	 *
+	 * Only the fields this admits may share a reservation with their
+	 * neighbours, because `alloc` order is byte order: anything that
+	 * reserves for itself in the middle of a run would write its bytes after
+	 * the run's, and the read side reads them where it put them.
+	 */
+	private fixedBytes(field: Field): number | undefined {
+		switch (field.kind) {
+			case "num":
+				return WIDTH_BYTES[field.width];
+			case "bool":
+				return 1;
+			case "vector2":
+				return 8;
+			case "vector3":
+				return 12;
+			case "color3":
+				return 3;
+			case "cframe":
+				return field.packed ? undefined : 24;
+			case "datatype":
+				return FIXED_DATATYPES[field.name].components.reduce(
+					(total, component) => total + WIDTH_BYTES[component.width],
+					0,
+				);
+			case "enum":
+				return field.members.length <= 256 ? 1 : 2;
+			case "literal":
+				return field.values.length <= 256 ? 1 : 2;
+			case "literalConst":
+				return 0;
+			default:
+				return undefined;
+		}
+	}
+
+	/**
+	 * Splits `entries` into the groups one reservation can cover: a maximal
+	 * run of neighbours `shareable` accepts, or a single entry it does not.
+	 * A run of one is returned as a group of one, so the caller emits it the
+	 * way it always did. Runs stop at `ALLOC_RUN_FIELDS` so that one always
+	 * fits in a block.
+	 */
+	private allocRuns<T>(entries: ReadonlyArray<T>, shareable: (entry: T) => boolean): Array<Array<T>> {
+		const groups: Array<Array<T>> = [];
+		for (const entry of entries) {
+			const last = groups[groups.length - 1];
+			if (last !== undefined && last.length < ALLOC_RUN_FIELDS && shareable(entry) && shareable(last[0])) {
+				last.push(entry);
+			} else {
+				groups.push([entry]);
+			}
+		}
+		return groups;
+	}
+
+	/**
+	 * Emits `body` with one reservation of `total` bytes shared by every
+	 * field it emits. The caller has already summed `total` from
+	 * `fixedBytes`, and the run is checked against it on both sides: a field
+	 * that reserves more than the run has left, or leaves bytes unused, is
+	 * an emitter bug and throws rather than compiling to a buffer the read
+	 * side disagrees with.
+	 */
+	private withAllocRun(fnName: "alloc" | "readAlloc", total: number, body: () => void): void {
+		const saved = this.run;
+		const run: AllocRun = { fnName, total, used: 0 };
+		this.run = run;
+		try {
+			body();
+		} finally {
+			this.run = saved;
+		}
+		if (run.used !== total) {
+			throw new Error(`surge: an alloc run reserved ${total} bytes and used ${run.used}`);
+		}
+	}
+
 	/** The position `offset` bytes into `slot`, as one addition and not two. */
 	private at(slot: Slot, offset: number): ts.Expression {
 		return this.offsetFrom(slot.pos, slot.offset + offset);
@@ -1069,11 +1226,28 @@ export class Emitter {
 		if (bits.length > 0) {
 			items.push(this.measure((itemOut) => this.writePackedBits(bits, value, itemOut)));
 		}
-		for (const entry of fields) {
-			const field = entry.field;
-			if (this.isAllPackedBits(field)) {
+		// A field whose bytes the packed region already holds writes nothing
+		// here; one whose presence or tag is a bit writes the rest of itself
+		// through its own path, so neither can share a reservation.
+		const written = fields.filter((entry) => !this.isAllPackedBits(entry.field));
+		const shareable = (entry: ObjectFieldEntry) =>
+			!bits.some((bit) => bit.entry === entry) && this.fixedBytes(entry.field) !== undefined;
+		for (const group of this.allocRuns(written, shareable)) {
+			if (group.length > 1) {
+				const total = group.reduce((sum, entry) => sum + this.fixedBytes(entry.field)!, 0);
+				items.push(
+					this.measure((itemOut) => {
+						this.withAllocRun("alloc", total, () => {
+							for (const entry of group) {
+								this.writeField(entry.field, this.propertyAccess(value, entry), itemOut);
+							}
+						});
+					}),
+				);
 				continue;
 			}
+			const entry = group[0];
+			const field = entry.field;
 			items.push(
 				this.measure((itemOut) => {
 					const property = this.propertyAccess(value, entry);
@@ -1831,7 +2005,26 @@ export class Emitter {
 		// Each item's expressions refer to the locals its statements declare.
 		const items: Array<ScopedItem & { readonly props: Array<{ entry: ObjectFieldEntry; expr: ts.Expression }> }> =
 			[];
-		for (const entry of fields) {
+		// An entry the packed region answers reads no bytes of its own, so it
+		// cannot share a reservation; the others may, on the same terms as
+		// the write side.
+		const shareable = (entry: ObjectFieldEntry) =>
+			!bitExprs.has(entry) && this.fixedBytes(entry.field) !== undefined;
+		for (const group of this.allocRuns(fields, shareable)) {
+			if (group.length > 1) {
+				const total = group.reduce((sum, entry) => sum + this.fixedBytes(entry.field)!, 0);
+				const props: Array<{ entry: ObjectFieldEntry; expr: ts.Expression }> = [];
+				const item = this.measure((itemOut) => {
+					this.withAllocRun("readAlloc", total, () => {
+						for (const entry of group) {
+							props.push({ entry, expr: this.readField(entry.field, itemOut) });
+						}
+					});
+				});
+				items.push({ ...item, props });
+				continue;
+			}
+			const entry = group[0];
 			const field = entry.field;
 			const entryBits = bitExprs.get(entry);
 			let expr!: ts.Expression;

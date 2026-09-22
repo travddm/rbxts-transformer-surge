@@ -732,3 +732,25 @@ function surge_Tree_1_read(): surge_Tree_1_Type {
     };
 }"
 `;
+
+exports[`Emitter shared reservations consecutive fixed-size fields share one alloc, at their own offsets 1`] = `
+"// write
+const [buf1, pos2] = __surge_alloc(17);
+buffer.writeu8(buf1, pos2, value.flag ? 1 : 0);
+const pos3 = pos2 + 1;
+buffer.writeu32(buf1, pos3, value.id);
+const pos4 = pos2 + 5;
+buffer.writef32(buf1, pos4, value.at.X);
+buffer.writef32(buf1, pos4 + 4, value.at.Y);
+buffer.writef32(buf1, pos4 + 8, value.at.Z);
+
+// read
+const [buf5, pos6] = __surge_readAlloc(17);
+const pos7 = pos6 + 1;
+const pos8 = pos6 + 5;
+return {
+    flag: buffer.readu8(buf5, pos6) !== 0,
+    id: buffer.readu32(buf5, pos7),
+    at: new Vector3(buffer.readf32(buf5, pos8), buffer.readf32(buf5, pos8 + 4), buffer.readf32(buf5, pos8 + 8))
+};"
+`;

@@ -416,6 +416,62 @@ describe("Emitter union guards", () => {
 	});
 });
 
+// One reservation per run of consecutive fixed-size fields, rather than one
+// per field (see generated-code-performance.md in the surge repo).
+describe("Emitter shared reservations", () => {
+	test("consecutive fixed-size fields share one alloc, at their own offsets", () => {
+		const output = emitSnapshot({
+			kind: "object",
+			fields: [
+				{ name: "flag", field: { kind: "bool", packed: false } },
+				{ name: "id", field: { kind: "num", width: "u32" } },
+				{ name: "at", field: { kind: "vector3" } },
+			],
+		});
+		expect(output).toMatchSnapshot();
+		// 1 + 4 + 12, reserved once on each side.
+		expect(output).toContain("__surge_alloc(17)");
+		expect(output).toContain("__surge_readAlloc(17)");
+		expect(output.match(/__surge_alloc\(/g)).toHaveLength(1);
+		expect(output.match(/__surge_readAlloc\(/g)).toHaveLength(1);
+	});
+
+	test("a variable-size field ends the run, and the fields after it start another", () => {
+		const output = emitSnapshot({
+			kind: "object",
+			fields: [
+				{ name: "a", field: { kind: "num", width: "u8" } },
+				{ name: "b", field: { kind: "num", width: "u8" } },
+				{ name: "name", field: { kind: "str" } },
+				{ name: "y", field: { kind: "num", width: "f32" } },
+				{ name: "z", field: { kind: "num", width: "f32" } },
+			],
+		});
+		// `alloc` order is byte order, so the two fields after the string
+		// cannot join the two before it.
+		expect(output).toContain("__surge_alloc(2)");
+		expect(output).toContain("__surge_alloc(8)");
+		expect(output).toContain("__surge_readAlloc(2)");
+		expect(output).toContain("__surge_readAlloc(8)");
+	});
+
+	test("a field whose bytes the packed region holds does not join a run", () => {
+		const output = emitSnapshot({
+			kind: "object",
+			fields: [
+				{ name: "on", field: { kind: "bool", packed: true } },
+				{ name: "id", field: { kind: "num", width: "u32" } },
+				{ name: "n", field: { kind: "num", width: "u8" } },
+			],
+		});
+		// One byte for the packed region, then 4 + 1 shared by the two that
+		// write their own bytes.
+		expect(output).toContain("__surge_alloc(1)");
+		expect(output).toContain("__surge_alloc(5)");
+		expect(output).toContain("__surge_readAlloc(5)");
+	});
+});
+
 // Luau allows 200 registers per function; 100 `const [buf, pos]` pairs in one
 // scope exceed it (see generated-code-performance.md in the surge repo).
 describe("Emitter local-register ceiling", () => {
