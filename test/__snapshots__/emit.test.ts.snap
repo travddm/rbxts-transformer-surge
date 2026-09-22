@@ -112,7 +112,7 @@ for (const item4 of arr1) {
 const [buf7, pos8] = __surge_readAlloc(4);
 const count9 = buffer.readu32(buf7, pos8);
 const result10 = [];
-for (let i11 = 0; i11 < count9; i11++) {
+for (const _i11 of $range(1, count9)) {
     const [buf12, pos13] = __surge_readAlloc(8);
     result10.push(buffer.readf64(buf12, pos13));
 }
@@ -218,7 +218,7 @@ for (const kp4 of keypoints1) {
 const [buf9, pos10] = __surge_readAlloc(1);
 const count11 = buffer.readu8(buf9, pos10);
 const keypoints12 = [];
-for (let i13 = 0; i13 < count11; i13++) {
+for (const _i13 of $range(1, count11)) {
     const [buf14, pos15] = __surge_readAlloc(4);
     const time16 = buffer.readf32(buf14, pos15);
     const [buf17, pos18] = __surge_readAlloc(3);
@@ -328,7 +328,7 @@ __surge_backpatchU32(pos3, count4);
 const [buf14, pos15] = __surge_readAlloc(4);
 const count16 = buffer.readu32(buf14, pos15);
 const result17: Record<string, number> = {};
-for (let i18 = 0; i18 < count16; i18++) {
+for (const _i18 of $range(1, count16)) {
     const [buf19, pos20] = __surge_readAlloc(4);
     const len21 = buffer.readu32(buf19, pos20);
     const [buf22, pos23] = __surge_readAlloc(len21);
@@ -357,7 +357,7 @@ __surge_backpatchU32(pos3, count4);
 const [buf11, pos12] = __surge_readAlloc(4);
 const count13 = buffer.readu32(buf11, pos12);
 const result14: Record<string, boolean> = {};
-for (let i15 = 0; i15 < count13; i15++) {
+for (const _i15 of $range(1, count13)) {
     const [buf16, pos17] = __surge_readAlloc(4);
     const len18 = buffer.readu32(buf16, pos17);
     const [buf19, pos20] = __surge_readAlloc(len18);
@@ -483,7 +483,7 @@ for (const kp4 of keypoints1) {
 const [buf9, pos10] = __surge_readAlloc(1);
 const count11 = buffer.readu8(buf9, pos10);
 const keypoints12 = [];
-for (let i13 = 0; i13 < count11; i13++) {
+for (const _i13 of $range(1, count11)) {
     const [buf14, pos15] = __surge_readAlloc(4);
     const time16 = buffer.readf32(buf14, pos15);
     const [buf17, pos18] = __surge_readAlloc(8);
@@ -654,7 +654,7 @@ const [buf16, pos17] = __surge_readAlloc(len15);
 tup12.push(buffer.readstring(buf16, pos17, len15));
 const [buf18, pos19] = __surge_readAlloc(4);
 const count20 = buffer.readu32(buf18, pos19);
-for (let i21 = 0; i21 < count20; i21++) {
+for (const _i21 of $range(1, count20)) {
     const [buf22, pos23] = __surge_readAlloc(8);
     tup12.push(buffer.readf64(buf22, pos23));
 }
@@ -733,7 +733,7 @@ function surge_Tree_1_read(): surge_Tree_1_Type {
     const [buf7, pos8] = __surge_readAlloc(4);
     const count9 = buffer.readu32(buf7, pos8);
     const result10 = [];
-    for (let i11 = 0; i11 < count9; i11++) {
+    for (const _i11 of $range(1, count9)) {
         const [buf12, pos13] = __surge_readAlloc(8);
         result10.push(buffer.readf64(buf12, pos13));
     }

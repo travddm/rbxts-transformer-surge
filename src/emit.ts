@@ -188,6 +188,32 @@ export class Emitter {
 	}
 
 	/**
+	 * A read loop that runs `count` times, over a body that never reads the
+	 * index.
+	 *
+	 * `$range` is roblox-ts's numeric-for macro: `for (const i of $range(1,
+	 * count))` lowers to `for i = 1, count do`. A plain
+	 * `for (let i = 0; i < count; i++)` does not -- roblox-ts only emits a
+	 * numeric `for` when it can prove the bound is an integer
+	 * (`transformForStatement.js`'s `isProbablyInteger`), and a
+	 * `buffer.readu32` result is just `number`, so it lowers to a `while`
+	 * loop with a `_shouldIncrement` flag that every element read pays for.
+	 * The index name starts with `_` because the body never uses it, and
+	 * TypeScript reports an unused `for`-`of` variable under `noUnusedLocals`
+	 * unless it does: the generated file is type-checked in the consumer's
+	 * own project, under the consumer's own options.
+	 */
+	private countedLoop(index: ts.Identifier, count: ts.Expression, body: ts.Statement[]): ts.Statement {
+		const f = this.factory;
+		return f.createForOfStatement(
+			undefined,
+			f.createVariableDeclarationList([f.createVariableDeclaration(index)], this.ts_.NodeFlags.Const),
+			f.createCallExpression(f.createIdentifier("$range"), undefined, [this.num(1), count]),
+			f.createBlock(body, true),
+		);
+	}
+
+	/**
 	 * Binds a side-effecting read expression (one that advances a cursor when
 	 * evaluated, rather than being preceded by the statement that reserves its
 	 * bytes) to a `const` in statement order, and returns the identifier in
@@ -1390,7 +1416,7 @@ export class Emitter {
 						),
 					),
 				);
-				const i = this.fresh("i");
+				const i = this.fresh("_i");
 				const body: ts.Statement[] = [];
 				const itemExpr = this.readField(field.element, body);
 				body.push(
@@ -1398,17 +1424,7 @@ export class Emitter {
 						f.createCallExpression(f.createPropertyAccessExpression(result, "push"), undefined, [itemExpr]),
 					),
 				);
-				out.push(
-					f.createForStatement(
-						f.createVariableDeclarationList(
-							[f.createVariableDeclaration(i, undefined, undefined, this.num(0))],
-							this.ts_.NodeFlags.Let,
-						),
-						f.createBinaryExpression(i, this.ts_.SyntaxKind.LessThanToken, count),
-						f.createPostfixIncrement(i),
-						f.createBlock(body, true),
-					),
-				);
+				out.push(this.countedLoop(i, count, body));
 				return result;
 			}
 			case "tuple": {
@@ -1451,7 +1467,7 @@ export class Emitter {
 					out.push(statement);
 					const count = this.fresh("count");
 					out.push(this.constStatement(count, this.bufferCall("readu32", [buf, pos])));
-					const i = this.fresh("i");
+					const i = this.fresh("_i");
 					const body: ts.Statement[] = [];
 					const restExpr = this.readField(field.rest, body);
 					body.push(
@@ -1461,17 +1477,7 @@ export class Emitter {
 							]),
 						),
 					);
-					out.push(
-						f.createForStatement(
-							f.createVariableDeclarationList(
-								[f.createVariableDeclaration(i, undefined, undefined, this.num(0))],
-								this.ts_.NodeFlags.Let,
-							),
-							f.createBinaryExpression(i, this.ts_.SyntaxKind.LessThanToken, count),
-							f.createPostfixIncrement(i),
-							f.createBlock(body, true),
-						),
-					);
+					out.push(this.countedLoop(i, count, body));
 				}
 				// `result` is inferred as an array of the union of what was
 				// pushed, which is not assignable to a tuple type.
@@ -1602,7 +1608,7 @@ export class Emitter {
 				),
 			),
 		);
-		const i = this.fresh("i");
+		const i = this.fresh("_i");
 		const body: ts.Statement[] = [];
 		const { buf: tbuf, pos: tpos, statement: tstmt } = this.destructureAlloc("readAlloc", 4);
 		body.push(tstmt);
@@ -1623,17 +1629,7 @@ export class Emitter {
 				f.createCallExpression(f.createPropertyAccessExpression(keypoints, "push"), undefined, [keypoint]),
 			),
 		);
-		out.push(
-			f.createForStatement(
-				f.createVariableDeclarationList(
-					[f.createVariableDeclaration(i, undefined, undefined, this.num(0))],
-					this.ts_.NodeFlags.Let,
-				),
-				f.createBinaryExpression(i, this.ts_.SyntaxKind.LessThanToken, count),
-				f.createPostfixIncrement(i),
-				f.createBlock(body, true),
-			),
-		);
+		out.push(this.countedLoop(i, count, body));
 		return f.createNewExpression(f.createIdentifier(kind), undefined, [keypoints]);
 	}
 
@@ -1689,7 +1685,7 @@ export class Emitter {
 				),
 			),
 		);
-		const i = this.fresh("i");
+		const i = this.fresh("_i");
 		const body: ts.Statement[] = [];
 		const keyExpr = this.readField(field.key, body);
 		if (isSet) {
@@ -1714,17 +1710,7 @@ export class Emitter {
 				),
 			);
 		}
-		out.push(
-			f.createForStatement(
-				f.createVariableDeclarationList(
-					[f.createVariableDeclaration(i, undefined, undefined, this.num(0))],
-					this.ts_.NodeFlags.Let,
-				),
-				f.createBinaryExpression(i, this.ts_.SyntaxKind.LessThanToken, count),
-				f.createPostfixIncrement(i),
-				f.createBlock(body, true),
-			),
-		);
+		out.push(this.countedLoop(i, count, body));
 		if (field.source === "record") {
 			return result;
 		}
