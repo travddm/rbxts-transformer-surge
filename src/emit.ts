@@ -26,10 +26,11 @@ const WIDTH_BYTES: Record<NumWidth, number> = {
 // expression temporaries, and the temporaries roblox-ts adds itself.
 const LOCALS_BUDGET = 120;
 const LOCALS_PER_BLOCK = 32;
-// A run of K fields declares K + 1 locals: the two the reservation returns,
-// then one position for each field after the first. `pushScoped` cannot
-// split a run, because every field after the first reads the reservation's
-// locals, so a run has to fit in the block `pushScoped` would give it.
+// A run of K fields declares K locals: the position the reservation took, then
+// one more for each field after the first. `pushScoped` cannot split a run,
+// because every field after the first reads the reservation's locals, so a run
+// has to fit in the block `pushScoped` would give it. The bound is one field
+// short of the block, which is one more than a run now needs.
 const ALLOC_RUN_FIELDS = LOCALS_PER_BLOCK - 1;
 
 // The injected `@rbxts/surge` imports are aliased so that a user's own
@@ -66,10 +67,10 @@ interface PackedBit {
 }
 
 /**
- * A reserved region of the buffer: the two locals one `alloc`/`readAlloc`
- * returns, and a byte offset into what it reserved. The offset is what lets
- * one reservation cover more than one value -- a `CFrame` reserves 24 bytes
- * once and writes its position at 0 and its rotation vector at 12.
+ * A reserved region of the buffer: the cursor state's buffer, the position a
+ * reservation took, and a byte offset into what it reserved. The offset is what
+ * lets one reservation cover more than one value -- a `CFrame` reserves 24
+ * bytes once and writes its position at 0 and its rotation vector at 12.
  */
 interface Slot {
 	readonly buf: ts.Identifier;
@@ -78,9 +79,9 @@ interface Slot {
 }
 
 /**
- * One `alloc`/`readAlloc` shared by several consecutive fields. `buf` and
- * `pos` are set by the first field that asks for bytes, which is where the
- * call is emitted; `used` tracks how much of `total` the fields have taken.
+ * One reservation shared by several consecutive fields. `buf` and `pos` are set
+ * by the first field that asks for bytes, which is where the cursor advances;
+ * `used` tracks how much of `total` the fields have taken.
  */
 interface AllocRun {
 	readonly fnName: "alloc" | "readAlloc";
@@ -194,8 +195,9 @@ export class Emitter {
 	/**
 	 * The scratch buffer, its capacity and the write cursor, for the head of
 	 * the closure the serializer is emitted into. One buffer per serializer,
-	 * not one per place: two serializers can then be in flight at once, which
-	 * a single module-scoped buffer never allowed.
+	 * not one per place: two serializers can then be in flight at once, which a
+	 * single module-scoped buffer never allowed -- unless either carries a blob
+	 * field, because the blob side channel is still module state in the package.
 	 */
 	public writeStateDecls(): ts.Statement[] {
 		if (!this.usesWriteBytes) {
