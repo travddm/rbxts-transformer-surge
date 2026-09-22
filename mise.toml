@@ -1,5 +1,5 @@
 [tools]
-node = "24.18.0"
+node = "24.21.0"
 
 [hooks]
 # Keeps node_modules in sync whenever `mise install` runs (e.g. after a [tools] version bump),
