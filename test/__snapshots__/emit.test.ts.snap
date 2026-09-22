@@ -78,19 +78,15 @@ let result11: {
 if (idx10 === 1) {
     const [buf14, pos15] = __surge_readAlloc(1);
     result11 = {
-        ...{
-            n: buffer.readu8(buf14, pos15)
-        },
-        kind: "b"
+        kind: "b",
+        n: buffer.readu8(buf14, pos15)
     };
 }
 else {
     const [buf12, pos13] = __surge_readAlloc(1);
     result11 = {
-        ...{
-            n: buffer.readu8(buf12, pos13)
-        },
-        kind: "a"
+        kind: "a",
+        n: buffer.readu8(buf12, pos13)
     };
 }
 return {
@@ -613,19 +609,15 @@ if (idx13 === 1) {
     const len19 = buffer.readu32(buf17, pos18);
     const [buf20, pos21] = __surge_readAlloc(len19);
     result14 = {
-        ...{
-            y: buffer.readstring(buf20, pos21, len19)
-        },
-        kind: "b"
+        kind: "b",
+        y: buffer.readstring(buf20, pos21, len19)
     };
 }
 else {
     const [buf15, pos16] = __surge_readAlloc(8);
     result14 = {
-        ...{
-            x: buffer.readf64(buf15, pos16)
-        },
-        kind: "a"
+        kind: "a",
+        x: buffer.readf64(buf15, pos16)
     };
 }
 return result14;"

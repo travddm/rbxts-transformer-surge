@@ -1775,7 +1775,15 @@ export class Emitter {
 		return result;
 	}
 
-	private readObjectInline(fields: ReadonlyArray<ObjectFieldEntry>, out: ts.Statement[]): ts.Expression {
+	private readObjectInline(
+		fields: ReadonlyArray<ObjectFieldEntry>,
+		out: ts.Statement[],
+		// A tagged union variant's discriminant, which belongs in the literal
+		// this builds rather than being spread in afterwards: roblox-ts lowers
+		// `{ ...obj, tag: "x" }` to `table.clone` plus `setmetatable(_, nil)`
+		// plus one assignment, so a spread costs a table copy per read.
+		tag?: { readonly key: FieldKey; readonly value: string | number | boolean },
+	): ts.Expression {
 		const f = this.factory;
 		// The packed region is read first and outside the scoped items: every
 		// item that follows, in any block, can need one of its bits.
@@ -1823,12 +1831,16 @@ export class Emitter {
 		}
 		if (!this.needsBlocks()) {
 			this.pushScoped(items, out);
-			return f.createObjectLiteralExpression(
-				items.flatMap((item) =>
-					item.props.map(({ entry, expr }) => f.createPropertyAssignment(this.propertyName(entry), expr)),
-				),
-				true,
-			);
+			// The tag first, matching the variant order in `fieldToTypeNode`.
+			const properties: ts.ObjectLiteralElementLike[] = tag
+				? [f.createPropertyAssignment(this.propertyName(tag.key), this.literalValueExpr(tag.value))]
+				: [];
+			for (const item of items) {
+				for (const { entry, expr } of item.props) {
+					properties.push(f.createPropertyAssignment(this.propertyName(entry), expr));
+				}
+			}
+			return f.createObjectLiteralExpression(properties, true);
 		}
 		// A block's locals end with the block, so an object literal after the
 		// blocks can't refer to them: each block assigns its own fields into
@@ -1837,9 +1849,20 @@ export class Emitter {
 		out.push(
 			this.constStatement(
 				result,
-				this.castTo(f.createObjectLiteralExpression([]), this.objectShapeTypeNode(fields)),
+				this.castTo(f.createObjectLiteralExpression([]), this.objectShapeTypeNode(fields, tag)),
 			),
 		);
+		if (tag) {
+			out.push(
+				f.createExpressionStatement(
+					f.createBinaryExpression(
+						this.propertyAccess(result, tag.key),
+						this.ts_.SyntaxKind.EqualsToken,
+						this.literalValueExpr(tag.value),
+					),
+				),
+			);
+		}
 		for (const item of items) {
 			for (const { entry, expr } of item.props) {
 				item.statements.push(
@@ -1894,19 +1917,12 @@ export class Emitter {
 		const branchFor = (i: number): ts.Statement[] => {
 			const variant = field.variants[i];
 			const branch: ts.Statement[] = [];
-			const objExpr = this.readObjectInline(variant.fields, branch);
-			const withTag = f.createObjectLiteralExpression(
-				[
-					f.createSpreadAssignment(objExpr),
-					f.createPropertyAssignment(
-						this.propertyName(tagKeyOf(field)),
-						this.literalValueExpr(variant.tagValue),
-					),
-				],
-				true,
-			);
+			const objExpr = this.readObjectInline(variant.fields, branch, {
+				key: tagKeyOf(field),
+				value: variant.tagValue,
+			});
 			branch.push(
-				f.createExpressionStatement(f.createBinaryExpression(result, this.ts_.SyntaxKind.EqualsToken, withTag)),
+				f.createExpressionStatement(f.createBinaryExpression(result, this.ts_.SyntaxKind.EqualsToken, objExpr)),
 			);
 			return branch;
 		};
@@ -1994,8 +2010,25 @@ export class Emitter {
 		);
 	}
 
-	private objectShapeTypeNode(fields: ReadonlyArray<ObjectFieldEntry>): ts.TypeNode {
-		return this.factory.createTypeLiteralNode(fields.map((entry) => this.propertySignature(entry)));
+	private objectShapeTypeNode(
+		fields: ReadonlyArray<ObjectFieldEntry>,
+		tag?: { readonly key: FieldKey; readonly value: string | number | boolean },
+	): ts.TypeNode {
+		const f = this.factory;
+		const members = fields.map((entry) => this.propertySignature(entry));
+		if (tag) {
+			members.unshift(
+				f.createPropertySignature(
+					undefined,
+					this.propertyName(tag.key),
+					undefined,
+					f.createLiteralTypeNode(
+						this.literalValueExpr(tag.value) as ts.LiteralExpression | ts.BooleanLiteral,
+					),
+				),
+			);
+		}
+		return f.createTypeLiteralNode(members);
 	}
 
 	/** The best-effort structural type of a `Field`, for internal declarations only (never shown to a caller). */

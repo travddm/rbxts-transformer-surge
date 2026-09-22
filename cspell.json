@@ -23,6 +23,8 @@
 		"numbersequence",
 		"rbxts",
 		"rbxtsc",
+		"serio",
+		"setmetatable",
 		"smol",
 		"surge",
 		"taggedunion",
