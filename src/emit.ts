@@ -55,6 +55,7 @@ const CAPACITY = importAlias("capacity");
 const CURSOR = importAlias("cursor");
 const READ_BUFFER = importAlias("input");
 const READ_CURSOR = importAlias("readCursor");
+const READ_LENGTH = importAlias("inputLength");
 /** What a serializer starts with, doubled by `grow` from there. */
 const INITIAL_CAPACITY = 64;
 /** The largest form `writePackedCFrame` can write: header, position, rotation. */
@@ -62,6 +63,17 @@ const PACKED_CFRAME_MAX_BYTES = 25;
 // A `cframe`'s rotation is always an f32 axis-angle triple. `DataType.Transform`
 // sets the widths of the position, and of nothing else.
 const ROTATION_BYTES = 12;
+/** The prefix every check's message carries, so one `pcall` can tell a rejection from a bug. */
+const ERROR_PREFIX = "@rbxts/surge: ";
+/**
+ * The largest count `checks` accepts for an element that consumes no bytes
+ * (a literal constant, a blob, an object made only of those). Such an element
+ * costs nothing, so the payload's own length cannot bound it and the count
+ * needs a bound of its own. This is the largest count a `u24` prefix could
+ * have written: a shape that means to carry more than sixteen million absent
+ * or constant elements says so with a wider `DataType.Length`.
+ */
+const ZERO_SIZE_COUNT_CAP = 1 << 24;
 
 function tagKeyOf(field: Extract<Field, { kind: "taggedUnion" }>): FieldKey {
 	return { name: field.tagKey, numericKey: field.tagKeyNumeric };
@@ -145,6 +157,14 @@ export class Emitter {
 		private readonly ts_: typeof ts,
 		private readonly factory: ts.NodeFactory,
 		private readonly helperFields: ReadonlyMap<string, Field>,
+		/**
+		 * Emit the read-side bounds checks of the `checks` factory option
+		 * (Transformer Design §7). Off, the read path is what it always was:
+		 * no branch per read, and a malformed payload is a raw Luau error or
+		 * worse. Per call site, so one place can hold a checked serializer for
+		 * a remote boundary and an unchecked one for its own storage.
+		 */
+		private readonly checks = false,
 	) {}
 
 	private fresh(base: string): ts.Identifier {
@@ -222,10 +242,15 @@ export class Emitter {
 		if (!this.usesReadBytes) {
 			return [];
 		}
-		return [
+		const decls = [
 			this.letStatement(READ_BUFFER, this.bufferCall("create", [this.num(0)])),
 			this.letStatement(READ_CURSOR, this.num(0)),
 		];
+		// One `buffer.len` per `deserialize()` rather than one per check.
+		if (this.checks) {
+			decls.push(this.letStatement(READ_LENGTH, this.num(0)));
+		}
+		return decls;
 	}
 
 	/** Opens a `serialize()`: everything written last call is forgotten by moving one number. */
@@ -235,7 +260,16 @@ export class Emitter {
 
 	/** Opens a `deserialize()`, taking the buffer the caller passed. */
 	public beginReadStatements(input: ts.Expression): ts.Statement[] {
-		return this.usesReadBytes ? [this.assign(READ_BUFFER, input), this.assign(READ_CURSOR, this.num(0))] : [];
+		if (!this.usesReadBytes) {
+			return [];
+		}
+		const statements = [this.assign(READ_BUFFER, input), this.assign(READ_CURSOR, this.num(0))];
+		if (this.checks) {
+			statements.push(
+				this.assign(READ_LENGTH, this.bufferCall("len", [this.factory.createIdentifier(READ_BUFFER)])),
+			);
+		}
+		return statements;
 	}
 
 	/**
@@ -457,14 +491,23 @@ export class Emitter {
 		const sizeExpr = typeof size === "number" ? this.num(size) : size;
 		if (fnName === "readAlloc") {
 			this.usesReadBytes = true;
-			return {
-				buf: f.createIdentifier(READ_BUFFER),
-				pos,
-				statements: [
-					this.constStatement(pos, f.createIdentifier(READ_CURSOR)),
-					this.assign(READ_CURSOR, f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, sizeExpr)),
-				],
-			};
+			const statements = [
+				this.constStatement(pos, f.createIdentifier(READ_CURSOR)),
+				this.assign(READ_CURSOR, f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, sizeExpr)),
+			];
+			if (this.checks) {
+				statements.push(
+					this.throwIf(
+						f.createBinaryExpression(
+							f.createIdentifier(READ_CURSOR),
+							this.ts_.SyntaxKind.GreaterThanToken,
+							f.createIdentifier(READ_LENGTH),
+						),
+						"deserialize read past the end of the input buffer",
+					),
+				);
+			}
+			return { buf: f.createIdentifier(READ_BUFFER), pos, statements };
 		}
 		this.usesWriteBytes = true;
 		return {
@@ -896,6 +939,159 @@ export class Emitter {
 	 */
 	private exactCount(length: CountSpec | undefined): number | undefined {
 		return typeof length === "number" ? length : undefined;
+	}
+
+	/**
+	 * A rejection, as a thrown string so a caller's `pcall` sees the same shape
+	 * it sees from the Luau `buffer` errors these replace. The message says what
+	 * failed and never quotes a number out of the payload: the bytes are the
+	 * hostile input, and a message is not the place to repeat them.
+	 */
+	private throwIf(condition: ts.Expression, message: string): ts.Statement {
+		const f = this.factory;
+		return f.createIfStatement(
+			condition,
+			f.createBlock([f.createThrowStatement(f.createStringLiteral(`${ERROR_PREFIX}${message}`))], true),
+		);
+	}
+
+	/**
+	 * A lower bound on the bytes `field` reads, used to reject a count no
+	 * payload of this length could hold. It must never overstate: a bound above
+	 * what a valid value actually costs would reject that value. Anything whose
+	 * cost depends on the payload contributes what it cannot avoid writing --
+	 * a container its count, an optional nothing, a blob nothing -- and a
+	 * recursive reference contributes nothing at all.
+	 */
+	private minBytes(field: Field): number {
+		switch (field.kind) {
+			case "num":
+				return WIDTH_BYTES[field.width];
+			case "bool":
+				return field.packed ? 0 : 1;
+			case "vector2":
+				return 8;
+			case "vector3":
+				return this.componentBytes(field.components);
+			case "color3":
+				return 3;
+			case "cframe":
+				// The packed form's smallest value is its header alone.
+				return field.packed ? 1 : this.componentBytes(field.position) + ROTATION_BYTES;
+			case "datatype":
+				return FIXED_DATATYPES[field.name].components.reduce(
+					(total, component) => total + WIDTH_BYTES[component.width],
+					0,
+				);
+			case "enum":
+				return field.members.length <= 256 ? 1 : 2;
+			case "literal":
+				return field.values.length <= 256 ? 1 : 2;
+			case "colorSequence":
+			case "numberSequence":
+				// The keypoint count, with no keypoints behind it.
+				return 1;
+			case "str":
+			case "buffer":
+			case "array":
+			case "dict":
+				return this.countBytes(field.length);
+			case "tuple":
+				return (
+					field.fixed.reduce((total, element) => total + this.minBytes(element), 0) +
+					(field.rest === undefined ? 0 : this.countBytes(field.length))
+				);
+			case "object":
+				// The packed region is left out rather than counted: it is bytes a
+				// valid value does read, so leaving it out only lowers the bound.
+				// An object whose fields are all packed therefore bounds at zero and
+				// falls to the cap, which rejects the same payloads a byte at a time
+				// later. Counting the region would be tighter and is not worth the
+				// risk of counting it differently from the emitter.
+				return field.fields.reduce((total, entry) => total + this.minBytes(entry.field), 0);
+			case "taggedUnion":
+				// The tag is an index of the same width a `literal` uses, except
+				// where the enclosing object's packed region holds it as one bit --
+				// which only a direct property of such an object does, so a packed
+				// two-variant union elsewhere still reads a byte this leaves out.
+				return (
+					(field.packed === true && field.variants.length === 2 ? 0 : field.variants.length <= 256 ? 1 : 2) +
+					Math.min(
+						...field.variants.map((variant) =>
+							variant.fields.reduce((total, entry) => total + this.minBytes(entry.field), 0),
+						),
+					)
+				);
+			case "guardedUnion":
+				return 1 + Math.min(...field.variants.map((variant) => this.minBytes(variant)));
+			// An `optional` may be absent, a `blob` travels outside the buffer, a
+			// `literalConst` is the type itself, and a `recursiveRef` cannot be
+			// bounded without walking itself.
+			case "optional":
+				return field.packed ? 0 : 1;
+			case "blob":
+			case "literalConst":
+			case "recursiveRef":
+				return 0;
+		}
+	}
+
+	/** The bytes a count of its own costs: none in the exact form, which writes no count. */
+	private countBytes(length: CountSpec | undefined): number {
+		return this.exactCount(length) === undefined ? WIDTH_BYTES[this.lengthWidth(length)] : 0;
+	}
+
+	/**
+	 * Rejects a count the rest of the payload cannot hold. An element with a
+	 * minimum size gives a bound in bytes; one that costs nothing (a constant, a
+	 * blob) has no such bound, so the count itself is capped -- that case is the
+	 * denial of service, where a short payload declares billions of elements and
+	 * the loop runs every one.
+	 */
+	private checkCount(count: ts.Expression, element: Field, out: ts.Statement[]): void {
+		this.checkCountOfBytes(count, this.minBytes(element), out);
+	}
+
+	/** {@link checkCount} for a `dict`, whose entry is a key and, unless it is a set, a value. */
+	private checkEntryCount(count: ts.Expression, field: Extract<Field, { kind: "dict" }>, out: ts.Statement[]): void {
+		const value = field.value;
+		this.checkCountOfBytes(count, this.minBytes(field.key) + (value === undefined ? 0 : this.minBytes(value)), out);
+	}
+
+	private checkCountOfBytes(count: ts.Expression, min: number, out: ts.Statement[]): void {
+		if (!this.checks) {
+			return;
+		}
+		const f = this.factory;
+		if (min === 0) {
+			out.push(
+				this.throwIf(
+					f.createBinaryExpression(
+						count,
+						this.ts_.SyntaxKind.GreaterThanToken,
+						this.num(ZERO_SIZE_COUNT_CAP),
+					),
+					"deserialize found a count past the limit for an element that reads no bytes",
+				),
+			);
+			return;
+		}
+		const needed =
+			min === 1 ? count : f.createBinaryExpression(count, this.ts_.SyntaxKind.AsteriskToken, this.num(min));
+		out.push(
+			this.throwIf(
+				f.createBinaryExpression(
+					needed,
+					this.ts_.SyntaxKind.GreaterThanToken,
+					f.createBinaryExpression(
+						f.createIdentifier(READ_LENGTH),
+						this.ts_.SyntaxKind.MinusToken,
+						f.createIdentifier(READ_CURSOR),
+					),
+				),
+				"deserialize found a count larger than the input buffer can hold",
+			),
+		);
 	}
 
 	/** The widths a `vector3`'s or a `cframe` position's components are stored at, with absence resolved. */
@@ -1919,6 +2115,7 @@ export class Emitter {
 					out.push(...statements);
 					const countLocal = this.fresh("count");
 					out.push(this.constStatement(countLocal, this.readNumber(arrayWidth, buf, pos)));
+					this.checkCount(countLocal, field.element, out);
 					count = countLocal;
 				} else {
 					count = this.num(arrayExact);
@@ -1995,6 +2192,7 @@ export class Emitter {
 						out.push(...statements);
 						const countLocal = this.fresh("count");
 						out.push(this.constStatement(countLocal, this.readNumber(restWidth, buf, pos)));
+						this.checkCount(countLocal, field.rest, out);
 						count = countLocal;
 					} else {
 						count = this.num(restExact);
@@ -2200,6 +2398,7 @@ export class Emitter {
 		out.push(...statements);
 		const count = this.fresh("count");
 		out.push(this.constStatement(count, this.readNumber(countWidth, buf, pos)));
+		this.checkEntryCount(count, field, out);
 		const result = this.fresh("result");
 		// Reconstructed as a `Record` regardless of `field.source`: that's the
 		// only one of the three TypeScript shapes whose plain `result[key] =`

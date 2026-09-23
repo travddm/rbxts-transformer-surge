@@ -1182,6 +1182,39 @@ function surge_Tree_1_read(): surge_Tree_1_Type {
 }"
 `;
 
+exports[`Emitter read-side checks a count is bounded by what the rest of the input could hold 1`] = `
+"// read
+const pos5 = __surge_readCursor;
+__surge_readCursor = pos5 + 4;
+if (__surge_readCursor > __surge_inputLength) {
+    throw "@rbxts/surge: deserialize read past the end of the input buffer";
+}
+const count6 = buffer.readu32(__surge_input, pos5);
+if (count6 * 8 > __surge_inputLength - __surge_readCursor) {
+    throw "@rbxts/surge: deserialize found a count larger than the input buffer can hold";
+}
+const result7 = [];
+for (const _i8 of $range(1, count6)) {
+    const pos9 = __surge_readCursor;
+    __surge_readCursor = pos9 + 8;
+    if (__surge_readCursor > __surge_inputLength) {
+        throw "@rbxts/surge: deserialize read past the end of the input buffer";
+    }
+    result7.push(buffer.readf64(__surge_input, pos9));
+}
+return result7;"
+`;
+
+exports[`Emitter read-side checks every read is bounded against the input length 1`] = `
+"// read
+const pos2 = __surge_readCursor;
+__surge_readCursor = pos2 + 4;
+if (__surge_readCursor > __surge_inputLength) {
+    throw "@rbxts/surge: deserialize read past the end of the input buffer";
+}
+return buffer.readu32(__surge_input, pos2);"
+`;
+
 exports[`Emitter shared reservations consecutive fixed-size fields share one alloc, at their own offsets 1`] = `
 "// write
 const pos1 = __surge_cursor;

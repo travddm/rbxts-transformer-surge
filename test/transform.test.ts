@@ -373,3 +373,81 @@ describe("transform generated code", () => {
 		}
 	});
 });
+
+describe("transform checks option", () => {
+	test("checks: true emits the bounds checks, and the same shape without them does not", () => {
+		const source = `import { createBinarySerializer } from "@rbxts/surge";
+			interface P { x: number; list: Array<number>; }
+			const guarded = createBinarySerializer<P>({ checks: true });
+			const plain = createBinarySerializer<P>();`;
+		const { printed, diagnostics, cleanup } = runTransform(source);
+		try {
+			expect(diagnostics).toHaveLength(0);
+			// One call site checked and one not, in one file: the option is per
+			// call site, so a place can hold a boundary serializer and its own.
+			expect(printed.match(/@rbxts\/surge: deserialize read past the end/g)?.length).toBeGreaterThan(0);
+			const [guardedHalf, plainHalf] = printed.split("const plain =");
+			expect(guardedHalf).toContain("@rbxts/surge: ");
+			expect(plainHalf).not.toContain("@rbxts/surge: ");
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("generated code with checks still type-checks in a second program", () => {
+		expect(
+			typeErrorsOfGeneratedCode(
+				`import { createBinarySerializer } from "@rbxts/surge";
+				interface P { x: number; list: Array<string>; map: Map<string, number>; tag: "a" | "b"; }
+				const s = createBinarySerializer<P>({ checks: true });`,
+			),
+		).toEqual([]);
+	});
+
+	// The value decides what is emitted, so it cannot be one the game works out
+	// as it runs; defaulting it to false would leave the boundary unchecked.
+	test("a checks value that is not a literal reports a diagnostic", () => {
+		const source = `import { createBinarySerializer } from "@rbxts/surge";
+			interface P { x: number; }
+			declare const untrusted: boolean;
+			const s = createBinarySerializer<P>({ checks: untrusted });`;
+		const { printed, diagnostics, cleanup } = runTransform(source);
+		try {
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0].messageText).toContain('must be written as "true" or "false"');
+			expect(diagnostics[0].start).toBe(source.indexOf("untrusted }"));
+			expect(printed).toContain("createBinarySerializer<P>({ checks: untrusted })");
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("an unknown option reports a diagnostic", () => {
+		const { diagnostics, cleanup } = runTransform(
+			`import { createBinarySerializer } from "@rbxts/surge";
+			interface P { x: number; }
+			const s = createBinarySerializer<P>({ checks: true, ...{} });`,
+		);
+		try {
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0].messageText).toContain('one property, "checks"');
+		} finally {
+			cleanup();
+		}
+	});
+
+	// There is no read path to check, so accepting it would say otherwise.
+	test("checks on createSerializer reports a diagnostic", () => {
+		const { diagnostics, cleanup } = runTransform(
+			`import { createSerializer } from "@rbxts/surge";
+			interface P { x: number; }
+			const s = createSerializer<P>({ checks: true });`,
+		);
+		try {
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0].messageText).toContain("createSerializer() takes no options");
+		} finally {
+			cleanup();
+		}
+	});
+});

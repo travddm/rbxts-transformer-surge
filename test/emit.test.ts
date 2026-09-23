@@ -6,8 +6,8 @@ import type { Field } from "../src/field";
 import { printNodes } from "./harness";
 
 /** Runs `field` through `Emitter.writeField`/`readField` and prints the resulting statements, for snapshotting. */
-function emitSnapshot(field: Field, helperFields: ReadonlyMap<string, Field> = new Map()): string {
-	const emitter = new Emitter(ts, ts.factory, helperFields);
+function emitSnapshot(field: Field, helperFields: ReadonlyMap<string, Field> = new Map(), checks = false): string {
+	const emitter = new Emitter(ts, ts.factory, helperFields, checks);
 	const writeOut: ts.Statement[] = [];
 	emitter.writeField(field, ts.factory.createIdentifier("value"), writeOut);
 
@@ -670,5 +670,97 @@ describe("Emitter component widths", () => {
 		// 3 + 1 in one alloc, where three unnarrowed components alone would be 12.
 		expect(reservations(output, "write")).toEqual([4]);
 		expect(reservations(output, "read")).toEqual([4]);
+	});
+});
+
+describe("Emitter read-side checks", () => {
+	/** The read half of `field` emitted with `checks: true`. */
+	function checkedRead(field: Field): string {
+		const output = emitSnapshot(field, new Map(), true);
+		return output.slice(output.indexOf("// read"));
+	}
+
+	test("every read is bounded against the input length", () => {
+		const output = checkedRead({ kind: "num", width: "u32" });
+		expect(output).toMatchSnapshot();
+		expect(output).toContain("@rbxts/surge: ");
+	});
+
+	// The default is what the read path has always been: no branch per read.
+	test("checks off emits no branch and no message", () => {
+		for (const field of [
+			{ kind: "num", width: "u32" } as Field,
+			{ kind: "array", element: { kind: "num", width: "u8" } } as Field,
+			{ kind: "str" } as Field,
+		]) {
+			expect(emitSnapshot(field)).not.toContain("@rbxts/surge: ");
+		}
+	});
+
+	test("a count is bounded by what the rest of the input could hold", () => {
+		const output = checkedRead({ kind: "array", element: { kind: "num", width: "f64" } });
+		expect(output).toMatchSnapshot();
+		// Eight bytes an element, against the bytes left.
+		expect(output).toMatch(/count[0-9]+ \* 8 > __surge_inputLength - __surge_readCursor/);
+	});
+
+	// The payload cannot bound a count of elements that read no bytes, which is
+	// the denial of service the cap is for.
+	test.each([
+		["a literal constant", { kind: "literalConst", value: 7 } as Field],
+		["a blob", { kind: "blob" } as Field],
+		[
+			"an object of constants",
+			{ kind: "object", fields: [{ name: "a", field: { kind: "literalConst", value: "x" } }] } as Field,
+		],
+	])("an array of %s is capped instead", (_label, element) => {
+		const output = checkedRead({ kind: "array", element });
+		expect(output).toMatch(/count[0-9]+ > 16777216/);
+		expect(output).not.toContain("__surge_inputLength - __surge_readCursor");
+	});
+
+	test("a dict's bound counts its key and its value", () => {
+		const map = checkedRead({
+			kind: "dict",
+			key: { kind: "num", width: "u8" },
+			value: { kind: "num", width: "u16" },
+			source: "map",
+		});
+		expect(map).toMatch(/count[0-9]+ \* 3 >/);
+		// A set writes only its keys, so an entry is the key alone.
+		const set = checkedRead({ kind: "dict", key: { kind: "num", width: "u8" }, value: undefined, source: "set" });
+		expect(set).toMatch(/count[0-9]+ > __surge_inputLength - __surge_readCursor/);
+	});
+
+	// The bound must never exceed what a valid value costs, or it rejects one.
+	test("a bound never counts bytes a valid value can leave out", () => {
+		const optional = checkedRead({
+			kind: "array",
+			element: { kind: "optional", inner: { kind: "num", width: "f64" }, packed: false },
+		});
+		// One presence byte an element, not the f64 behind it.
+		expect(optional).toMatch(/count[0-9]+ > __surge_inputLength - __surge_readCursor/);
+		const variants = checkedRead({
+			kind: "array",
+			element: {
+				kind: "guardedUnion",
+				variants: [
+					{ kind: "num", width: "f64" },
+					{ kind: "bool", packed: false },
+				],
+			},
+		});
+		// The tag, plus the smallest variant rather than the largest.
+		expect(variants).toMatch(/count[0-9]+ \* 2 >/);
+	});
+
+	test("the input length is read once per deserialize", () => {
+		const emitter = new Emitter(ts, ts.factory, new Map(), true);
+		emitter.beginFunction();
+		emitter.readField({ kind: "num", width: "u8" }, []);
+		expect(printNodes(emitter.readStateDecls())).toContain("__surge_inputLength");
+		const begin = printNodes(emitter.beginReadStatements(ts.factory.createIdentifier("input")));
+		expect(begin).toContain("__surge_inputLength = buffer.len(__surge_input)");
+		expect(begin.match(/buffer\.len/g)).toHaveLength(1);
 	});
 });

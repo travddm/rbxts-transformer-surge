@@ -1,6 +1,6 @@
 import type ts from "typescript";
 
-import { resolveFactoryName } from "./detect";
+import { type FactoryName, resolveFactoryName } from "./detect";
 import { Emitter, importAlias } from "./emit";
 import { TypeWalker } from "./walk";
 
@@ -79,12 +79,75 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				typescript.setEmitFlags(first, typescript.EmitFlags.NoLeadingComments);
 			}
 
+			/**
+			 * The `checks` of the factory's options argument (Transformer Design
+			 * §7), or `undefined` when the call site cannot be read.
+			 *
+			 * Only an object literal with literal property values is accepted. A
+			 * value computed at run time cannot decide what is emitted at compile
+			 * time, and defaulting it to `false` would leave a boundary a user
+			 * meant to protect silently unchecked, so it is a diagnostic instead.
+			 */
+			function readChecksOption(factoryName: FactoryName, node: ts.CallExpression): boolean | undefined {
+				const [options, ...rest] = node.arguments;
+				if (options === undefined) {
+					return false;
+				}
+				if (rest.length > 0) {
+					report(node, `${factoryName}() takes one options argument at most.`);
+					return undefined;
+				}
+				// `createSerializer` has no read path, so there is nothing for
+				// `checks` to do there and accepting it would say otherwise.
+				if (factoryName === "createSerializer") {
+					report(
+						options,
+						`createSerializer() takes no options: "checks" is read-side, so it belongs on ` +
+							`createDeserializer() or createBinarySerializer().`,
+					);
+					return undefined;
+				}
+				if (!typescript.isObjectLiteralExpression(options)) {
+					report(
+						options,
+						`${factoryName}()'s options must be written as an object literal at the call site.`,
+					);
+					return undefined;
+				}
+				let checks = false;
+				for (const property of options.properties) {
+					if (
+						!typescript.isPropertyAssignment(property) ||
+						!typescript.isIdentifier(property.name) ||
+						property.name.text !== "checks"
+					) {
+						report(property, `${factoryName}()'s options take one property, "checks".`);
+						return undefined;
+					}
+					const value = property.initializer.kind;
+					if (value !== typescript.SyntaxKind.TrueKeyword && value !== typescript.SyntaxKind.FalseKeyword) {
+						report(
+							property.initializer,
+							`"checks" must be written as "true" or "false" at the call site -- it decides what is ` +
+								`emitted, so it cannot be a value the game works out as it runs.`,
+						);
+						return undefined;
+					}
+					checks = value === typescript.SyntaxKind.TrueKeyword;
+				}
+				return checks;
+			}
+
 			function visit(node: ts.Node): ts.Node {
 				if (typescript.isCallExpression(node)) {
 					const factoryName = resolveFactoryName(typescript, checker, node.expression);
 					if (factoryName) {
 						if (node.typeArguments?.length === 1) {
-							return buildReplacement(factoryName, node, node.typeArguments[0]);
+							const checks = readChecksOption(factoryName, node);
+							// Left untransformed: the diagnostic fails the build before emit.
+							return checks === undefined
+								? node
+								: buildReplacement(factoryName, node, node.typeArguments[0], checks);
 						}
 						report(
 							node,
@@ -110,6 +173,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				factoryName: string,
 				node: ts.CallExpression,
 				typeArgumentNode: ts.TypeNode,
+				checks: boolean,
 			): ts.Expression {
 				const f = ctx.factory;
 				const type = checker.getTypeFromTypeNode(typeArgumentNode);
@@ -124,7 +188,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					return node;
 				}
 
-				const emitter = new Emitter(typescript, f, walker.getHelperFields());
+				const emitter = new Emitter(typescript, f, walker.getHelperFields(), checks);
 
 				const valueParam = f.createParameterDeclaration(
 					undefined,

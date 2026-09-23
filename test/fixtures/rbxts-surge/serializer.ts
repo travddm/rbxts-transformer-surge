@@ -17,10 +17,14 @@ export function createSerializer<T>(): (value: T) => { buffer: buffer; blobs: Ar
 	return notConfigured();
 }
 
-export function createDeserializer<T>(): (input: buffer, inputBlobs?: Array<defined>) => T {
+export interface SerializerOptions {
+	readonly checks?: boolean;
+}
+
+export function createDeserializer<T>(options?: SerializerOptions): (input: buffer, inputBlobs?: Array<defined>) => T {
 	return notConfigured();
 }
 
-export function createBinarySerializer<T>(): Serializer<T> {
+export function createBinarySerializer<T>(options?: SerializerOptions): Serializer<T> {
 	return notConfigured();
 }
