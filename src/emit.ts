@@ -626,296 +626,287 @@ export class Emitter {
 	// ---- WRITE ----------------------------------------------------------
 
 	public writeField(field: Field, value: ts.Expression, out: ts.Statement[]): void {
-		const f = this.factory;
 		switch (field.kind) {
-			case "num": {
-				const bytes = WIDTH_BYTES[field.width];
-				const { buf, pos, statements } = this.destructureAlloc("alloc", bytes);
-				out.push(...statements);
-				out.push(...this.writeNumber(field.width, buf, pos, value));
-				return;
-			}
-			case "bool": {
-				const { buf, pos, statements } = this.destructureAlloc("alloc", 1);
-				out.push(...statements);
-				out.push(
-					f.createExpressionStatement(
-						this.bufferCall("writeu8", [
-							buf,
-							pos,
-							f.createConditionalExpression(value, undefined, this.num(1), undefined, this.num(0)),
-						]),
-					),
-				);
-				return;
-			}
-			case "str": {
-				const s = this.fresh("s");
-				out.push(this.constStatement(s, value));
-				const lenExpr = f.createCallExpression(f.createPropertyAccessExpression(s, "size"), undefined, []);
-				const strExact = this.exactCount(field.length);
-				if (strExact !== undefined) {
-					const { buf, pos, statements } = this.destructureAlloc("alloc", strExact);
-					out.push(...statements);
-					// The fourth argument is a byte count, so a longer string is
-					// truncated to it and a shorter one raises `string length overflow`.
-					out.push(
-						f.createExpressionStatement(this.bufferCall("writestring", [buf, pos, s, this.num(strExact)])),
-					);
-					return;
-				}
-				const strWidth = this.lengthWidth(field.length);
-				const {
-					buf: lbuf,
-					pos: lpos,
-					statements: lstmt,
-				} = this.destructureAlloc("alloc", WIDTH_BYTES[strWidth]);
-				out.push(...lstmt);
-				out.push(...this.writeNumber(strWidth, lbuf, lpos, lenExpr));
-				const { buf: sbuf, pos: spos, statements: sstmt } = this.destructureAlloc("alloc", lenExpr);
-				out.push(...sstmt);
-				out.push(f.createExpressionStatement(this.bufferCall("writestring", [sbuf, spos, s])));
-				return;
-			}
-			case "vector2": {
-				this.writeNum2(value, "X", "Y", "f32", out);
-				return;
-			}
-			case "datatype": {
-				this.writeDatatype(field.name, value, out);
-				return;
-			}
-			case "buffer": {
-				const source = this.fresh("src");
-				out.push(this.constStatement(source, value));
-				const bufferExact = this.exactCount(field.length);
-				if (bufferExact !== undefined) {
-					const { buf, pos, statements } = this.destructureAlloc("alloc", bufferExact);
-					out.push(...statements);
-					// `buffer.copy`'s count is what is read from the source, so a
-					// shorter source is out of bounds and a longer one is truncated.
-					out.push(
-						f.createExpressionStatement(
-							this.bufferCall("copy", [buf, pos, source, this.num(0), this.num(bufferExact)]),
-						),
-					);
-					return;
-				}
-				const len = this.fresh("len");
-				out.push(this.constStatement(len, this.bufferCall("len", [source])));
-				const bufferWidth = this.lengthWidth(field.length);
-				const {
-					buf: lbuf,
-					pos: lpos,
-					statements: lstmt,
-				} = this.destructureAlloc("alloc", WIDTH_BYTES[bufferWidth]);
-				out.push(...lstmt);
-				out.push(...this.writeNumber(bufferWidth, lbuf, lpos, len));
-				const { buf, pos, statements } = this.destructureAlloc("alloc", len);
-				out.push(...statements);
-				out.push(f.createExpressionStatement(this.bufferCall("copy", [buf, pos, source, this.num(0), len])));
-				return;
-			}
-			case "vector3": {
-				const widths = this.componentsOf(field.components);
-				const { buf, pos, statements } = this.destructureAlloc("alloc", this.componentBytes(widths));
-				out.push(...statements);
-				this.writeNum3(value, "X", "Y", "Z", widths, { buf, pos, offset: 0 }, out);
-				return;
-			}
-			case "color3": {
-				this.writeColor3(value, out);
-				return;
-			}
-			case "cframe": {
-				if (field.packed) {
-					// The packed form branches on the value, so it is a runtime function
-					// (cframe.ts in @rbxts/surge) and not inlined code. It writes 1, 13 or
-					// 25 bytes: reserve the largest, then pull the cursor back to what it
-					// actually used. Reserving first is what guarantees the room.
-					const { buf, pos, statements } = this.destructureAlloc("alloc", PACKED_CFRAME_MAX_BYTES);
-					out.push(...statements);
-					out.push(
-						this.assign(
-							CURSOR,
-							this.factory.createBinaryExpression(
-								pos,
-								this.ts_.SyntaxKind.PlusToken,
-								this.call("writePackedCFrame", [buf, pos, value]),
-							),
-						),
-					);
-					return;
-				}
-				this.writeCFrame(value, field.position, out);
-				return;
-			}
-			case "colorSequence": {
-				this.writeSequence(value, "ColorSequence", out);
-				return;
-			}
-			case "numberSequence": {
-				this.writeSequence(value, "NumberSequence", out);
-				return;
-			}
-			case "enum": {
-				const bytes = field.members.length <= 256 ? 1 : 2;
-				const { buf, pos, statements } = this.destructureAlloc("alloc", bytes);
-				out.push(...statements);
-				out.push(
-					f.createExpressionStatement(
-						this.bufferCall(bytes === 1 ? "writeu8" : "writeu16", [
-							buf,
-							pos,
-							this.enumIndexExpr(field.enumName, field.members, value),
-						]),
-					),
-				);
-				return;
-			}
-			case "object": {
-				this.writeObject(field, value, out);
-				return;
-			}
-			case "recursiveRef": {
-				// `ensureHelper` is idempotent (guarded by `generatedHelpers`):
-				// calling it here matters when this `recursiveRef` is the root
-				// field itself (a directly recursive union/alias, not one reached
-				// through an `object`'s `helperName`, which already calls it from
-				// `writeObject`) -- without it, this call site would reference a
-				// helper function that's never declared.
-				this.ensureHelper(field.helperName);
-				out.push(f.createExpressionStatement(this.callLocal(`${field.helperName}_write`, [value])));
-				return;
-			}
-			case "array": {
-				const arr = this.fresh("arr");
-				out.push(this.constStatement(arr, value));
-				const arrayExact = this.exactCount(field.length);
-				if (arrayExact !== undefined) {
-					// Indexed rather than `for...of`, so exactly this many are
-					// written however many the value holds. A longer one is
-					// ignored past the bound. A shorter one writes `nil`
-					// elements, which raises for every element kind but an
-					// optional -- `nil` is what an absent optional writes, so
-					// there it pads instead (pinned in collections.spec.ts).
-					const i = this.fresh("i");
-					const body: ts.Statement[] = [];
-					this.writeField(field.element, f.createElementAccessExpression(arr, i), body);
-					out.push(this.indexedLoop(i, 0, this.num(arrayExact), body));
-					return;
-				}
-				const arrayWidth = this.lengthWidth(field.length);
-				const { buf, pos, statements } = this.destructureAlloc("alloc", WIDTH_BYTES[arrayWidth]);
-				out.push(...statements);
-				out.push(...this.writeNumber(arrayWidth, buf, pos, this.sizeOf(arr)));
-				const item = this.fresh("item");
-				const body: ts.Statement[] = [];
-				this.writeField(field.element, item, body);
-				out.push(
-					f.createForOfStatement(
-						undefined,
-						f.createVariableDeclarationList([f.createVariableDeclaration(item)], this.ts_.NodeFlags.Const),
-						arr,
-						f.createBlock(body, true),
-					),
-				);
-				return;
-			}
-			case "tuple": {
-				const tup = this.fresh("tup");
-				out.push(this.constStatement(tup, value));
-				this.pushScoped(
-					field.fixed.map((elementField, i) =>
-						this.measure((itemOut) =>
-							this.writeField(elementField, f.createElementAccessExpression(tup, this.num(i)), itemOut),
-						),
-					),
-					out,
-				);
-				if (field.rest) {
-					const fixedCount = field.fixed.length;
-					const restExact = this.exactCount(field.length);
-					if (restExact !== undefined) {
-						const i = this.fresh("i");
-						const body: ts.Statement[] = [];
-						this.writeField(
-							field.rest,
-							this.castTo(f.createElementAccessExpression(tup, i), this.fieldToTypeNode(field.rest)),
-							body,
-						);
-						out.push(this.indexedLoop(i, fixedCount, this.num(fixedCount + restExact), body));
-						return;
-					}
-					const restCountExpr = f.createBinaryExpression(
-						this.sizeOf(tup),
-						this.ts_.SyntaxKind.MinusToken,
-						this.num(fixedCount),
-					);
-					const restWidth = this.lengthWidth(field.length);
-					const { buf, pos, statements } = this.destructureAlloc("alloc", WIDTH_BYTES[restWidth]);
-					out.push(...statements);
-					out.push(...this.writeNumber(restWidth, buf, pos, restCountExpr));
-					const i = this.fresh("i");
-					const body: ts.Statement[] = [];
-					// `tup[i]` has the union of every element type; the index is
-					// past the fixed elements, so it is a rest element.
-					this.writeField(
-						field.rest,
-						this.castTo(f.createElementAccessExpression(tup, i), this.fieldToTypeNode(field.rest)),
-						body,
-					);
-					out.push(
-						f.createForStatement(
-							f.createVariableDeclarationList(
-								[f.createVariableDeclaration(i, undefined, undefined, this.num(fixedCount))],
-								this.ts_.NodeFlags.Let,
-							),
-							f.createBinaryExpression(i, this.ts_.SyntaxKind.LessThanToken, this.sizeOf(tup)),
-							f.createPostfixIncrement(i),
-							f.createBlock(body, true),
-						),
-					);
-				}
-				return;
-			}
-			case "dict": {
-				this.writeDict(field, value, out);
-				return;
-			}
-			case "optional": {
-				this.writeOptional(field, value, out, true);
-				return;
-			}
-			case "literalConst": {
+			case "num":
+				return this.writeNum(field, value, out);
+			case "bool":
+				return this.writeBool(value, out);
+			case "str":
+				return this.writeStr(field, value, out);
+			case "vector2":
+				return this.writeNum2(value, "X", "Y", "f32", out);
+			case "datatype":
+				return this.writeDatatype(field.name, value, out);
+			case "buffer":
+				return this.writeBuffer(field, value, out);
+			case "vector3":
+				return this.writeVector3(field, value, out);
+			case "color3":
+				return this.writeColor3(value, out);
+			case "cframe":
+				return field.packed ? this.writePackedCFrame(value, out) : this.writeCFrame(value, field.position, out);
+			case "colorSequence":
+				return this.writeSequence(value, "ColorSequence", out);
+			case "numberSequence":
+				return this.writeSequence(value, "NumberSequence", out);
+			case "enum":
+				return this.writeEnum(field, value, out);
+			case "object":
+				return this.writeObject(field, value, out);
+			case "recursiveRef":
+				return this.writeRecursiveRef(field, value, out);
+			case "array":
+				return this.writeArray(field, value, out);
+			case "tuple":
+				return this.writeTuple(field, value, out);
+			case "dict":
+				return this.writeDict(field, value, out);
+			case "optional":
+				return this.writeOptional(field, value, out, true);
+			case "literalConst":
 				return; // zero bytes -- known on both ends at compile time.
-			}
-			case "literal": {
-				const { buf, pos, statements } = this.destructureAlloc("alloc", field.values.length <= 256 ? 1 : 2);
-				out.push(...statements);
-				const method = field.values.length <= 256 ? "writeu8" : "writeu16";
-				out.push(
-					f.createExpressionStatement(
-						this.bufferCall(method, [buf, pos, this.literalIndexExpr(field.values, value)]),
-					),
-				);
-				return;
-			}
-			case "taggedUnion": {
-				this.writeTaggedUnion(field, value, out);
-				return;
-			}
-			case "guardedUnion": {
-				this.writeGuardedUnion(field, value, out);
-				return;
-			}
-			case "blob": {
-				// `pushBlob` takes `defined`, and the static type of a blob can be `unknown`.
-				const asDefined = this.castTo(value, f.createTypeReferenceNode("defined"));
-				out.push(f.createExpressionStatement(this.call("pushBlob", [asDefined])));
-				return;
-			}
+			case "literal":
+				return this.writeLiteral(field, value, out);
+			case "taggedUnion":
+				return this.writeTaggedUnion(field, value, out);
+			case "guardedUnion":
+				return this.writeGuardedUnion(field, value, out);
+			case "blob":
+				return this.writeBlob(value, out);
 		}
+	}
+
+	private writeNum(field: Extract<Field, { kind: "num" }>, value: ts.Expression, out: ts.Statement[]): void {
+		const { buf, pos, statements } = this.destructureAlloc("alloc", WIDTH_BYTES[field.width]);
+		out.push(...statements);
+		out.push(...this.writeNumberAt(field.width, buf, pos, value));
+	}
+
+	private writeBool(value: ts.Expression, out: ts.Statement[]): void {
+		const f = this.factory;
+		const { buf, pos, statements } = this.destructureAlloc("alloc", 1);
+		out.push(...statements);
+		out.push(
+			f.createExpressionStatement(
+				this.bufferCall("writeu8", [
+					buf,
+					pos,
+					f.createConditionalExpression(value, undefined, this.num(1), undefined, this.num(0)),
+				]),
+			),
+		);
+	}
+
+	/** Reserves and writes the count a variable-length kind puts ahead of its contents. */
+	private writeCount(length: CountSpec | undefined, count: ts.Expression, out: ts.Statement[]): void {
+		const width = this.lengthWidth(length);
+		const { buf, pos, statements } = this.destructureAlloc("alloc", WIDTH_BYTES[width]);
+		out.push(...statements);
+		out.push(...this.writeNumberAt(width, buf, pos, count));
+	}
+
+	private writeStr(field: Extract<Field, { kind: "str" }>, value: ts.Expression, out: ts.Statement[]): void {
+		const f = this.factory;
+		const s = this.fresh("s");
+		out.push(this.constStatement(s, value));
+		const lenExpr = f.createCallExpression(f.createPropertyAccessExpression(s, "size"), undefined, []);
+		const exact = this.exactCount(field.length);
+		if (exact !== undefined) {
+			const { buf, pos, statements } = this.destructureAlloc("alloc", exact);
+			out.push(...statements);
+			// The fourth argument is a byte count, so a longer string is
+			// truncated to it and a shorter one raises `string length overflow`.
+			out.push(f.createExpressionStatement(this.bufferCall("writestring", [buf, pos, s, this.num(exact)])));
+			return;
+		}
+		this.writeCount(field.length, lenExpr, out);
+		const { buf, pos, statements } = this.destructureAlloc("alloc", lenExpr);
+		out.push(...statements);
+		out.push(f.createExpressionStatement(this.bufferCall("writestring", [buf, pos, s])));
+	}
+
+	private writeBuffer(field: Extract<Field, { kind: "buffer" }>, value: ts.Expression, out: ts.Statement[]): void {
+		const f = this.factory;
+		const source = this.fresh("src");
+		out.push(this.constStatement(source, value));
+		const exact = this.exactCount(field.length);
+		if (exact !== undefined) {
+			const { buf, pos, statements } = this.destructureAlloc("alloc", exact);
+			out.push(...statements);
+			// `buffer.copy`'s count is what is read from the source, so a
+			// shorter source is out of bounds and a longer one is truncated.
+			out.push(
+				f.createExpressionStatement(this.bufferCall("copy", [buf, pos, source, this.num(0), this.num(exact)])),
+			);
+			return;
+		}
+		const len = this.fresh("len");
+		out.push(this.constStatement(len, this.bufferCall("len", [source])));
+		this.writeCount(field.length, len, out);
+		const { buf, pos, statements } = this.destructureAlloc("alloc", len);
+		out.push(...statements);
+		out.push(f.createExpressionStatement(this.bufferCall("copy", [buf, pos, source, this.num(0), len])));
+	}
+
+	private writeVector3(field: Extract<Field, { kind: "vector3" }>, value: ts.Expression, out: ts.Statement[]): void {
+		const widths = this.componentsOf(field.components);
+		const { buf, pos, statements } = this.destructureAlloc("alloc", this.componentBytes(widths));
+		out.push(...statements);
+		this.writeNum3(value, "X", "Y", "Z", widths, { buf, pos, offset: 0 }, out);
+	}
+
+	/**
+	 * The packed form branches on the value, so it is a runtime function
+	 * (cframe.ts in @rbxts/surge) and not inlined code. It writes 1, 13 or
+	 * 25 bytes: reserve the largest, then pull the cursor back to what it
+	 * actually used. Reserving first is what guarantees the room.
+	 */
+	private writePackedCFrame(value: ts.Expression, out: ts.Statement[]): void {
+		const { buf, pos, statements } = this.destructureAlloc("alloc", PACKED_CFRAME_MAX_BYTES);
+		out.push(...statements);
+		out.push(
+			this.assign(
+				CURSOR,
+				this.factory.createBinaryExpression(
+					pos,
+					this.ts_.SyntaxKind.PlusToken,
+					this.call("writePackedCFrame", [buf, pos, value]),
+				),
+			),
+		);
+	}
+
+	private writeEnum(field: Extract<Field, { kind: "enum" }>, value: ts.Expression, out: ts.Statement[]): void {
+		const bytes = field.members.length <= 256 ? 1 : 2;
+		const { buf, pos, statements } = this.destructureAlloc("alloc", bytes);
+		out.push(...statements);
+		out.push(
+			this.factory.createExpressionStatement(
+				this.bufferCall(bytes === 1 ? "writeu8" : "writeu16", [
+					buf,
+					pos,
+					this.enumIndexExpr(field.enumName, field.members, value),
+				]),
+			),
+		);
+	}
+
+	private writeRecursiveRef(
+		field: Extract<Field, { kind: "recursiveRef" }>,
+		value: ts.Expression,
+		out: ts.Statement[],
+	): void {
+		// `ensureHelper` is idempotent (guarded by `generatedHelpers`):
+		// calling it here matters when this `recursiveRef` is the root
+		// field itself (a directly recursive union/alias, not one reached
+		// through an `object`'s `helperName`, which already calls it from
+		// `writeObject`) -- without it, this call site would reference a
+		// helper function that's never declared.
+		this.ensureHelper(field.helperName);
+		out.push(this.factory.createExpressionStatement(this.callLocal(`${field.helperName}_write`, [value])));
+	}
+
+	private writeArray(field: Extract<Field, { kind: "array" }>, value: ts.Expression, out: ts.Statement[]): void {
+		const f = this.factory;
+		const arr = this.fresh("arr");
+		out.push(this.constStatement(arr, value));
+		const exact = this.exactCount(field.length);
+		if (exact !== undefined) {
+			// Indexed rather than `for...of`, so exactly this many are
+			// written however many the value holds. A longer one is
+			// ignored past the bound. A shorter one writes `nil`
+			// elements, which raises for every element kind but an
+			// optional -- `nil` is what an absent optional writes, so
+			// there it pads instead (pinned in collections.spec.ts).
+			const i = this.fresh("i");
+			const body: ts.Statement[] = [];
+			this.writeField(field.element, f.createElementAccessExpression(arr, i), body);
+			out.push(this.indexedLoop(i, 0, this.num(exact), body));
+			return;
+		}
+		this.writeCount(field.length, this.sizeOf(arr), out);
+		const item = this.fresh("item");
+		const body: ts.Statement[] = [];
+		this.writeField(field.element, item, body);
+		out.push(
+			f.createForOfStatement(
+				undefined,
+				f.createVariableDeclarationList([f.createVariableDeclaration(item)], this.ts_.NodeFlags.Const),
+				arr,
+				f.createBlock(body, true),
+			),
+		);
+	}
+
+	private writeTuple(field: Extract<Field, { kind: "tuple" }>, value: ts.Expression, out: ts.Statement[]): void {
+		const f = this.factory;
+		const tup = this.fresh("tup");
+		out.push(this.constStatement(tup, value));
+		this.pushScoped(
+			field.fixed.map((elementField, i) =>
+				this.measure((itemOut) =>
+					this.writeField(elementField, f.createElementAccessExpression(tup, this.num(i)), itemOut),
+				),
+			),
+			out,
+		);
+		if (!field.rest) {
+			return;
+		}
+		const rest = field.rest;
+		const fixedCount = field.fixed.length;
+		const exact = this.exactCount(field.length);
+		// `tup[i]` has the union of every element type; the index is past
+		// the fixed elements, so it is a rest element.
+		const restElement = (i: ts.Identifier): ts.Expression =>
+			this.castTo(f.createElementAccessExpression(tup, i), this.fieldToTypeNode(rest));
+		if (exact !== undefined) {
+			const i = this.fresh("i");
+			const body: ts.Statement[] = [];
+			this.writeField(rest, restElement(i), body);
+			out.push(this.indexedLoop(i, fixedCount, this.num(fixedCount + exact), body));
+			return;
+		}
+		this.writeCount(
+			field.length,
+			f.createBinaryExpression(this.sizeOf(tup), this.ts_.SyntaxKind.MinusToken, this.num(fixedCount)),
+			out,
+		);
+		const i = this.fresh("i");
+		const body: ts.Statement[] = [];
+		this.writeField(rest, restElement(i), body);
+		out.push(
+			f.createForStatement(
+				f.createVariableDeclarationList(
+					[f.createVariableDeclaration(i, undefined, undefined, this.num(fixedCount))],
+					this.ts_.NodeFlags.Let,
+				),
+				f.createBinaryExpression(i, this.ts_.SyntaxKind.LessThanToken, this.sizeOf(tup)),
+				f.createPostfixIncrement(i),
+				f.createBlock(body, true),
+			),
+		);
+	}
+
+	private writeLiteral(field: Extract<Field, { kind: "literal" }>, value: ts.Expression, out: ts.Statement[]): void {
+		const bytes = field.values.length <= 256 ? 1 : 2;
+		const { buf, pos, statements } = this.destructureAlloc("alloc", bytes);
+		out.push(...statements);
+		out.push(
+			this.factory.createExpressionStatement(
+				this.bufferCall(bytes === 1 ? "writeu8" : "writeu16", [
+					buf,
+					pos,
+					this.literalIndexExpr(field.values, value),
+				]),
+			),
+		);
+	}
+
+	private writeBlob(value: ts.Expression, out: ts.Statement[]): void {
+		// `pushBlob` takes `defined`, and the static type of a blob can be `unknown`.
+		const asDefined = this.castTo(value, this.factory.createTypeReferenceNode("defined"));
+		out.push(this.factory.createExpressionStatement(this.call("pushBlob", [asDefined])));
 	}
 
 	/**
@@ -1109,7 +1100,12 @@ export class Emitter {
 	 * number modulo 2^32, so the same two writes store an `i24` in two's
 	 * complement with no branch on the sign.
 	 */
-	private writeNumber(width: NumWidth, buf: ts.Expression, pos: ts.Expression, value: ts.Expression): ts.Statement[] {
+	private writeNumberAt(
+		width: NumWidth,
+		buf: ts.Expression,
+		pos: ts.Expression,
+		value: ts.Expression,
+	): ts.Statement[] {
 		const f = this.factory;
 		if (width !== "u24" && width !== "i24") {
 			return [f.createExpressionStatement(this.bufferCall(`write${width}`, [buf, pos, value]))];
@@ -1132,7 +1128,7 @@ export class Emitter {
 		];
 	}
 
-	private readNumber(width: NumWidth, buf: ts.Expression, pos: ts.Expression): ts.Expression {
+	private readNumberAt(width: NumWidth, buf: ts.Expression, pos: ts.Expression): ts.Expression {
 		const f = this.factory;
 		if (width !== "u24" && width !== "i24") {
 			return this.bufferCall(`read${width}`, [buf, pos]);
@@ -1340,7 +1336,7 @@ export class Emitter {
 		let offset = 0;
 		[a, b, c].forEach((component, i) => {
 			out.push(
-				...this.writeNumber(
+				...this.writeNumberAt(
 					widths[i],
 					slot.buf,
 					this.at(slot, offset),
@@ -1665,7 +1661,7 @@ export class Emitter {
 				),
 			);
 		}
-		out.push(...this.writeNumber(countWidth, cbuf, cpos, count));
+		out.push(...this.writeNumberAt(countWidth, cbuf, cpos, count));
 	}
 
 	private writeObject(field: Extract<Field, { kind: "object" }>, value: ts.Expression, out: ts.Statement[]): void {
@@ -1995,251 +1991,223 @@ export class Emitter {
 	// ---- READ -------------------------------------------------------------
 
 	public readField(field: Field, out: ts.Statement[]): ts.Expression {
-		const f = this.factory;
 		switch (field.kind) {
-			case "num": {
-				const bytes = WIDTH_BYTES[field.width];
-				const { buf, pos, statements } = this.destructureAlloc("readAlloc", bytes);
-				out.push(...statements);
-				return this.readNumber(field.width, buf, pos);
-			}
-			case "bool": {
-				const { buf, pos, statements } = this.destructureAlloc("readAlloc", 1);
-				out.push(...statements);
-				return f.createBinaryExpression(
-					this.bufferCall("readu8", [buf, pos]),
-					this.ts_.SyntaxKind.ExclamationEqualsEqualsToken,
-					this.num(0),
-				);
-			}
-			case "str": {
-				const strExact = this.exactCount(field.length);
-				if (strExact !== undefined) {
-					const { buf, pos, statements } = this.destructureAlloc("readAlloc", strExact);
-					out.push(...statements);
-					return this.bufferCall("readstring", [buf, pos, this.num(strExact)]);
-				}
-				const strWidth = this.lengthWidth(field.length);
-				const {
-					buf: lbuf,
-					pos: lpos,
-					statements: lstmt,
-				} = this.destructureAlloc("readAlloc", WIDTH_BYTES[strWidth]);
-				out.push(...lstmt);
-				const len = this.fresh("len");
-				out.push(this.constStatement(len, this.readNumber(strWidth, lbuf, lpos)));
-				const { buf: sbuf, pos: spos, statements: sstmt } = this.destructureAlloc("readAlloc", len);
-				out.push(...sstmt);
-				return this.bufferCall("readstring", [sbuf, spos, len]);
-			}
-			case "vector2": {
-				const [x, y] = this.readNum2("f32", out);
-				return f.createNewExpression(f.createIdentifier("Vector2"), undefined, [x, y]);
-			}
-			case "datatype": {
+			case "num":
+				return this.readNum(field, out);
+			case "bool":
+				return this.readBool(out);
+			case "str":
+				return this.readStr(field, out);
+			case "vector2":
+				return this.readVector2(out);
+			case "datatype":
 				return this.readDatatype(field.name, out);
-			}
-			case "buffer": {
-				const bufferExact = this.exactCount(field.length);
-				if (bufferExact !== undefined) {
-					const { buf, pos, statements } = this.destructureAlloc("readAlloc", bufferExact);
-					out.push(...statements);
-					const exactResult = this.fresh("bytes");
-					out.push(this.constStatement(exactResult, this.bufferCall("create", [this.num(bufferExact)])));
-					out.push(
-						f.createExpressionStatement(
-							this.bufferCall("copy", [exactResult, this.num(0), buf, pos, this.num(bufferExact)]),
-						),
-					);
-					return exactResult;
-				}
-				const bufferWidth = this.lengthWidth(field.length);
-				const {
-					buf: lbuf,
-					pos: lpos,
-					statements: lstmt,
-				} = this.destructureAlloc("readAlloc", WIDTH_BYTES[bufferWidth]);
-				out.push(...lstmt);
-				const len = this.fresh("len");
-				out.push(this.constStatement(len, this.readNumber(bufferWidth, lbuf, lpos)));
-				const { buf, pos, statements } = this.destructureAlloc("readAlloc", len);
-				out.push(...statements);
-				// A copy: the input buffer holds the whole payload, and the caller owns the result.
-				const result = this.fresh("bytes");
-				out.push(this.constStatement(result, this.bufferCall("create", [len])));
-				out.push(f.createExpressionStatement(this.bufferCall("copy", [result, this.num(0), buf, pos, len])));
-				return result;
-			}
-			case "vector3": {
-				const widths = this.componentsOf(field.components);
-				const { buf, pos, statements } = this.destructureAlloc("readAlloc", this.componentBytes(widths));
-				out.push(...statements);
-				const [x, y, z] = this.readNum3(widths, { buf, pos, offset: 0 });
-				return f.createNewExpression(f.createIdentifier("Vector3"), undefined, [x, y, z]);
-			}
-			case "color3": {
+			case "buffer":
+				return this.readBuffer(field, out);
+			case "vector3":
+				return this.readVector3(field, out);
+			case "color3":
 				return this.readColor3(out);
-			}
-			case "cframe": {
+			case "cframe":
 				return field.packed ? this.readPackedCFrame(out) : this.readCFrame(field.position, out);
-			}
-			case "colorSequence": {
+			case "colorSequence":
 				return this.readSequence("ColorSequence", out);
-			}
-			case "numberSequence": {
+			case "numberSequence":
 				return this.readSequence("NumberSequence", out);
-			}
-			case "enum": {
-				const bytes = field.members.length <= 256 ? 1 : 2;
-				const { buf, pos, statements } = this.destructureAlloc("readAlloc", bytes);
-				out.push(...statements);
-				const idx = this.fresh("idx");
-				out.push(this.constStatement(idx, this.bufferCall(bytes === 1 ? "readu8" : "readu16", [buf, pos])));
-				return this.enumFromIndexExpr(field.enumName, field.members, idx);
-			}
-			case "object": {
+			case "enum":
+				return this.readEnum(field, out);
+			case "object":
 				return this.readObject(field, out);
-			}
-			case "recursiveRef": {
-				this.ensureHelper(field.helperName);
-				return this.bindSideEffect(this.callLocal(`${field.helperName}_read`, []), out);
-			}
-			case "array": {
-				// The exact form writes no count, so the loop bound is the
-				// literal the type carries instead of a value read back.
-				const arrayExact = this.exactCount(field.length);
-				let count: ts.Expression;
-				if (arrayExact === undefined) {
-					const arrayWidth = this.lengthWidth(field.length);
-					const { buf, pos, statements } = this.destructureAlloc("readAlloc", WIDTH_BYTES[arrayWidth]);
-					out.push(...statements);
-					const countLocal = this.fresh("count");
-					out.push(this.constStatement(countLocal, this.readNumber(arrayWidth, buf, pos)));
-					this.checkCount(countLocal, field.element, out);
-					count = countLocal;
-				} else {
-					count = this.num(arrayExact);
-				}
-				const result = this.fresh("result");
-				out.push(
-					f.createVariableStatement(
-						undefined,
-						f.createVariableDeclarationList(
-							[
-								f.createVariableDeclaration(
-									result,
-									undefined,
-									undefined,
-									f.createArrayLiteralExpression([]),
-								),
-							],
-							this.ts_.NodeFlags.Const,
-						),
-					),
-				);
-				const i = this.fresh("_i");
-				const body: ts.Statement[] = [];
-				const itemExpr = this.readField(field.element, body);
-				body.push(
-					f.createExpressionStatement(
-						f.createCallExpression(f.createPropertyAccessExpression(result, "push"), undefined, [itemExpr]),
-					),
-				);
-				out.push(this.countedLoop(i, count, body));
-				return result;
-			}
-			case "tuple": {
-				const result = this.fresh("tup");
-				out.push(
-					f.createVariableStatement(
-						undefined,
-						f.createVariableDeclarationList(
-							[
-								f.createVariableDeclaration(
-									result,
-									undefined,
-									undefined,
-									f.createArrayLiteralExpression([]),
-								),
-							],
-							this.ts_.NodeFlags.Const,
-						),
-					),
-				);
-				this.pushScoped(
-					field.fixed.map((elementField) =>
-						this.measure((itemOut) => {
-							const elementExpr = this.readField(elementField, itemOut);
-							itemOut.push(
-								f.createExpressionStatement(
-									f.createCallExpression(
-										f.createPropertyAccessExpression(result, "push"),
-										undefined,
-										[elementExpr],
-									),
-								),
-							);
-						}),
-					),
-					out,
-				);
-				if (field.rest) {
-					const restExact = this.exactCount(field.length);
-					let count: ts.Expression;
-					if (restExact === undefined) {
-						const restWidth = this.lengthWidth(field.length);
-						const { buf, pos, statements } = this.destructureAlloc("readAlloc", WIDTH_BYTES[restWidth]);
-						out.push(...statements);
-						const countLocal = this.fresh("count");
-						out.push(this.constStatement(countLocal, this.readNumber(restWidth, buf, pos)));
-						this.checkCount(countLocal, field.rest, out);
-						count = countLocal;
-					} else {
-						count = this.num(restExact);
-					}
-					const i = this.fresh("_i");
-					const body: ts.Statement[] = [];
-					const restExpr = this.readField(field.rest, body);
-					body.push(
-						f.createExpressionStatement(
-							f.createCallExpression(f.createPropertyAccessExpression(result, "push"), undefined, [
-								restExpr,
-							]),
-						),
-					);
-					out.push(this.countedLoop(i, count, body));
-				}
-				// `result` is inferred as an array of the union of what was
-				// pushed, which is not assignable to a tuple type.
-				return this.castTo(result, this.fieldToTypeNode(field));
-			}
-			case "dict": {
+			case "recursiveRef":
+				return this.readRecursiveRef(field, out);
+			case "array":
+				return this.readArray(field, out);
+			case "tuple":
+				return this.readTuple(field, out);
+			case "dict":
 				return this.readDict(field, out);
-			}
-			case "optional": {
+			case "optional":
 				return this.readOptional(field, out, undefined);
-			}
-			case "literalConst": {
+			case "literalConst":
 				return this.literalValueExpr(field.value);
-			}
-			case "literal": {
-				const bytes = field.values.length <= 256 ? 1 : 2;
-				const { buf, pos, statements } = this.destructureAlloc("readAlloc", bytes);
-				out.push(...statements);
-				const idx = this.fresh("idx");
-				out.push(this.constStatement(idx, this.bufferCall(bytes === 1 ? "readu8" : "readu16", [buf, pos])));
-				return this.literalFromIndexExpr(field.values, idx);
-			}
-			case "taggedUnion": {
+			case "literal":
+				return this.readLiteral(field, out);
+			case "taggedUnion":
 				return this.readTaggedUnion(field, out);
-			}
-			case "guardedUnion": {
+			case "guardedUnion":
 				return this.readGuardedUnion(field, out);
-			}
-			case "blob": {
-				return this.bindSideEffect(this.call("nextBlob", []), out);
-			}
+			case "blob":
+				return this.readBlob(out);
 		}
+	}
+
+	private readNum(field: Extract<Field, { kind: "num" }>, out: ts.Statement[]): ts.Expression {
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", WIDTH_BYTES[field.width]);
+		out.push(...statements);
+		return this.readNumberAt(field.width, buf, pos);
+	}
+
+	private readBool(out: ts.Statement[]): ts.Expression {
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", 1);
+		out.push(...statements);
+		return this.factory.createBinaryExpression(
+			this.bufferCall("readu8", [buf, pos]),
+			this.ts_.SyntaxKind.ExclamationEqualsEqualsToken,
+			this.num(0),
+		);
+	}
+
+	private readStr(field: Extract<Field, { kind: "str" }>, out: ts.Statement[]): ts.Expression {
+		const exact = this.exactCount(field.length);
+		if (exact !== undefined) {
+			const { buf, pos, statements } = this.destructureAlloc("readAlloc", exact);
+			out.push(...statements);
+			return this.bufferCall("readstring", [buf, pos, this.num(exact)]);
+		}
+		const width = this.lengthWidth(field.length);
+		const { buf: lbuf, pos: lpos, statements: lstmt } = this.destructureAlloc("readAlloc", WIDTH_BYTES[width]);
+		out.push(...lstmt);
+		const len = this.fresh("len");
+		out.push(this.constStatement(len, this.readNumberAt(width, lbuf, lpos)));
+		const { buf: sbuf, pos: spos, statements: sstmt } = this.destructureAlloc("readAlloc", len);
+		out.push(...sstmt);
+		return this.bufferCall("readstring", [sbuf, spos, len]);
+	}
+
+	private readVector2(out: ts.Statement[]): ts.Expression {
+		const [x, y] = this.readNum2("f32", out);
+		return this.factory.createNewExpression(this.factory.createIdentifier("Vector2"), undefined, [x, y]);
+	}
+
+	private readBuffer(field: Extract<Field, { kind: "buffer" }>, out: ts.Statement[]): ts.Expression {
+		const f = this.factory;
+		const exact = this.exactCount(field.length);
+		if (exact !== undefined) {
+			const { buf, pos, statements } = this.destructureAlloc("readAlloc", exact);
+			out.push(...statements);
+			const exactResult = this.fresh("bytes");
+			out.push(this.constStatement(exactResult, this.bufferCall("create", [this.num(exact)])));
+			out.push(
+				f.createExpressionStatement(
+					this.bufferCall("copy", [exactResult, this.num(0), buf, pos, this.num(exact)]),
+				),
+			);
+			return exactResult;
+		}
+		const width = this.lengthWidth(field.length);
+		const { buf: lbuf, pos: lpos, statements: lstmt } = this.destructureAlloc("readAlloc", WIDTH_BYTES[width]);
+		out.push(...lstmt);
+		const len = this.fresh("len");
+		out.push(this.constStatement(len, this.readNumberAt(width, lbuf, lpos)));
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", len);
+		out.push(...statements);
+		// A copy: the input buffer holds the whole payload, and the caller owns the result.
+		const result = this.fresh("bytes");
+		out.push(this.constStatement(result, this.bufferCall("create", [len])));
+		out.push(f.createExpressionStatement(this.bufferCall("copy", [result, this.num(0), buf, pos, len])));
+		return result;
+	}
+
+	private readVector3(field: Extract<Field, { kind: "vector3" }>, out: ts.Statement[]): ts.Expression {
+		const widths = this.componentsOf(field.components);
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", this.componentBytes(widths));
+		out.push(...statements);
+		const [x, y, z] = this.readNum3(widths, { buf, pos, offset: 0 });
+		return this.factory.createNewExpression(this.factory.createIdentifier("Vector3"), undefined, [x, y, z]);
+	}
+
+	private readEnum(field: Extract<Field, { kind: "enum" }>, out: ts.Statement[]): ts.Expression {
+		const bytes = field.members.length <= 256 ? 1 : 2;
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", bytes);
+		out.push(...statements);
+		const idx = this.fresh("idx");
+		out.push(this.constStatement(idx, this.bufferCall(bytes === 1 ? "readu8" : "readu16", [buf, pos])));
+		return this.enumFromIndexExpr(field.enumName, field.members, idx);
+	}
+
+	private readRecursiveRef(field: Extract<Field, { kind: "recursiveRef" }>, out: ts.Statement[]): ts.Expression {
+		this.ensureHelper(field.helperName);
+		return this.bindSideEffect(this.callLocal(`${field.helperName}_read`, []), out);
+	}
+
+	/** Declares `const <base> = []` and returns its identifier, for a read that fills an array element by element. */
+	private arrayLocal(base: string, out: ts.Statement[]): ts.Identifier {
+		const result = this.fresh(base);
+		out.push(this.constStatement(result, this.factory.createArrayLiteralExpression([])));
+		return result;
+	}
+
+	/** Appends `result.push(<element>)` to `body`. */
+	private pushElement(result: ts.Identifier, element: ts.Expression, body: ts.Statement[]): void {
+		const f = this.factory;
+		body.push(
+			f.createExpressionStatement(
+				f.createCallExpression(f.createPropertyAccessExpression(result, "push"), undefined, [element]),
+			),
+		);
+	}
+
+	/**
+	 * The count a variable-length read loops over: the literal the type
+	 * carries in the exact form, which writes no count, and otherwise a
+	 * local holding the count read back, bounded against what the rest of
+	 * the input could hold.
+	 */
+	private readCount(length: CountSpec | undefined, element: Field, out: ts.Statement[]): ts.Expression {
+		const exact = this.exactCount(length);
+		if (exact !== undefined) {
+			return this.num(exact);
+		}
+		const width = this.lengthWidth(length);
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", WIDTH_BYTES[width]);
+		out.push(...statements);
+		const count = this.fresh("count");
+		out.push(this.constStatement(count, this.readNumberAt(width, buf, pos)));
+		this.checkCount(count, element, out);
+		return count;
+	}
+
+	private readArray(field: Extract<Field, { kind: "array" }>, out: ts.Statement[]): ts.Expression {
+		const count = this.readCount(field.length, field.element, out);
+		const result = this.arrayLocal("result", out);
+		const i = this.fresh("_i");
+		const body: ts.Statement[] = [];
+		this.pushElement(result, this.readField(field.element, body), body);
+		out.push(this.countedLoop(i, count, body));
+		return result;
+	}
+
+	private readTuple(field: Extract<Field, { kind: "tuple" }>, out: ts.Statement[]): ts.Expression {
+		const result = this.arrayLocal("tup", out);
+		this.pushScoped(
+			field.fixed.map((elementField) =>
+				this.measure((itemOut) => this.pushElement(result, this.readField(elementField, itemOut), itemOut)),
+			),
+			out,
+		);
+		if (field.rest) {
+			const count = this.readCount(field.length, field.rest, out);
+			const i = this.fresh("_i");
+			const body: ts.Statement[] = [];
+			this.pushElement(result, this.readField(field.rest, body), body);
+			out.push(this.countedLoop(i, count, body));
+		}
+		// `result` is inferred as an array of the union of what was pushed,
+		// which is not assignable to a tuple type.
+		return this.castTo(result, this.fieldToTypeNode(field));
+	}
+
+	private readLiteral(field: Extract<Field, { kind: "literal" }>, out: ts.Statement[]): ts.Expression {
+		const bytes = field.values.length <= 256 ? 1 : 2;
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", bytes);
+		out.push(...statements);
+		const idx = this.fresh("idx");
+		out.push(this.constStatement(idx, this.bufferCall(bytes === 1 ? "readu8" : "readu16", [buf, pos])));
+		return this.literalFromIndexExpr(field.values, idx);
+	}
+
+	private readBlob(out: ts.Statement[]): ts.Expression {
+		return this.bindSideEffect(this.call("nextBlob", []), out);
 	}
 
 	private readNum2(width: "f32", out: ts.Statement[]): [ts.Expression, ts.Expression] {
@@ -2257,7 +2225,7 @@ export class Emitter {
 	private readNum3(widths: ComponentWidths, slot: Slot): [ts.Expression, ts.Expression, ts.Expression] {
 		let offset = 0;
 		const component = (i: number) => {
-			const read = this.readNumber(widths[i], slot.buf, this.at(slot, offset));
+			const read = this.readNumberAt(widths[i], slot.buf, this.at(slot, offset));
 			offset += WIDTH_BYTES[widths[i]];
 			return read;
 		};
@@ -2397,7 +2365,7 @@ export class Emitter {
 		const { buf, pos, statements } = this.destructureAlloc("readAlloc", WIDTH_BYTES[countWidth]);
 		out.push(...statements);
 		const count = this.fresh("count");
-		out.push(this.constStatement(count, this.readNumber(countWidth, buf, pos)));
+		out.push(this.constStatement(count, this.readNumberAt(countWidth, buf, pos)));
 		this.checkEntryCount(count, field, out);
 		const result = this.fresh("result");
 		// Reconstructed as a `Record` regardless of `field.source`: that's the
