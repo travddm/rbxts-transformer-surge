@@ -1,8 +1,11 @@
 import type ts from "typescript";
 
 import { FIXED_DATATYPES } from "./datatypes";
-import type { CountSpec, Field, FieldKey, LengthWidth, NumWidth, ObjectFieldEntry } from "./field";
-import { DEFAULT_LENGTH_WIDTH } from "./field";
+import type { ComponentWidths, CountSpec, Field, FieldKey, LengthWidth, NumWidth, ObjectFieldEntry } from "./field";
+import { DEFAULT_COMPONENT_WIDTH, DEFAULT_LENGTH_WIDTH } from "./field";
+
+/** What a `vector3`'s or a `cframe` position's absent widths mean. */
+const DEFAULT_COMPONENTS: ComponentWidths = [DEFAULT_COMPONENT_WIDTH, DEFAULT_COMPONENT_WIDTH, DEFAULT_COMPONENT_WIDTH];
 
 const WIDTH_BYTES: Record<NumWidth, number> = {
 	f32: 4,
@@ -56,6 +59,9 @@ const READ_CURSOR = importAlias("readCursor");
 const INITIAL_CAPACITY = 64;
 /** The largest form `writePackedCFrame` can write: header, position, rotation. */
 const PACKED_CFRAME_MAX_BYTES = 25;
+// A `cframe`'s rotation is always an f32 axis-angle triple. `DataType.Transform`
+// sets the widths of the position, and of nothing else.
+const ROTATION_BYTES = 12;
 
 function tagKeyOf(field: Extract<Field, { kind: "taggedUnion" }>): FieldKey {
 	return { name: field.tagKey, numericKey: field.tagKeyNumeric };
@@ -668,9 +674,10 @@ export class Emitter {
 				return;
 			}
 			case "vector3": {
-				const { buf, pos, statements } = this.destructureAlloc("alloc", 12);
+				const widths = this.componentsOf(field.components);
+				const { buf, pos, statements } = this.destructureAlloc("alloc", this.componentBytes(widths));
 				out.push(...statements);
-				this.writeNum3(value, "X", "Y", "Z", "f32", { buf, pos, offset: 0 }, out);
+				this.writeNum3(value, "X", "Y", "Z", widths, { buf, pos, offset: 0 }, out);
 				return;
 			}
 			case "color3": {
@@ -697,7 +704,7 @@ export class Emitter {
 					);
 					return;
 				}
-				this.writeCFrame(value, out);
+				this.writeCFrame(value, field.position, out);
 				return;
 			}
 			case "colorSequence": {
@@ -891,6 +898,15 @@ export class Emitter {
 		return typeof length === "number" ? length : undefined;
 	}
 
+	/** The widths a `vector3`'s or a `cframe` position's components are stored at, with absence resolved. */
+	private componentsOf(widths?: ComponentWidths): ComponentWidths {
+		return widths ?? DEFAULT_COMPONENTS;
+	}
+
+	private componentBytes(widths?: ComponentWidths): number {
+		return this.componentsOf(widths).reduce((total, width) => total + WIDTH_BYTES[width], 0);
+	}
+
 	/**
 	 * Luau's `buffer` has no 24-bit calls, so `u24` and `i24` are a `u16` of
 	 * the low bits and a `u8` of the high bits. `bit32` reduces a negative
@@ -975,11 +991,11 @@ export class Emitter {
 			case "vector2":
 				return 8;
 			case "vector3":
-				return 12;
+				return this.componentBytes(field.components);
 			case "color3":
 				return 3;
 			case "cframe":
-				return field.packed ? undefined : 24;
+				return field.packed ? undefined : this.componentBytes(field.position) + ROTATION_BYTES;
 			case "datatype":
 				return FIXED_DATATYPES[field.name].components.reduce(
 					(total, component) => total + WIDTH_BYTES[component.width],
@@ -1111,27 +1127,31 @@ export class Emitter {
 		);
 	}
 
-	/** Writes three components into the 12 bytes `slot` starts at. The caller reserves them. */
+	/**
+	 * Writes three components, each at its own width, into the bytes `slot`
+	 * starts at. The caller reserves `componentBytes(widths)` of them.
+	 */
 	private writeNum3(
 		value: ts.Expression,
 		a: string,
 		b: string,
 		c: string,
-		width: "f32",
+		widths: ComponentWidths,
 		slot: Slot,
 		out: ts.Statement[],
 	): void {
 		const f = this.factory;
+		let offset = 0;
 		[a, b, c].forEach((component, i) => {
 			out.push(
-				f.createExpressionStatement(
-					this.bufferCall(`write${width}`, [
-						slot.buf,
-						this.at(slot, i * 4),
-						f.createPropertyAccessExpression(value, component),
-					]),
+				...this.writeNumber(
+					widths[i],
+					slot.buf,
+					this.at(slot, offset),
+					f.createPropertyAccessExpression(value, component),
 				),
 			);
+			offset += WIDTH_BYTES[widths[i]];
 		});
 	}
 
@@ -1163,20 +1183,22 @@ export class Emitter {
 		});
 	}
 
-	private writeCFrame(value: ts.Expression, out: ts.Statement[]): void {
+	private writeCFrame(value: ts.Expression, position: ComponentWidths | undefined, out: ts.Statement[]): void {
 		const f = this.factory;
+		const widths = this.componentsOf(position);
+		const positionBytes = this.componentBytes(widths);
 		// One reservation for both halves. `ToAxisAngle` and `Vector3.mul`
 		// sit between the two writes, and neither can grow the scratch
 		// buffer, so `buf` is still the buffer `alloc` handed back when the
 		// rotation is written.
-		const { buf, pos, statements } = this.destructureAlloc("alloc", 24);
+		const { buf, pos, statements } = this.destructureAlloc("alloc", positionBytes + ROTATION_BYTES);
 		out.push(...statements);
 		this.writeNum3(
 			f.createPropertyAccessExpression(value, "Position"),
 			"X",
 			"Y",
 			"Z",
-			"f32",
+			widths,
 			{ buf, pos, offset: 0 },
 			out,
 		);
@@ -1212,7 +1234,7 @@ export class Emitter {
 				f.createCallExpression(f.createPropertyAccessExpression(axis, "mul"), undefined, [angle]),
 			),
 		);
-		this.writeNum3(rv, "X", "Y", "Z", "f32", { buf, pos, offset: 12 }, out);
+		this.writeNum3(rv, "X", "Y", "Z", DEFAULT_COMPONENTS, { buf, pos, offset: positionBytes }, out);
 	}
 
 	private writeSequence(value: ts.Expression, kind: "ColorSequence" | "NumberSequence", out: ts.Statement[]): void {
@@ -1853,16 +1875,17 @@ export class Emitter {
 				return result;
 			}
 			case "vector3": {
-				const { buf, pos, statements } = this.destructureAlloc("readAlloc", 12);
+				const widths = this.componentsOf(field.components);
+				const { buf, pos, statements } = this.destructureAlloc("readAlloc", this.componentBytes(widths));
 				out.push(...statements);
-				const [x, y, z] = this.readNum3("f32", { buf, pos, offset: 0 });
+				const [x, y, z] = this.readNum3(widths, { buf, pos, offset: 0 });
 				return f.createNewExpression(f.createIdentifier("Vector3"), undefined, [x, y, z]);
 			}
 			case "color3": {
 				return this.readColor3(out);
 			}
 			case "cframe": {
-				return field.packed ? this.readPackedCFrame(out) : this.readCFrame(out);
+				return field.packed ? this.readPackedCFrame(out) : this.readCFrame(field.position, out);
 			}
 			case "colorSequence": {
 				return this.readSequence("ColorSequence", out);
@@ -2032,13 +2055,15 @@ export class Emitter {
 		return [x, y];
 	}
 
-	/** Reads three components from the 12 bytes `slot` starts at. The caller reserves them. */
-	private readNum3(width: "f32", slot: Slot): [ts.Expression, ts.Expression, ts.Expression] {
-		return [
-			this.bufferCall(`read${width}`, [slot.buf, this.at(slot, 0)]),
-			this.bufferCall(`read${width}`, [slot.buf, this.at(slot, 4)]),
-			this.bufferCall(`read${width}`, [slot.buf, this.at(slot, 8)]),
-		];
+	/** Reads what {@link writeNum3} wrote at `slot`, mirroring its widths and offsets. */
+	private readNum3(widths: ComponentWidths, slot: Slot): [ts.Expression, ts.Expression, ts.Expression] {
+		let offset = 0;
+		const component = (i: number) => {
+			const read = this.readNumber(widths[i], slot.buf, this.at(slot, offset));
+			offset += WIDTH_BYTES[widths[i]];
+			return read;
+		};
+		return [component(0), component(1), component(2)];
 	}
 
 	private readColor3(out: ts.Statement[]): ts.Expression {
@@ -2057,20 +2082,22 @@ export class Emitter {
 		return f.createNewExpression(f.createIdentifier("Color3"), undefined, [channel(0), channel(1), channel(2)]);
 	}
 
-	private readCFrame(out: ts.Statement[]): ts.Expression {
+	private readCFrame(position: ComponentWidths | undefined, out: ts.Statement[]): ts.Expression {
 		const f = this.factory;
+		const widths = this.componentsOf(position);
+		const positionBytes = this.componentBytes(widths);
 		// One reservation for both halves, mirroring `writeCFrame`.
-		const { buf, pos, statements } = this.destructureAlloc("readAlloc", 24);
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", positionBytes + ROTATION_BYTES);
 		out.push(...statements);
-		const [px, py, pz] = this.readNum3("f32", { buf, pos, offset: 0 });
-		const position = this.fresh("pos");
+		const [px, py, pz] = this.readNum3(widths, { buf, pos, offset: 0 });
+		const positionValue = this.fresh("pos");
 		out.push(
 			this.constStatement(
-				position,
+				positionValue,
 				f.createNewExpression(f.createIdentifier("Vector3"), undefined, [px, py, pz]),
 			),
 		);
-		const [rx, ry, rz] = this.readNum3("f32", { buf, pos, offset: 12 });
+		const [rx, ry, rz] = this.readNum3(DEFAULT_COMPONENTS, { buf, pos, offset: positionBytes });
 		const rv = this.fresh("rv");
 		out.push(
 			this.constStatement(rv, f.createNewExpression(f.createIdentifier("Vector3"), undefined, [rx, ry, rz])),
@@ -2095,7 +2122,7 @@ export class Emitter {
 				),
 			),
 		);
-		return f.createCallExpression(f.createPropertyAccessExpression(rotation, "add"), undefined, [position]);
+		return f.createCallExpression(f.createPropertyAccessExpression(rotation, "add"), undefined, [positionValue]);
 	}
 
 	private readSequence(kind: "ColorSequence" | "NumberSequence", out: ts.Statement[]): ts.Expression {

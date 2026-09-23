@@ -924,3 +924,153 @@ describe("TypeWalker Length<T, L>", () => {
 		expect(diagnostics[0].message).toContain("no rest element");
 	});
 });
+
+describe("TypeWalker Vector<X, Y, Z> and Transform<X, Y, Z>", () => {
+	/** The component widths each named field of `T` carries, `undefined` where it carries none. */
+	function widths(source: string): Map<string, unknown> {
+		const { field, diagnostics } = walkDeclaration(source, "T", { surge: true });
+		expect(diagnostics).toHaveLength(0);
+		if (field.kind !== "object") throw new Error("expected an object");
+		return new Map(
+			field.fields.map((entry) => {
+				const carried = entry.field as { components?: unknown; position?: unknown };
+				return [entry.name, carried.components ?? carried.position];
+			}),
+		);
+	}
+
+	test("sets the three widths on a Vector3 and on a CFrame's position", () => {
+		const byName = widths(
+			`import { DataType } from "@rbxts/surge";
+			interface T {
+				v: DataType.Vector<DataType.u8, DataType.i16, DataType.u24>;
+				c: DataType.Transform<DataType.i8, DataType.f64, DataType.u32>;
+			}`,
+		);
+		expect(byName.get("v")).toEqual(["u8", "i16", "u24"]);
+		expect(byName.get("c")).toEqual(["i8", "f64", "u32"]);
+	});
+
+	// `Y extends Width = X, Z extends Width = X`: both default to the first
+	// argument, not to the one before them.
+	test("a width left off defaults to the first", () => {
+		const byName = widths(
+			`import { DataType } from "@rbxts/surge";
+			interface T {
+				one: DataType.Vector<DataType.u8>;
+				two: DataType.Vector<DataType.u8, DataType.u16>;
+			}`,
+		);
+		expect(byName.get("one")).toEqual(["u8", "u8", "u8"]);
+		expect(byName.get("two")).toEqual(["u8", "u16", "u8"]);
+	});
+
+	// Rule 4 of data-type-surface.md, as for `Length<T, L>`: a fully defaulted
+	// brand has to leave no widths behind for the emitter to act on.
+	test("the default arguments leave the field identical to the unbranded one", () => {
+		const { field: branded, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			interface T { v: DataType.Vector; c: DataType.Transform<DataType.f32>; }`,
+			"T",
+			{ surge: true },
+		);
+		const { field: bare } = walkDeclaration("interface T { v: Vector3; c: CFrame; }", "T", { surge: true });
+		expect(diagnostics).toHaveLength(0);
+		expect(branded).toEqual(bare);
+	});
+
+	// A re-alias carries no brand alias, so `getSurgeBrand` reads the widths
+	// back out of the brand property instead.
+	test("a re-alias resolves through the brand property", () => {
+		const byName = widths(
+			`import { DataType } from "@rbxts/surge";
+			type Cell = DataType.Vector<DataType.i16>;
+			type Placement = DataType.Transform<DataType.i16, DataType.u8, DataType.u8>;
+			interface T { v: Cell; c: Placement; }`,
+		);
+		expect(byName.get("v")).toEqual(["i16", "i16", "i16"]);
+		expect(byName.get("c")).toEqual(["i16", "u8", "u8"]);
+	});
+
+	// Neither brand can wrap another -- each fixes its own value type -- so
+	// `Packed` is the outermost of the pair however the composition is spelled.
+	test("composes with Packed<T>, which is always the outer brand", () => {
+		const direct = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			interface T { v: DataType.Packed<DataType.Vector<DataType.u8>>; }`,
+			"T",
+			{ surge: true },
+		);
+		const reAliased = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			type PackedCell = DataType.Packed<DataType.Vector<DataType.u8>>;
+			interface T { v: PackedCell; }`,
+			"T",
+			{ surge: true },
+		);
+		for (const { field, diagnostics } of [direct, reAliased]) {
+			expect(diagnostics).toHaveLength(0);
+			if (field.kind !== "object") throw new Error("expected an object");
+			expect(field.fields[0].field).toEqual({ kind: "vector3", components: ["u8", "u8", "u8"] });
+		}
+	});
+
+	test("a Vector inside a Packed subtree keeps its widths", () => {
+		const { field, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			interface Cell { a: boolean; v: DataType.Vector<DataType.u8>; }
+			interface T { cell: DataType.Packed<Cell>; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toHaveLength(0);
+		if (field.kind !== "object") throw new Error("expected an object");
+		expect(field.fields[0].field).toEqual({
+			kind: "object",
+			fields: [
+				{ name: "a", field: { kind: "bool", packed: true } },
+				{ name: "v", field: { kind: "vector3", components: ["u8", "u8", "u8"] } },
+			],
+		});
+	});
+
+	// The packed CFrame writes its position through `writePackedCFrame`, at a
+	// layout of its own and only when the header does not already give it.
+	test("a Transform inside a Packed subtree is a diagnostic", () => {
+		const { field, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			interface T { c: DataType.Packed<DataType.Transform<DataType.u8>>; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain('"DataType.Packed"');
+		if (field.kind !== "object") throw new Error("expected an object");
+		expect(field.fields[0].field).toEqual({ kind: "cframe", packed: true });
+	});
+
+	// Defaulted, it sets nothing, so there is nothing to conflict with.
+	test("a defaulted Transform inside a Packed subtree is not", () => {
+		const { field, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			interface T { c: DataType.Packed<DataType.Transform>; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toHaveLength(0);
+		if (field.kind !== "object") throw new Error("expected an object");
+		expect(field.fields[0].field).toEqual({ kind: "cframe", packed: true });
+	});
+
+	test("an argument that is not a width brand is a diagnostic", () => {
+		for (const brand of ["Vector", "Transform"]) {
+			const { diagnostics } = walkDeclaration(
+				`import { DataType } from "@rbxts/surge"; interface T { v: DataType.${brand}<number>; }`,
+				"T",
+				{ surge: true },
+			);
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0].message).toContain(`"DataType.${brand}"'s component widths`);
+		}
+	});
+});

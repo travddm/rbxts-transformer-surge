@@ -127,6 +127,8 @@ export function getDataTypeBrand(type: ts.Type): string | undefined {
 const PARAMETERIZED_BRANDS = [
 	{ name: "Packed", property: "_surge_packed" },
 	{ name: "Length", property: "_surge_length" },
+	{ name: "Vector", property: "_surge_vector" },
+	{ name: "Transform", property: "_surge_transform" },
 ] as const;
 
 type ParameterizedBrand = (typeof PARAMETERIZED_BRANDS)[number];
@@ -152,7 +154,8 @@ function argumentsFromBrandProperty(
 
 /**
  * The outermost parameterized `DataType.*` brand on `type`, with its type
- * arguments (`Packed<T>` gives `[T]`, `Length<T, L>` gives `[T, L]`).
+ * arguments (`Packed<T>` gives `[T]`, `Length<T, L>` gives `[T, L]`,
+ * `Vector<X, Y, Z>` and `Transform<X, Y, Z>` give `[X, Y, Z]`).
  *
  * Alias identity is tried first, and for every brand rather than one brand at
  * a time, because a composition flattens into an intersection carrying both
@@ -165,7 +168,9 @@ function argumentsFromBrandProperty(
  * has both, only one is outermost, and the arguments say which: the outer
  * brand recorded the whole inner brand, so its inner type still carries the
  * other's property, while the inner brand recorded its arguments before the
- * outer one was applied and has lost it.
+ * outer one was applied and has lost it. A brand that fixes its own value
+ * type records widths instead of a type and so is never the outer one, which
+ * is the same answer: `Vector` and `Transform` cannot wrap anything.
  */
 export function getSurgeBrand(checker: ts.TypeChecker, type: ts.Type): SurgeBrand | undefined {
 	const name = getDataTypeBrand(type);

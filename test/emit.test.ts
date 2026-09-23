@@ -628,3 +628,47 @@ describe("Emitter count widths", () => {
 		expect(reservations(output, "read")).toEqual([1]);
 	});
 });
+
+describe("Emitter component widths", () => {
+	test("a Vector3 writes each component at its own width, at cumulative offsets", () => {
+		const output = emitSnapshot({ kind: "vector3", components: ["u8", "u24", "f32"] });
+		expect(output).toMatchSnapshot();
+		// 1 + 3 + 4, and the u24 is the two writes Luau's buffer has no call for.
+		expect(reservations(output, "write")).toEqual([8]);
+		expect(reservations(output, "read")).toEqual([8]);
+	});
+
+	// Rule 4 of data-type-surface.md on the emitter's side of the IR: the
+	// walker records the all-default case as absence, and the two must agree.
+	test("the default widths emit exactly what absent widths do", () => {
+		expect(emitSnapshot({ kind: "vector3", components: ["f32", "f32", "f32"] })).toBe(
+			emitSnapshot({ kind: "vector3" }),
+		);
+		expect(emitSnapshot({ kind: "cframe", position: ["f32", "f32", "f32"] })).toBe(
+			emitSnapshot({ kind: "cframe" }),
+		);
+	});
+
+	test("a CFrame narrows its position and leaves its rotation an f32 triple", () => {
+		const output = emitSnapshot({ kind: "cframe", position: ["i16", "i16", "i16"] });
+		expect(output).toMatchSnapshot();
+		// 6 for the position, then the rotation's 12 at an offset that moved with it.
+		expect(reservations(output, "write")).toEqual([18]);
+		expect(reservations(output, "read")).toEqual([18]);
+		expect(output).toContain("buffer.writei16(");
+		expect(output.match(/buffer\.writef32\(/g)).toHaveLength(3);
+	});
+
+	test("a narrowed Vector3 joins the reservation of the fields beside it", () => {
+		const output = emitSnapshot({
+			kind: "object",
+			fields: [
+				{ name: "at", field: { kind: "vector3", components: ["u8", "u8", "u8"] } },
+				{ name: "id", field: { kind: "num", width: "u8" } },
+			],
+		});
+		// 3 + 1 in one alloc, where three unnarrowed components alone would be 12.
+		expect(reservations(output, "write")).toEqual([4]);
+		expect(reservations(output, "read")).toEqual([4]);
+	});
+});

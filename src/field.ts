@@ -27,6 +27,17 @@ export const DEFAULT_LENGTH_WIDTH: LengthWidth = "u32";
  */
 export type CountSpec = LengthWidth | number;
 
+/**
+ * The widths a `Vector3`'s three components, or a `CFrame`'s position, are
+ * stored at, set by `DataType.Vector<X, Y, Z>` and `DataType.Transform<X, Y,
+ * Z>` (see data-type-surface.md).
+ *
+ * Absent on a field means three `f32`s, which is what both wrote before the
+ * brands existed, so an unbranded shape's bytes do not move.
+ */
+export type ComponentWidths = readonly [NumWidth, NumWidth, NumWidth];
+export const DEFAULT_COMPONENT_WIDTH: NumWidth = "f32";
+
 export interface FieldKey {
 	readonly name: string;
 	// `{ 0: T }` and `{ "0": T }` are one property to TypeScript but two
@@ -48,10 +59,12 @@ export type Field =
 	| { readonly kind: "buffer"; readonly length?: CountSpec }
 	// A row of `FIXED_DATATYPES` in datatypes.ts.
 	| { readonly kind: "datatype"; readonly name: string }
-	| { readonly kind: "vector3" }
+	| { readonly kind: "vector3"; readonly components?: ComponentWidths }
 	// `packed`: inside `Packed<T>`, where a header byte replaces an axis-aligned
 	// rotation and a zero or one position. Absent, not `false`, outside it.
-	| { readonly kind: "cframe"; readonly packed?: true }
+	// `position` is the position's component widths; the rotation is always an
+	// f32 axis-angle triple, and the packed form takes no widths at all.
+	| { readonly kind: "cframe"; readonly packed?: true; readonly position?: ComponentWidths }
 	| { readonly kind: "color3" }
 	| { readonly kind: "colorSequence" }
 	| { readonly kind: "numberSequence" }

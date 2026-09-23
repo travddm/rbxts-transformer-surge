@@ -1,5 +1,51 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
+exports[`Emitter component widths a CFrame narrows its position and leaves its rotation an f32 triple 1`] = `
+"// write
+const pos1 = __surge_cursor;
+__surge_cursor = pos1 + 18;
+if (__surge_cursor > __surge_capacity) {
+    __surge_scratch = __surge_grow(__surge_scratch, pos1, __surge_cursor);
+    __surge_capacity = buffer.len(__surge_scratch);
+}
+buffer.writei16(__surge_scratch, pos1, value.Position.X);
+buffer.writei16(__surge_scratch, pos1 + 2, value.Position.Y);
+buffer.writei16(__surge_scratch, pos1 + 4, value.Position.Z);
+const [axis2, angle3] = value.ToAxisAngle();
+const rv4 = axis2.mul(angle3);
+buffer.writef32(__surge_scratch, pos1 + 6, rv4.X);
+buffer.writef32(__surge_scratch, pos1 + 10, rv4.Y);
+buffer.writef32(__surge_scratch, pos1 + 14, rv4.Z);
+
+// read
+const pos5 = __surge_readCursor;
+__surge_readCursor = pos5 + 18;
+const pos6 = new Vector3(buffer.readi16(__surge_input, pos5), buffer.readi16(__surge_input, pos5 + 2), buffer.readi16(__surge_input, pos5 + 4));
+const rv7 = new Vector3(buffer.readf32(__surge_input, pos5 + 6), buffer.readf32(__surge_input, pos5 + 10), buffer.readf32(__surge_input, pos5 + 14));
+const angle8 = rv7.Magnitude;
+const rotation9 = CFrame.fromAxisAngle(angle8 > 1e-6 ? rv7.Unit : Vector3.zAxis, angle8);
+return rotation9.add(pos6);"
+`;
+
+exports[`Emitter component widths a Vector3 writes each component at its own width, at cumulative offsets 1`] = `
+"// write
+const pos1 = __surge_cursor;
+__surge_cursor = pos1 + 8;
+if (__surge_cursor > __surge_capacity) {
+    __surge_scratch = __surge_grow(__surge_scratch, pos1, __surge_cursor);
+    __surge_capacity = buffer.len(__surge_scratch);
+}
+buffer.writeu8(__surge_scratch, pos1, value.X);
+buffer.writeu16(__surge_scratch, pos1 + 1, value.Y & 65535);
+buffer.writeu8(__surge_scratch, pos1 + 1 + 2, (value.Y >>> 16) & 255);
+buffer.writef32(__surge_scratch, pos1 + 4, value.Z);
+
+// read
+const pos2 = __surge_readCursor;
+__surge_readCursor = pos2 + 8;
+return new Vector3(buffer.readu8(__surge_input, pos2), buffer.readu16(__surge_input, pos2 + 1) + buffer.readu8(__surge_input, pos2 + 1 + 2) * 65536, buffer.readf32(__surge_input, pos2 + 4));"
+`;
+
 exports[`Emitter packed boolean padding packed booleans write one computed byte per group instead of per-bit packBit calls 1`] = `
 "// write
 const pos1 = __surge_cursor;

@@ -2,8 +2,8 @@ import type ts from "typescript";
 
 import { isFixedDatatype } from "./datatypes";
 import { getDataTypeBrand, getSurgeBrand, isFromTypesPackage, isRobloxNominalType } from "./detect";
-import type { CountSpec, Field, FieldKey, LengthWidth, NumWidth, ObjectFieldEntry } from "./field";
-import { DEFAULT_LENGTH_WIDTH, LENGTH_WIDTHS } from "./field";
+import type { ComponentWidths, CountSpec, Field, FieldKey, LengthWidth, NumWidth, ObjectFieldEntry } from "./field";
+import { DEFAULT_COMPONENT_WIDTH, DEFAULT_LENGTH_WIDTH, LENGTH_WIDTHS } from "./field";
 
 export interface WalkDiagnostic {
 	readonly message: string;
@@ -161,6 +161,13 @@ export class TypeWalker {
 		}
 		if (surgeBrand?.name === "Length") {
 			return this.walkLength(surgeBrand.args, node, packed);
+		}
+		if (surgeBrand?.name === "Vector") {
+			const components = this.componentWidths("Vector", surgeBrand.args, node);
+			return components === undefined ? { kind: "vector3" } : { kind: "vector3", components };
+		}
+		if (surgeBrand?.name === "Transform") {
+			return this.walkTransform(surgeBrand.args, node, packed);
 		}
 		const brand = getDataTypeBrand(type);
 		if (brand && NUM_BRAND_WIDTHS.has(brand)) {
@@ -498,6 +505,72 @@ export class TypeWalker {
 				);
 				return field;
 		}
+	}
+
+	// ---- DataType.Vector<X, Y, Z> / DataType.Transform<X, Y, Z> -----------
+
+	/**
+	 * The widths the three components of a `Vector3`, or of a `CFrame`'s
+	 * position, are stored at. An argument left off defaults to the first one
+	 * and the first to `f32`, exactly as the brands themselves declare
+	 * (`Y extends Width = X, Z extends Width = X`).
+	 *
+	 * All three at the default is recorded as no widths at all rather than as
+	 * three `f32`s, so a fully defaulted brand walks to the very same field the
+	 * unbranded type does -- rule 4 of data-type-surface.md, checkable on the IR
+	 * and not only on the bytes. A bad width reports and is dropped, which
+	 * leaves the same field and the diagnostic to explain it.
+	 */
+	private componentWidths(brand: string, args: readonly ts.Type[], node: ts.Node): ComponentWidths | undefined {
+		const parsed: NumWidth[] = [];
+		for (let i = 0; i < 3; i += 1) {
+			const argument = args[i];
+			if (argument === undefined) {
+				parsed.push(parsed[0] ?? DEFAULT_COMPONENT_WIDTH);
+				continue;
+			}
+			const width = getDataTypeBrand(argument);
+			if (width === undefined || !NUM_BRAND_WIDTHS.has(width)) {
+				this.report(
+					`"DataType.${brand}"'s component widths must each be one of the "DataType" number widths` +
+						`${width === undefined ? "" : `, not "DataType.${width}"`}.`,
+					node,
+				);
+				return undefined;
+			}
+			parsed.push(width as NumWidth);
+		}
+		const [x, y, z] = parsed;
+		return x === DEFAULT_COMPONENT_WIDTH && y === DEFAULT_COMPONENT_WIDTH && z === DEFAULT_COMPONENT_WIDTH
+			? undefined
+			: [x, y, z];
+	}
+
+	/**
+	 * `DataType.Transform<X, Y, Z>` sets the widths of a `CFrame`'s position.
+	 * The rotation is not its business: it stays an f32 axis-angle triple, as
+	 * data-type-surface.md records.
+	 *
+	 * Inside `Packed<T>` there is nothing to set. That `CFrame` goes through
+	 * `writePackedCFrame`, whose header decides whether a position is written
+	 * at all and writes it at one layout when it is, so a width other than the
+	 * default is reported rather than silently dropped.
+	 */
+	private walkTransform(args: readonly ts.Type[], node: ts.Node, packed: boolean): Field {
+		const position = this.componentWidths("Transform", args, node);
+		if (position === undefined) {
+			return packed ? { kind: "cframe", packed: true } : { kind: "cframe" };
+		}
+		if (packed) {
+			this.report(
+				`"DataType.Transform" has nothing to set on a CFrame inside "DataType.Packed" -- the packed ` +
+					`form writes the position through a runtime function, at a layout of its own, and only when ` +
+					`its header does not already give it.`,
+				node,
+			);
+			return { kind: "cframe", packed: true };
+		}
+		return { kind: "cframe", position };
 	}
 
 	// ---- arrays / tuples --------------------------------------------------
