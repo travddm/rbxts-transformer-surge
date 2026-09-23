@@ -1,8 +1,9 @@
 import type ts from "typescript";
 
 import { isFixedDatatype } from "./datatypes";
-import { getDataTypeBrand, getPackedInnerType, isFromTypesPackage, isRobloxNominalType } from "./detect";
-import type { Field, FieldKey, NumWidth, ObjectFieldEntry } from "./field";
+import { getDataTypeBrand, getSurgeBrand, isFromTypesPackage, isRobloxNominalType } from "./detect";
+import type { Field, FieldKey, LengthWidth, NumWidth, ObjectFieldEntry } from "./field";
+import { DEFAULT_LENGTH_WIDTH, LENGTH_WIDTHS } from "./field";
 
 export interface WalkDiagnostic {
 	readonly message: string;
@@ -149,14 +150,17 @@ export class TypeWalker {
 		const ts_ = this.typescript;
 		const checker = this.checker;
 
-		// `DataType.*` brands and `DataType.Packed<T>` are detected by alias
-		// identity (detect.ts), independent of the structural checks below,
-		// so they must be checked before anything else can misclassify them
-		// (a plain `number & {...}` brand would otherwise just look like
-		// `number`).
-		const packedInner = getPackedInnerType(checker, type);
-		if (packedInner) {
-			return this.walk(packedInner, node, true);
+		// `DataType.*` brands are detected by alias identity (detect.ts),
+		// independent of the structural checks below, so they must be checked
+		// before anything else can misclassify them (a plain `number & {...}`
+		// brand would otherwise just look like `number`).
+		const surgeBrand = getSurgeBrand(checker, type);
+		if (surgeBrand?.name === "Packed") {
+			const inner = surgeBrand.args[0];
+			return inner ? this.walk(inner, node, true) : { kind: "blob" };
+		}
+		if (surgeBrand?.name === "Length") {
+			return this.walkLength(surgeBrand.args, node, packed);
 		}
 		const brand = getDataTypeBrand(type);
 		if (brand && NUM_BRAND_WIDTHS.has(brand)) {
@@ -398,6 +402,70 @@ export class TypeWalker {
 			byPacked.set(packed, name);
 		}
 		return name;
+	}
+
+	// ---- DataType.Length<T, L> -------------------------------------------
+
+	/**
+	 * `DataType.Length<T, L>` sets the width of the count `T` writes ahead of
+	 * its contents. The width is applied to the field `T` walks to, rather
+	 * than threaded through the walk as `packed` is, because it belongs to
+	 * one container and not to the subtree under it: whichever of the five
+	 * length-carrying kinds `T` turns out to be takes it, and a `T` with no
+	 * count of its own is reported instead of quietly ignoring the brand.
+	 */
+	private walkLength(args: readonly ts.Type[], node: ts.Node, packed: boolean): Field {
+		const [innerType, widthType] = args;
+		if (!innerType) {
+			return { kind: "blob" };
+		}
+		const field = this.walk(innerType, node, packed);
+		const width = widthType === undefined ? undefined : getDataTypeBrand(widthType);
+		if (width === undefined || !LENGTH_WIDTHS.has(width)) {
+			this.report(
+				`"DataType.Length"'s second argument must be "DataType.u8", "DataType.u16", "DataType.u24", or ` +
+					`"DataType.u32"${width === undefined ? "" : `, not "DataType.${width}"`} -- a count is never ` +
+					`negative and never fractional.`,
+				node,
+			);
+			return field;
+		}
+		return this.withLength(field, width as LengthWidth, node);
+	}
+
+	/**
+	 * The default width is recorded as absence rather than as itself, so a
+	 * fully defaulted brand walks to the very same field the unbranded type
+	 * does -- rule 4 of data-type-surface.md, checkable on the IR and not only
+	 * on the bytes. The kind is still checked either way, so
+	 * `Length<number, u32>` is a diagnostic and not a brand that does nothing.
+	 */
+	private withLength(field: Field, length: LengthWidth, node: ts.Node): Field {
+		switch (field.kind) {
+			case "str":
+			case "buffer":
+			case "array":
+			case "dict":
+				return length === DEFAULT_LENGTH_WIDTH ? field : { ...field, length };
+			case "tuple": {
+				if (field.rest === undefined) {
+					this.report(
+						`"DataType.Length" has nothing to set on a tuple with no rest element -- its elements are ` +
+							`written inline and it has no count.`,
+						node,
+					);
+					return field;
+				}
+				return length === DEFAULT_LENGTH_WIDTH ? field : { ...field, length };
+			}
+			default:
+				this.report(
+					`"DataType.Length" applies to a string, an array, a Map, a Set, a Record, a buffer, or a ` +
+						`tuple's rest element, and "${field.kind}" writes no count.`,
+					node,
+				);
+				return field;
+		}
 	}
 
 	// ---- arrays / tuples --------------------------------------------------

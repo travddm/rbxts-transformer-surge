@@ -1,7 +1,8 @@
 import type ts from "typescript";
 
 import { FIXED_DATATYPES } from "./datatypes";
-import type { Field, FieldKey, NumWidth, ObjectFieldEntry } from "./field";
+import type { Field, FieldKey, LengthWidth, NumWidth, ObjectFieldEntry } from "./field";
+import { DEFAULT_LENGTH_WIDTH } from "./field";
 
 const WIDTH_BYTES: Record<NumWidth, number> = {
 	f32: 4,
@@ -582,9 +583,14 @@ export class Emitter {
 				const s = this.fresh("s");
 				out.push(this.constStatement(s, value));
 				const lenExpr = f.createCallExpression(f.createPropertyAccessExpression(s, "size"), undefined, []);
-				const { buf: lbuf, pos: lpos, statements: lstmt } = this.destructureAlloc("alloc", 4);
+				const strWidth = this.lengthWidth(field.length);
+				const {
+					buf: lbuf,
+					pos: lpos,
+					statements: lstmt,
+				} = this.destructureAlloc("alloc", WIDTH_BYTES[strWidth]);
 				out.push(...lstmt);
-				out.push(f.createExpressionStatement(this.bufferCall("writeu32", [lbuf, lpos, lenExpr])));
+				out.push(...this.writeNumber(strWidth, lbuf, lpos, lenExpr));
 				const { buf: sbuf, pos: spos, statements: sstmt } = this.destructureAlloc("alloc", lenExpr);
 				out.push(...sstmt);
 				out.push(f.createExpressionStatement(this.bufferCall("writestring", [sbuf, spos, s])));
@@ -603,9 +609,14 @@ export class Emitter {
 				out.push(this.constStatement(source, value));
 				const len = this.fresh("len");
 				out.push(this.constStatement(len, this.bufferCall("len", [source])));
-				const { buf: lbuf, pos: lpos, statements: lstmt } = this.destructureAlloc("alloc", 4);
+				const bufferWidth = this.lengthWidth(field.length);
+				const {
+					buf: lbuf,
+					pos: lpos,
+					statements: lstmt,
+				} = this.destructureAlloc("alloc", WIDTH_BYTES[bufferWidth]);
 				out.push(...lstmt);
-				out.push(f.createExpressionStatement(this.bufferCall("writeu32", [lbuf, lpos, len])));
+				out.push(...this.writeNumber(bufferWidth, lbuf, lpos, len));
 				const { buf, pos, statements } = this.destructureAlloc("alloc", len);
 				out.push(...statements);
 				out.push(f.createExpressionStatement(this.bufferCall("copy", [buf, pos, source, this.num(0), len])));
@@ -685,9 +696,10 @@ export class Emitter {
 			case "array": {
 				const arr = this.fresh("arr");
 				out.push(this.constStatement(arr, value));
-				const { buf, pos, statements } = this.destructureAlloc("alloc", 4);
+				const arrayWidth = this.lengthWidth(field.length);
+				const { buf, pos, statements } = this.destructureAlloc("alloc", WIDTH_BYTES[arrayWidth]);
 				out.push(...statements);
-				out.push(f.createExpressionStatement(this.bufferCall("writeu32", [buf, pos, this.sizeOf(arr)])));
+				out.push(...this.writeNumber(arrayWidth, buf, pos, this.sizeOf(arr)));
 				const item = this.fresh("item");
 				const body: ts.Statement[] = [];
 				this.writeField(field.element, item, body);
@@ -719,9 +731,10 @@ export class Emitter {
 						this.ts_.SyntaxKind.MinusToken,
 						this.num(fixedCount),
 					);
-					const { buf, pos, statements } = this.destructureAlloc("alloc", 4);
+					const restWidth = this.lengthWidth(field.length);
+					const { buf, pos, statements } = this.destructureAlloc("alloc", WIDTH_BYTES[restWidth]);
 					out.push(...statements);
-					out.push(f.createExpressionStatement(this.bufferCall("writeu32", [buf, pos, restCountExpr])));
+					out.push(...this.writeNumber(restWidth, buf, pos, restCountExpr));
 					const i = this.fresh("i");
 					const body: ts.Statement[] = [];
 					// `tup[i]` has the union of every element type; the index is
@@ -782,6 +795,16 @@ export class Emitter {
 				return;
 			}
 		}
+	}
+
+	/**
+	 * The width of the count a variable-length kind writes ahead of its
+	 * contents. Absent means `u32`, which is what all five of them wrote
+	 * before `DataType.Length<T, L>` existed, so an unbranded shape's bytes
+	 * do not move (see field.ts).
+	 */
+	private lengthWidth(width: LengthWidth | undefined): LengthWidth {
+		return width ?? DEFAULT_LENGTH_WIDTH;
 	}
 
 	/**
@@ -1287,7 +1310,8 @@ export class Emitter {
 		const isSet = field.value === undefined;
 		const dictTmp = this.fresh("dict");
 		out.push(this.constStatement(dictTmp, value));
-		const { buf: cbuf, pos: cpos, statements: cstmt } = this.destructureAlloc("alloc", 4);
+		const countWidth = this.lengthWidth(field.length);
+		const { buf: cbuf, pos: cpos, statements: cstmt } = this.destructureAlloc("alloc", WIDTH_BYTES[countWidth]);
 		out.push(...cstmt);
 		const count = this.fresh("count");
 		out.push(
@@ -1339,7 +1363,7 @@ export class Emitter {
 				),
 			);
 		}
-		out.push(f.createExpressionStatement(this.bufferCall("writeu32", [cbuf, cpos, count])));
+		out.push(...this.writeNumber(countWidth, cbuf, cpos, count));
 	}
 
 	private writeObject(field: Extract<Field, { kind: "object" }>, value: ts.Expression, out: ts.Statement[]): void {
@@ -1687,10 +1711,15 @@ export class Emitter {
 				);
 			}
 			case "str": {
-				const { buf: lbuf, pos: lpos, statements: lstmt } = this.destructureAlloc("readAlloc", 4);
+				const strWidth = this.lengthWidth(field.length);
+				const {
+					buf: lbuf,
+					pos: lpos,
+					statements: lstmt,
+				} = this.destructureAlloc("readAlloc", WIDTH_BYTES[strWidth]);
 				out.push(...lstmt);
 				const len = this.fresh("len");
-				out.push(this.constStatement(len, this.bufferCall("readu32", [lbuf, lpos])));
+				out.push(this.constStatement(len, this.readNumber(strWidth, lbuf, lpos)));
 				const { buf: sbuf, pos: spos, statements: sstmt } = this.destructureAlloc("readAlloc", len);
 				out.push(...sstmt);
 				return this.bufferCall("readstring", [sbuf, spos, len]);
@@ -1703,10 +1732,15 @@ export class Emitter {
 				return this.readDatatype(field.name, out);
 			}
 			case "buffer": {
-				const { buf: lbuf, pos: lpos, statements: lstmt } = this.destructureAlloc("readAlloc", 4);
+				const bufferWidth = this.lengthWidth(field.length);
+				const {
+					buf: lbuf,
+					pos: lpos,
+					statements: lstmt,
+				} = this.destructureAlloc("readAlloc", WIDTH_BYTES[bufferWidth]);
 				out.push(...lstmt);
 				const len = this.fresh("len");
-				out.push(this.constStatement(len, this.bufferCall("readu32", [lbuf, lpos])));
+				out.push(this.constStatement(len, this.readNumber(bufferWidth, lbuf, lpos)));
 				const { buf, pos, statements } = this.destructureAlloc("readAlloc", len);
 				out.push(...statements);
 				// A copy: the input buffer holds the whole payload, and the caller owns the result.
@@ -1749,10 +1783,11 @@ export class Emitter {
 				return this.bindSideEffect(this.callLocal(`${field.helperName}_read`, []), out);
 			}
 			case "array": {
-				const { buf, pos, statements } = this.destructureAlloc("readAlloc", 4);
+				const arrayWidth = this.lengthWidth(field.length);
+				const { buf, pos, statements } = this.destructureAlloc("readAlloc", WIDTH_BYTES[arrayWidth]);
 				out.push(...statements);
 				const count = this.fresh("count");
-				out.push(this.constStatement(count, this.bufferCall("readu32", [buf, pos])));
+				out.push(this.constStatement(count, this.readNumber(arrayWidth, buf, pos)));
 				const result = this.fresh("result");
 				out.push(
 					f.createVariableStatement(
@@ -1817,10 +1852,11 @@ export class Emitter {
 					out,
 				);
 				if (field.rest) {
-					const { buf, pos, statements } = this.destructureAlloc("readAlloc", 4);
+					const restWidth = this.lengthWidth(field.length);
+					const { buf, pos, statements } = this.destructureAlloc("readAlloc", WIDTH_BYTES[restWidth]);
 					out.push(...statements);
 					const count = this.fresh("count");
-					out.push(this.constStatement(count, this.bufferCall("readu32", [buf, pos])));
+					out.push(this.constStatement(count, this.readNumber(restWidth, buf, pos)));
 					const i = this.fresh("_i");
 					const body: ts.Statement[] = [];
 					const restExpr = this.readField(field.rest, body);
@@ -2013,10 +2049,11 @@ export class Emitter {
 	private readDict(field: Extract<Field, { kind: "dict" }>, out: ts.Statement[]): ts.Expression {
 		const f = this.factory;
 		const isSet = field.value === undefined;
-		const { buf, pos, statements } = this.destructureAlloc("readAlloc", 4);
+		const countWidth = this.lengthWidth(field.length);
+		const { buf, pos, statements } = this.destructureAlloc("readAlloc", WIDTH_BYTES[countWidth]);
 		out.push(...statements);
 		const count = this.fresh("count");
-		out.push(this.constStatement(count, this.bufferCall("readu32", [buf, pos])));
+		out.push(this.constStatement(count, this.readNumber(countWidth, buf, pos)));
 		const result = this.fresh("result");
 		// Reconstructed as a `Record` regardless of `field.source`: that's the
 		// only one of the three TypeScript shapes whose plain `result[key] =`

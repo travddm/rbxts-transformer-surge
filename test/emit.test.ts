@@ -542,3 +542,53 @@ describe("Emitter local-register ceiling", () => {
 		expect(output.match(/buffer\.writef64/g)).toHaveLength(150);
 	});
 });
+
+describe("Emitter count widths", () => {
+	/** Every kind that writes a count, as `[label, field]` with `length` left to the caller. */
+	const counted: Array<[string, (length?: "u8" | "u16" | "u24" | "u32") => Field]> = [
+		["str", (length) => ({ kind: "str", length })],
+		["buffer", (length) => ({ kind: "buffer", length })],
+		["array", (length) => ({ kind: "array", element: { kind: "num", width: "u8" }, length })],
+		// A fixed-width key, so the dict's own count is the only count in the shape.
+		[
+			"dict",
+			(length) => ({ kind: "dict", key: { kind: "num", width: "u8" }, value: undefined, source: "set", length }),
+		],
+		["tuple rest", (length) => ({ kind: "tuple", fixed: [], rest: { kind: "num", width: "u8" }, length })],
+	];
+
+	test.each(counted)("a %s writes and reads its count at the branded width", (_label, build) => {
+		const output = emitSnapshot(build("u16"));
+		expect(output).toContain("buffer.writeu16");
+		expect(output).toContain("buffer.readu16");
+		// The count is the only u16 in these shapes; nothing else moved to it.
+		expect(output).not.toContain("buffer.writeu32");
+		expect(output).not.toContain("buffer.readu32");
+	});
+
+	// Rule 4 of data-type-surface.md, on the bytes rather than on the IR: the
+	// walker records the default as absence, and the emitter has to turn that
+	// absence back into exactly the u32 every one of these wrote before.
+	test.each(counted)("a %s with no branded width emits what it always did", (_label, build) => {
+		expect(emitSnapshot(build())).toBe(emitSnapshot(build("u32")));
+	});
+
+	// Luau's `buffer` has no 24-bit call, so a u24 count is the same two
+	// writes the `num` kind uses, and the reservation is 3 bytes and not 4.
+	test("a u24 count reserves three bytes and splits into a u16 and a u8", () => {
+		const output = emitSnapshot({ kind: "array", element: { kind: "num", width: "u8" }, length: "u24" });
+		// The count is reserved first; the 1 after it is the element, inside the loop.
+		expect(reservations(output, "write")[0]).toBe(3);
+		expect(reservations(output, "read")[0]).toBe(3);
+		expect(output).toContain("buffer.writeu16");
+		expect(output).toContain("buffer.writeu8");
+	});
+
+	test("a u8 count reserves one byte", () => {
+		// A string's payload is reserved at a run-time length, so the count is
+		// the only constant reservation in this shape.
+		const output = emitSnapshot({ kind: "str", length: "u8" });
+		expect(reservations(output, "write")).toEqual([1]);
+		expect(reservations(output, "read")).toEqual([1]);
+	});
+});

@@ -119,21 +119,74 @@ export function getDataTypeBrand(type: ts.Type): string | undefined {
 }
 
 /**
- * If `type` is `DataType.Packed<T>`, returns `T`. A direct reference is
- * detected by alias identity, like the other brands. A re-alias
- * (`type PackedFlags = DataType.Packed<Flags>`) carries the re-alias's own
- * `aliasSymbol` instead, so it is detected through the brand property
- * `_surge_packed?: [T]`, whose tuple element is `T`.
+ * The `DataType.*` brands that take type arguments, and the property each one
+ * records them in. The property holds every argument, so a re-alias -- which
+ * carries its own `aliasSymbol` and not the brand's -- is still resolvable
+ * from the type's shape.
  */
-export function getPackedInnerType(checker: ts.TypeChecker, type: ts.Type): ts.Type | undefined {
-	const withArgs = type as ts.Type & { aliasSymbol?: ts.Symbol; aliasTypeArguments?: readonly ts.Type[] };
-	if (getDataTypeBrand(type) === "Packed") {
-		return withArgs.aliasTypeArguments?.[0];
-	}
-	const brandProperty = type.getProperty("_surge_packed");
+const PARAMETERIZED_BRANDS = [
+	{ name: "Packed", property: "_surge_packed" },
+	{ name: "Length", property: "_surge_length" },
+] as const;
+
+type ParameterizedBrand = (typeof PARAMETERIZED_BRANDS)[number];
+
+export interface SurgeBrand {
+	readonly name: string;
+	readonly args: readonly ts.Type[];
+}
+
+/** The type arguments `property` records, or `undefined` if it is not surge's. */
+function argumentsFromBrandProperty(
+	checker: ts.TypeChecker,
+	type: ts.Type,
+	property: string,
+): readonly ts.Type[] | undefined {
+	const brandProperty = type.getProperty(property);
 	if (!brandProperty || !isFromSurgePackage(brandProperty.declarations)) {
 		return undefined;
 	}
 	const brandType = checker.getNonNullableType(checker.getTypeOfSymbol(brandProperty));
-	return checker.isTupleType(brandType) ? checker.getTypeArguments(brandType as ts.TypeReference)[0] : undefined;
+	return checker.isTupleType(brandType) ? checker.getTypeArguments(brandType as ts.TypeReference) : undefined;
+}
+
+/**
+ * The outermost parameterized `DataType.*` brand on `type`, with its type
+ * arguments (`Packed<T>` gives `[T]`, `Length<T, L>` gives `[T, L]`).
+ *
+ * Alias identity is tried first, and for every brand rather than one brand at
+ * a time, because a composition flattens into an intersection carrying both
+ * brand properties: `Length<Packed<T>, u16>` has `_surge_packed` just as much
+ * as `_surge_length`, so a property check would answer "Packed" and the
+ * length would be dropped with no error.
+ *
+ * A re-alias (`type Ids = DataType.Length<string[], u16>`) has no brand alias
+ * left, so the properties are all there is. Where a re-aliased composition
+ * has both, only one is outermost, and the arguments say which: the outer
+ * brand recorded the whole inner brand, so its inner type still carries the
+ * other's property, while the inner brand recorded its arguments before the
+ * outer one was applied and has lost it.
+ */
+export function getSurgeBrand(checker: ts.TypeChecker, type: ts.Type): SurgeBrand | undefined {
+	const name = getDataTypeBrand(type);
+	if (name !== undefined) {
+		const withArgs = type as ts.Type & { aliasTypeArguments?: readonly ts.Type[] };
+		return { name, args: withArgs.aliasTypeArguments ?? [] };
+	}
+
+	const present: Array<{ brand: ParameterizedBrand; args: readonly ts.Type[] }> = [];
+	for (const brand of PARAMETERIZED_BRANDS) {
+		const args = argumentsFromBrandProperty(checker, type, brand.property);
+		if (args) {
+			present.push({ brand, args });
+		}
+	}
+	if (present.length === 0) {
+		return undefined;
+	}
+	const outermost =
+		present.find(({ brand, args }) =>
+			present.every((other) => other.brand === brand || args[0]?.getProperty(other.brand.property) !== undefined),
+		) ?? present[0];
+	return { name: outermost.brand.name, args: outermost.args };
 }

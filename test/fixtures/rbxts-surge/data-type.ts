@@ -17,5 +17,7 @@ export namespace DataType {
 	export type i24 = number & { readonly _surge_i24?: never };
 	export type i32 = number & { readonly _surge_i32?: never };
 
+	export type Length<T, L extends u8 | u16 | u24 | u32 = u32> = T & { readonly _surge_length?: [T, L] };
+
 	export type Packed<T> = T & { readonly _surge_packed?: [T] };
 }

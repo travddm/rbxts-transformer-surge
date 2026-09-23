@@ -7,6 +7,18 @@
  */
 export type NumWidth = "f32" | "f64" | "u8" | "u16" | "u24" | "u32" | "i8" | "i16" | "i24" | "i32";
 
+/**
+ * The width of the count a variable-length kind writes ahead of its contents,
+ * set by `DataType.Length<T, L>` (see data-type-surface.md). Unsigned only: a
+ * count is never negative and never fractional.
+ *
+ * Absent on a field means `u32`, which is what every one of these kinds wrote
+ * before the brand existed, so an unbranded shape's bytes do not move.
+ */
+export type LengthWidth = "u8" | "u16" | "u24" | "u32";
+export const LENGTH_WIDTHS: ReadonlySet<string> = new Set<LengthWidth>(["u8", "u16", "u24", "u32"]);
+export const DEFAULT_LENGTH_WIDTH: LengthWidth = "u32";
+
 export interface FieldKey {
 	readonly name: string;
 	// `{ 0: T }` and `{ "0": T }` are one property to TypeScript but two
@@ -22,10 +34,10 @@ export interface ObjectFieldEntry extends FieldKey {
 export type Field =
 	| { readonly kind: "num"; readonly width: NumWidth }
 	| { readonly kind: "bool"; readonly packed: boolean }
-	| { readonly kind: "str" }
+	| { readonly kind: "str"; readonly length?: LengthWidth }
 	| { readonly kind: "vector2" }
-	// A Luau `buffer` value: a u32 length, then its bytes.
-	| { readonly kind: "buffer" }
+	// A Luau `buffer` value: a length, then its bytes.
+	| { readonly kind: "buffer"; readonly length?: LengthWidth }
 	// A row of `FIXED_DATATYPES` in datatypes.ts.
 	| { readonly kind: "datatype"; readonly name: string }
 	| { readonly kind: "vector3" }
@@ -37,8 +49,15 @@ export type Field =
 	| { readonly kind: "numberSequence" }
 	| { readonly kind: "enum"; readonly enumName: string; readonly members: ReadonlyArray<string> }
 	| { readonly kind: "object"; readonly fields: ReadonlyArray<ObjectFieldEntry>; readonly helperName?: string }
-	| { readonly kind: "array"; readonly element: Field }
-	| { readonly kind: "tuple"; readonly fixed: ReadonlyArray<Field>; readonly rest: Field | undefined }
+	| { readonly kind: "array"; readonly element: Field; readonly length?: LengthWidth }
+	// `length` is the width of the rest element's count; the fixed elements
+	// are inline and have no count of their own.
+	| {
+			readonly kind: "tuple";
+			readonly fixed: ReadonlyArray<Field>;
+			readonly rest: Field | undefined;
+			readonly length?: LengthWidth;
+	  }
 	// `value` is `undefined` for a Set: only the key is written, and the read
 	// side reconstructs the table by setting each read key to `true`. `source`
 	// doesn't affect the byte encoding (identical for all three -- see Type
@@ -50,6 +69,7 @@ export type Field =
 			readonly key: Field;
 			readonly value: Field | undefined;
 			readonly source: "map" | "set" | "record";
+			readonly length?: LengthWidth;
 	  }
 	| { readonly kind: "optional"; readonly inner: Field; readonly packed: boolean }
 	| { readonly kind: "literalConst"; readonly value: string | number | boolean }

@@ -742,3 +742,141 @@ describe("TypeWalker Packed<T>", () => {
 		});
 	});
 });
+
+describe("TypeWalker Length<T, L>", () => {
+	/** The `length` each named field of `T` carries, `undefined` where it carries none. */
+	function lengths(source: string): Map<string, unknown> {
+		const { field, diagnostics } = walkDeclaration(source, "T", { surge: true });
+		expect(diagnostics).toHaveLength(0);
+		if (field.kind !== "object") throw new Error("expected an object");
+		return new Map(
+			field.fields.map((entry) => [entry.name, (entry.field as { length?: unknown }).length ?? undefined]),
+		);
+	}
+
+	test("sets the count width on every kind that writes one", () => {
+		const byName = lengths(
+			`import { DataType } from "@rbxts/surge";
+			interface T {
+				s: DataType.Length<string, DataType.u8>;
+				arr: DataType.Length<Array<number>, DataType.u16>;
+				m: DataType.Length<Map<string, number>, DataType.u24>;
+				set: DataType.Length<Set<string>, DataType.u8>;
+				rec: DataType.Length<Record<string, number>, DataType.u16>;
+				buf: DataType.Length<buffer, DataType.u8>;
+				tup: DataType.Length<[string, ...number[]], DataType.u16>;
+			}`,
+		);
+		expect([...byName.entries()].sort()).toEqual([
+			["arr", "u16"],
+			["buf", "u8"],
+			["m", "u24"],
+			["rec", "u16"],
+			["s", "u8"],
+			["set", "u8"],
+			["tup", "u16"],
+		]);
+	});
+
+	// Rule 4 of data-type-surface.md: a fully defaulted brand has to encode
+	// exactly what the unbranded type encodes, so it must leave no `length`
+	// behind for the emitter to act on.
+	test("the default argument leaves the field identical to the unbranded one", () => {
+		const { field: branded } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { arr: DataType.Length<Array<string>>; }`,
+			"T",
+			{ surge: true },
+		);
+		const { field: bare } = walkDeclaration("interface T { arr: Array<string>; }", "T", { surge: true });
+		expect(branded).toEqual(bare);
+	});
+
+	// The brand belongs to the container it wraps, not to the subtree under
+	// it -- the one place it differs from `Packed<T>`.
+	test("applies to the container it wraps and not to a nested one", () => {
+		const { field } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { grid: DataType.Length<Array<Array<string>>, DataType.u16>; }`,
+			"T",
+			{ surge: true },
+		);
+		if (field.kind !== "object") throw new Error("expected an object");
+		expect(field.fields[0].field).toEqual({
+			kind: "array",
+			length: "u16",
+			element: { kind: "array", element: { kind: "str" } },
+		});
+	});
+
+	test("composes with Packed<T> in either order", () => {
+		const expected = {
+			kind: "array",
+			length: "u16",
+			element: { kind: "object", fields: [{ name: "a", field: { kind: "bool", packed: true } }] },
+		};
+		const lengthOutside = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			interface Inner { a: boolean; }
+			interface T { p: DataType.Length<DataType.Packed<Array<Inner>>, DataType.u16>; }`,
+			"T",
+			{ surge: true },
+		);
+		const packedOutside = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			interface Inner { a: boolean; }
+			interface T { p: DataType.Packed<DataType.Length<Array<Inner>, DataType.u16>>; }`,
+			"T",
+			{ surge: true },
+		);
+		for (const { field, diagnostics } of [lengthOutside, packedOutside]) {
+			expect(diagnostics).toHaveLength(0);
+			if (field.kind !== "object") throw new Error("expected an object");
+			expect(field.fields[0].field).toEqual(expected);
+		}
+	});
+
+	test("a width that cannot hold a count is a diagnostic", () => {
+		const { diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { arr: DataType.Length<Array<string>, DataType.i16>; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain('not "DataType.i16"');
+	});
+
+	test("a type with no count of its own is a diagnostic", () => {
+		const { diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { n: DataType.Length<number, DataType.u16>; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain("writes no count");
+	});
+
+	// The inner type is walked before the width is checked, so a brand nested
+	// on a bad inner type reports once per brand. Both messages name the brand
+	// and the node is the same property either way, so the pair still reads.
+	test("a nested brand on a type with no count reports once per brand", () => {
+		const { diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { n: DataType.Length<DataType.Length<number, DataType.u16>, DataType.u8>; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toHaveLength(2);
+		for (const diagnostic of diagnostics) {
+			expect(diagnostic.message).toContain('"DataType.Length"');
+			expect(diagnostic.message).toContain("writes no count");
+		}
+	});
+
+	test("a tuple with no rest element is a diagnostic", () => {
+		const { diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { tup: DataType.Length<[string, number], DataType.u16>; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain("no rest element");
+	});
+});
