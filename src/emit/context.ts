@@ -401,9 +401,9 @@ export abstract class EmitContext {
 	 * not taken. The cursor and the buffer are locals of the closure this code
 	 * is emitted into, not module state in `@rbxts/surge`, which is what makes
 	 * this four instructions instead of a call into another module. Measured,
-	 * that call was worth 2.64x on a row with one field per element (What
-	 * rolling the hot paths into the generated code is worth, in
-	 * future-work/generated-code-performance.md).
+	 * each such call removed saved about 22 to 27 ns
+	 * (docs/research/generated-code-against-hand-written.md in the surge
+	 * repository).
 	 *
 	 * `buf` is the state identifier itself rather than a fresh local, so every
 	 * `buffer.writeXX` reads whichever buffer is current -- which is what makes

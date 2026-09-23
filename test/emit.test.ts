@@ -419,7 +419,8 @@ describe("Emitter union guards", () => {
 });
 
 // One reservation per run of consecutive fixed-size fields, rather than one
-// per field (see generated-code-performance.md in the surge repo).
+// per field (what it was measured as worth is in
+// docs/research/generated-code-against-hand-written.md in the surge repo).
 /**
  * The constant sizes a body reserves, in order. A reservation is inline now
  * -- `cursor = posN + <size>;` -- so this is what stands in for counting
@@ -483,7 +484,7 @@ describe("Emitter shared reservations", () => {
 });
 
 // Luau allows 200 registers per function; 100 `const [buf, pos]` pairs in one
-// scope exceed it (see generated-code-performance.md in the surge repo).
+// scope exceed it (see Risks in docs/transformer.md in the surge repo).
 describe("Emitter local-register ceiling", () => {
 	const manyFields = (count: number): Field => ({
 		kind: "object",
