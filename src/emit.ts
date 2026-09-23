@@ -744,9 +744,11 @@ export class Emitter {
 				const arrayExact = this.exactCount(field.length);
 				if (arrayExact !== undefined) {
 					// Indexed rather than `for...of`, so exactly this many are
-					// written however many the value holds: a longer one is
-					// ignored past the bound, and a shorter one writes a `nil`
-					// element and raises there.
+					// written however many the value holds. A longer one is
+					// ignored past the bound. A shorter one writes `nil`
+					// elements, which raises for every element kind but an
+					// optional -- `nil` is what an absent optional writes, so
+					// there it pads instead (pinned in collections.spec.ts).
 					const i = this.fresh("i");
 					const body: ts.Statement[] = [];
 					this.writeField(field.element, f.createElementAccessExpression(arr, i), body);
@@ -880,8 +882,10 @@ export class Emitter {
 	 * The element or byte count of the exact form, where no count is written
 	 * at all and both sides use this number, or `undefined` for the counted
 	 * form. The value has to have exactly this many: a longer one is
-	 * truncated and a shorter one raises, which the type states and nothing
-	 * checks until write-side validation lands (data-type-surface.md).
+	 * truncated, and a shorter one raises wherever writing the missing part
+	 * touches it -- except for an optional element, which pads. The type
+	 * states the length and nothing checks it until write-side validation
+	 * lands (data-type-surface.md).
 	 */
 	private exactCount(length: CountSpec | undefined): number | undefined {
 		return typeof length === "number" ? length : undefined;
