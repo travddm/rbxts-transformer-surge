@@ -720,14 +720,14 @@ export class TypeWalker {
 	 *
 	 * Unlike `tryWalkObject`, which can attach `helperName` directly onto its
 	 * `object` result (`Field`'s `object` variant has that slot, and
-	 * `emit.ts` dispatches on it), no other `Field` kind has anywhere to
+	 * `emit/write.ts` and `emit/read.ts` dispatch on it), no other `Field` kind has anywhere to
 	 * carry a helper marker. So here, once a walk this method starts turns
 	 * out to need a helper, *every* call site that walk passes through --
 	 * including the outermost one, whether that's the root declaration or a
 	 * plain, non-recursive-looking field elsewhere -- gets back
 	 * `{ kind: "recursiveRef", helperName }` instead of the real structure.
 	 * The real structure exists exactly once, in `resolved`, reachable only
-	 * through `getHelperFields()` (what `emit.ts`'s `ensureHelper` builds the
+	 * through `getHelperFields()` (what `emit/index.ts`'s `ensureHelper` builds the
 	 * helper's body from).
 	 */
 	private walkUnion(type: ts.UnionType, node: ts.Node, packed: boolean): Field {
@@ -825,7 +825,7 @@ export class TypeWalker {
 		}
 
 		// The write side picks a variant with a runtime type check (`guardFor`
-		// in emit.ts), so every shape that check can't decide is rejected here.
+		// in emit/write.ts), so every shape that check can't decide is rejected here.
 		if (fields.some((f) => f.kind === "blob")) {
 			this.report(
 				"this union mixes an opaque variant (an Instance, a Roblox datatype without its own encoding, or " +

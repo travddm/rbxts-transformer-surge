@@ -1,8 +1,8 @@
 /**
  * The internal IR every `createSerializer`/`createDeserializer`/
  * `createBinarySerializer` call site is walked into (see Transformer Design
- * §2 in docs/transformer.md), and the only input the emitter (`emit.ts`)
- * consumes. Producing this from a `ts.Type` is `walk.ts`'s job; turning it
+ * §2 in docs/transformer.md), and the only input the emitter
+ * (`emit/`) consumes. Producing this from a `ts.Type` is `walk.ts`'s job; turning it
  * into statements is the emitter's.
  */
 export type NumWidth = "f32" | "f64" | "u8" | "u16" | "u24" | "u32" | "i8" | "i16" | "i24" | "i32";

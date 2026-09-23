@@ -462,7 +462,7 @@ describe("TypeWalker recursion through unions", () => {
 	// `walker.walk()` always returns `recursiveRef` for whichever call site
 	// discovers a recursive union first (see the two tests above) -- the real
 	// structure is only reachable through `getHelperFields()`, the same way
-	// `emit.ts`'s `ensureHelper` reaches it when building the helper's body.
+	// `emit/index.ts`'s `ensureHelper` reaches it when building the helper's body.
 	test("a recursive union's resolved helper field is the real tagged union, with its own recursion as a nested helper reference", () => {
 		const { type, node, walker, cleanup } = loadDeclaration(
 			`type Expr = { kind: "num"; v: number } | { kind: "add"; l: Expr; r: Expr };`,
