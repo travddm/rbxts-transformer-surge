@@ -1,7 +1,7 @@
 import type ts from "typescript";
 
 import { FIXED_DATATYPES } from "./datatypes";
-import type { Field, FieldKey, LengthWidth, NumWidth, ObjectFieldEntry } from "./field";
+import type { CountSpec, Field, FieldKey, LengthWidth, NumWidth, ObjectFieldEntry } from "./field";
 import { DEFAULT_LENGTH_WIDTH } from "./field";
 
 const WIDTH_BYTES: Record<NumWidth, number> = {
@@ -334,6 +334,27 @@ export class Emitter {
 	 * unless it does: the generated file is type-checked in the consumer's
 	 * own project, under the consumer's own options.
 	 */
+	/**
+	 * A write loop over `value[from]` up to but not including `value[to]`, for
+	 * a body that indexes the value rather than iterating it. A C-style `for`
+	 * and not `countedLoop`'s `$range`, because roblox-ts applies its own
+	 * 0-to-1 index shift to `value[i]` and a `$range` index is already 1-based.
+	 * The exact form's bound is a numeric literal, which roblox-ts can prove is
+	 * an integer, so this still lowers to a numeric `for`.
+	 */
+	private indexedLoop(index: ts.Identifier, from: number, to: ts.Expression, body: ts.Statement[]): ts.Statement {
+		const f = this.factory;
+		return f.createForStatement(
+			f.createVariableDeclarationList(
+				[f.createVariableDeclaration(index, undefined, undefined, this.num(from))],
+				this.ts_.NodeFlags.Let,
+			),
+			f.createBinaryExpression(index, this.ts_.SyntaxKind.LessThanToken, to),
+			f.createPostfixIncrement(index),
+			f.createBlock(body, true),
+		);
+	}
+
 	private countedLoop(index: ts.Identifier, count: ts.Expression, body: ts.Statement[]): ts.Statement {
 		const f = this.factory;
 		return f.createForOfStatement(
@@ -583,6 +604,17 @@ export class Emitter {
 				const s = this.fresh("s");
 				out.push(this.constStatement(s, value));
 				const lenExpr = f.createCallExpression(f.createPropertyAccessExpression(s, "size"), undefined, []);
+				const strExact = this.exactCount(field.length);
+				if (strExact !== undefined) {
+					const { buf, pos, statements } = this.destructureAlloc("alloc", strExact);
+					out.push(...statements);
+					// The fourth argument is a byte count, so a longer string is
+					// truncated to it and a shorter one raises `string length overflow`.
+					out.push(
+						f.createExpressionStatement(this.bufferCall("writestring", [buf, pos, s, this.num(strExact)])),
+					);
+					return;
+				}
 				const strWidth = this.lengthWidth(field.length);
 				const {
 					buf: lbuf,
@@ -607,6 +639,19 @@ export class Emitter {
 			case "buffer": {
 				const source = this.fresh("src");
 				out.push(this.constStatement(source, value));
+				const bufferExact = this.exactCount(field.length);
+				if (bufferExact !== undefined) {
+					const { buf, pos, statements } = this.destructureAlloc("alloc", bufferExact);
+					out.push(...statements);
+					// `buffer.copy`'s count is what is read from the source, so a
+					// shorter source is out of bounds and a longer one is truncated.
+					out.push(
+						f.createExpressionStatement(
+							this.bufferCall("copy", [buf, pos, source, this.num(0), this.num(bufferExact)]),
+						),
+					);
+					return;
+				}
 				const len = this.fresh("len");
 				out.push(this.constStatement(len, this.bufferCall("len", [source])));
 				const bufferWidth = this.lengthWidth(field.length);
@@ -696,6 +741,18 @@ export class Emitter {
 			case "array": {
 				const arr = this.fresh("arr");
 				out.push(this.constStatement(arr, value));
+				const arrayExact = this.exactCount(field.length);
+				if (arrayExact !== undefined) {
+					// Indexed rather than `for...of`, so exactly this many are
+					// written however many the value holds: a longer one is
+					// ignored past the bound, and a shorter one writes a `nil`
+					// element and raises there.
+					const i = this.fresh("i");
+					const body: ts.Statement[] = [];
+					this.writeField(field.element, f.createElementAccessExpression(arr, i), body);
+					out.push(this.indexedLoop(i, 0, this.num(arrayExact), body));
+					return;
+				}
 				const arrayWidth = this.lengthWidth(field.length);
 				const { buf, pos, statements } = this.destructureAlloc("alloc", WIDTH_BYTES[arrayWidth]);
 				out.push(...statements);
@@ -726,6 +783,18 @@ export class Emitter {
 				);
 				if (field.rest) {
 					const fixedCount = field.fixed.length;
+					const restExact = this.exactCount(field.length);
+					if (restExact !== undefined) {
+						const i = this.fresh("i");
+						const body: ts.Statement[] = [];
+						this.writeField(
+							field.rest,
+							this.castTo(f.createElementAccessExpression(tup, i), this.fieldToTypeNode(field.rest)),
+							body,
+						);
+						out.push(this.indexedLoop(i, fixedCount, this.num(fixedCount + restExact), body));
+						return;
+					}
 					const restCountExpr = f.createBinaryExpression(
 						this.sizeOf(tup),
 						this.ts_.SyntaxKind.MinusToken,
@@ -803,8 +872,19 @@ export class Emitter {
 	 * before `DataType.Length<T, L>` existed, so an unbranded shape's bytes
 	 * do not move (see field.ts).
 	 */
-	private lengthWidth(width: LengthWidth | undefined): LengthWidth {
-		return width ?? DEFAULT_LENGTH_WIDTH;
+	private lengthWidth(length: CountSpec | undefined): LengthWidth {
+		return typeof length === "number" ? DEFAULT_LENGTH_WIDTH : (length ?? DEFAULT_LENGTH_WIDTH);
+	}
+
+	/**
+	 * The element or byte count of the exact form, where no count is written
+	 * at all and both sides use this number, or `undefined` for the counted
+	 * form. The value has to have exactly this many: a longer one is
+	 * truncated and a shorter one raises, which the type states and nothing
+	 * checks until write-side validation lands (data-type-surface.md).
+	 */
+	private exactCount(length: CountSpec | undefined): number | undefined {
+		return typeof length === "number" ? length : undefined;
 	}
 
 	/**
@@ -1711,6 +1791,12 @@ export class Emitter {
 				);
 			}
 			case "str": {
+				const strExact = this.exactCount(field.length);
+				if (strExact !== undefined) {
+					const { buf, pos, statements } = this.destructureAlloc("readAlloc", strExact);
+					out.push(...statements);
+					return this.bufferCall("readstring", [buf, pos, this.num(strExact)]);
+				}
 				const strWidth = this.lengthWidth(field.length);
 				const {
 					buf: lbuf,
@@ -1732,6 +1818,19 @@ export class Emitter {
 				return this.readDatatype(field.name, out);
 			}
 			case "buffer": {
+				const bufferExact = this.exactCount(field.length);
+				if (bufferExact !== undefined) {
+					const { buf, pos, statements } = this.destructureAlloc("readAlloc", bufferExact);
+					out.push(...statements);
+					const exactResult = this.fresh("bytes");
+					out.push(this.constStatement(exactResult, this.bufferCall("create", [this.num(bufferExact)])));
+					out.push(
+						f.createExpressionStatement(
+							this.bufferCall("copy", [exactResult, this.num(0), buf, pos, this.num(bufferExact)]),
+						),
+					);
+					return exactResult;
+				}
 				const bufferWidth = this.lengthWidth(field.length);
 				const {
 					buf: lbuf,
@@ -1783,11 +1882,20 @@ export class Emitter {
 				return this.bindSideEffect(this.callLocal(`${field.helperName}_read`, []), out);
 			}
 			case "array": {
-				const arrayWidth = this.lengthWidth(field.length);
-				const { buf, pos, statements } = this.destructureAlloc("readAlloc", WIDTH_BYTES[arrayWidth]);
-				out.push(...statements);
-				const count = this.fresh("count");
-				out.push(this.constStatement(count, this.readNumber(arrayWidth, buf, pos)));
+				// The exact form writes no count, so the loop bound is the
+				// literal the type carries instead of a value read back.
+				const arrayExact = this.exactCount(field.length);
+				let count: ts.Expression;
+				if (arrayExact === undefined) {
+					const arrayWidth = this.lengthWidth(field.length);
+					const { buf, pos, statements } = this.destructureAlloc("readAlloc", WIDTH_BYTES[arrayWidth]);
+					out.push(...statements);
+					const countLocal = this.fresh("count");
+					out.push(this.constStatement(countLocal, this.readNumber(arrayWidth, buf, pos)));
+					count = countLocal;
+				} else {
+					count = this.num(arrayExact);
+				}
 				const result = this.fresh("result");
 				out.push(
 					f.createVariableStatement(
@@ -1852,11 +1960,18 @@ export class Emitter {
 					out,
 				);
 				if (field.rest) {
-					const restWidth = this.lengthWidth(field.length);
-					const { buf, pos, statements } = this.destructureAlloc("readAlloc", WIDTH_BYTES[restWidth]);
-					out.push(...statements);
-					const count = this.fresh("count");
-					out.push(this.constStatement(count, this.readNumber(restWidth, buf, pos)));
+					const restExact = this.exactCount(field.length);
+					let count: ts.Expression;
+					if (restExact === undefined) {
+						const restWidth = this.lengthWidth(field.length);
+						const { buf, pos, statements } = this.destructureAlloc("readAlloc", WIDTH_BYTES[restWidth]);
+						out.push(...statements);
+						const countLocal = this.fresh("count");
+						out.push(this.constStatement(countLocal, this.readNumber(restWidth, buf, pos)));
+						count = countLocal;
+					} else {
+						count = this.num(restExact);
+					}
 					const i = this.fresh("_i");
 					const body: ts.Statement[] = [];
 					const restExpr = this.readField(field.rest, body);

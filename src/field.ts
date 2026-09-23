@@ -19,6 +19,14 @@ export type LengthWidth = "u8" | "u16" | "u24" | "u32";
 export const LENGTH_WIDTHS: ReadonlySet<string> = new Set<LengthWidth>(["u8", "u16", "u24", "u32"]);
 export const DEFAULT_LENGTH_WIDTH: LengthWidth = "u32";
 
+/**
+ * How a variable-length kind says how much follows. A `LengthWidth` writes a
+ * count of that width ahead of the contents; a number writes no count at all
+ * and both sides use exactly that many elements or bytes, which is Blink's
+ * and Zap's exact form. Absent is the default width.
+ */
+export type CountSpec = LengthWidth | number;
+
 export interface FieldKey {
 	readonly name: string;
 	// `{ 0: T }` and `{ "0": T }` are one property to TypeScript but two
@@ -34,10 +42,10 @@ export interface ObjectFieldEntry extends FieldKey {
 export type Field =
 	| { readonly kind: "num"; readonly width: NumWidth }
 	| { readonly kind: "bool"; readonly packed: boolean }
-	| { readonly kind: "str"; readonly length?: LengthWidth }
+	| { readonly kind: "str"; readonly length?: CountSpec }
 	| { readonly kind: "vector2" }
 	// A Luau `buffer` value: a length, then its bytes.
-	| { readonly kind: "buffer"; readonly length?: LengthWidth }
+	| { readonly kind: "buffer"; readonly length?: CountSpec }
 	// A row of `FIXED_DATATYPES` in datatypes.ts.
 	| { readonly kind: "datatype"; readonly name: string }
 	| { readonly kind: "vector3" }
@@ -49,14 +57,14 @@ export type Field =
 	| { readonly kind: "numberSequence" }
 	| { readonly kind: "enum"; readonly enumName: string; readonly members: ReadonlyArray<string> }
 	| { readonly kind: "object"; readonly fields: ReadonlyArray<ObjectFieldEntry>; readonly helperName?: string }
-	| { readonly kind: "array"; readonly element: Field; readonly length?: LengthWidth }
-	// `length` is the width of the rest element's count; the fixed elements
-	// are inline and have no count of their own.
+	| { readonly kind: "array"; readonly element: Field; readonly length?: CountSpec }
+	// `length` describes the rest element's count; the fixed elements are
+	// inline and have no count of their own.
 	| {
 			readonly kind: "tuple";
 			readonly fixed: ReadonlyArray<Field>;
 			readonly rest: Field | undefined;
-			readonly length?: LengthWidth;
+			readonly length?: CountSpec;
 	  }
 	// `value` is `undefined` for a Set: only the key is written, and the read
 	// side reconstructs the table by setting each read key to `true`. `source`
@@ -69,6 +77,10 @@ export type Field =
 			readonly key: Field;
 			readonly value: Field | undefined;
 			readonly source: "map" | "set" | "record";
+			// Width only, never an exact count: the write side counts entries as
+			// it iterates, so it cannot promise a compile-time number, and a
+			// mismatch would misread every field after this one rather than just
+			// this one. Blink and Zap bound a map the same way, by width.
 			readonly length?: LengthWidth;
 	  }
 	| { readonly kind: "optional"; readonly inner: Field; readonly packed: boolean }

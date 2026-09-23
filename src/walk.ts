@@ -2,7 +2,7 @@ import type ts from "typescript";
 
 import { isFixedDatatype } from "./datatypes";
 import { getDataTypeBrand, getSurgeBrand, isFromTypesPackage, isRobloxNominalType } from "./detect";
-import type { Field, FieldKey, LengthWidth, NumWidth, ObjectFieldEntry } from "./field";
+import type { CountSpec, Field, FieldKey, LengthWidth, NumWidth, ObjectFieldEntry } from "./field";
 import { DEFAULT_LENGTH_WIDTH, LENGTH_WIDTHS } from "./field";
 
 export interface WalkDiagnostic {
@@ -420,12 +420,33 @@ export class TypeWalker {
 			return { kind: "blob" };
 		}
 		const field = this.walk(innerType, node, packed);
-		const width = widthType === undefined ? undefined : getDataTypeBrand(widthType);
+		if (widthType === undefined) {
+			// The kind is still checked, so a brand with no argument left to
+			// read is not a brand that silently does nothing.
+			return this.withLength(field, DEFAULT_LENGTH_WIDTH, node);
+		}
+
+		// A numeric literal is the exact form: no count is written at all and
+		// both sides use exactly that many. A width brand is the counted form.
+		if (widthType.isNumberLiteral()) {
+			const exact = widthType.value;
+			if (!Number.isInteger(exact) || exact < 0) {
+				this.report(
+					`"DataType.Length"'s exact count must be a whole number that is not negative, not "${exact}".`,
+					node,
+				);
+				return field;
+			}
+			return this.withLength(field, exact, node);
+		}
+
+		const width = getDataTypeBrand(widthType);
 		if (width === undefined || !LENGTH_WIDTHS.has(width)) {
 			this.report(
-				`"DataType.Length"'s second argument must be "DataType.u8", "DataType.u16", "DataType.u24", or ` +
-					`"DataType.u32"${width === undefined ? "" : `, not "DataType.${width}"`} -- a count is never ` +
-					`negative and never fractional.`,
+				`"DataType.Length"'s second argument must be "DataType.u8", "DataType.u16", "DataType.u24", ` +
+					`"DataType.u32", or a whole number literal for the exact form` +
+					`${width === undefined ? "" : `, not "DataType.${width}"`} -- a count is never negative and ` +
+					`never fractional.`,
 				node,
 			);
 			return field;
@@ -440,13 +461,24 @@ export class TypeWalker {
 	 * on the bytes. The kind is still checked either way, so
 	 * `Length<number, u32>` is a diagnostic and not a brand that does nothing.
 	 */
-	private withLength(field: Field, length: LengthWidth, node: ts.Node): Field {
+	private withLength(field: Field, length: CountSpec, node: ts.Node): Field {
 		switch (field.kind) {
 			case "str":
 			case "buffer":
 			case "array":
-			case "dict":
 				return length === DEFAULT_LENGTH_WIDTH ? field : { ...field, length };
+			case "dict": {
+				if (typeof length === "number") {
+					this.report(
+						`"DataType.Length"'s exact form does not apply to a Map, a Set, or a Record: the write ` +
+							`side counts entries as it iterates them, so it cannot promise a fixed number, and a ` +
+							`mismatch would misread every field after this one. Give it a count width instead.`,
+						node,
+					);
+					return field;
+				}
+				return length === DEFAULT_LENGTH_WIDTH ? field : { ...field, length };
+			}
 			case "tuple": {
 				if (field.rest === undefined) {
 					this.report(

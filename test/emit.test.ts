@@ -584,6 +584,42 @@ describe("Emitter count widths", () => {
 		expect(output).toContain("buffer.writeu8");
 	});
 
+	// The exact form's whole point: the count is in the type, so no bytes of
+	// the payload go to saying how many there are.
+	// `f32` elements, so that any unsigned read or write left in the output is
+	// a count and not an element.
+	test.each([
+		["str", { kind: "str", length: 8 } as Field, 8],
+		["buffer", { kind: "buffer", length: 16 } as Field, 16],
+		["array", { kind: "array", element: { kind: "num", width: "f32" }, length: 3 } as Field, 4],
+		["tuple rest", { kind: "tuple", fixed: [], rest: { kind: "num", width: "f32" }, length: 2 } as Field, 4],
+	])("an exact %s writes no count at all", (_label, field, firstReservation) => {
+		const output = emitSnapshot(field);
+		for (const width of ["u8", "u16", "u24", "u32"]) {
+			expect(output).not.toContain(`buffer.write${width}(`);
+			expect(output).not.toContain(`buffer.read${width}(`);
+		}
+		expect(reservations(output, "write")[0]).toBe(firstReservation);
+		expect(reservations(output, "read")[0]).toBe(firstReservation);
+	});
+
+	test("an exact string passes its byte count to writestring and readstring", () => {
+		const output = emitSnapshot({ kind: "str", length: 8 });
+		expect(output).toContain("buffer.writestring");
+		expect(output).toContain("buffer.readstring");
+		// The count reaches both calls, which is what truncates a longer value
+		// and raises on a shorter one.
+		expect(output.match(/, 8\)/g)?.length).toBeGreaterThanOrEqual(2);
+	});
+
+	test("an exact array loops a literal number of times on both sides", () => {
+		const output = emitSnapshot({ kind: "array", element: { kind: "num", width: "u8" }, length: 3 });
+		// Indexed on the write side so exactly three are written; `$range` on
+		// the read side, whose bound is the same literal.
+		expect(output).toMatch(/i[0-9]+ < 3;/);
+		expect(output).toContain("$range(1, 3)");
+	});
+
 	test("a u8 count reserves one byte", () => {
 		// A string's payload is reserved at a run-time length, so the count is
 		// the only constant reservation in this shape.

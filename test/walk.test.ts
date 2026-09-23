@@ -854,6 +854,50 @@ describe("TypeWalker Length<T, L>", () => {
 		expect(diagnostics[0].message).toContain("writes no count");
 	});
 
+	test("a numeric literal is the exact form, on every kind that can promise one", () => {
+		const byName = lengths(
+			`import { DataType } from "@rbxts/surge";
+			interface T {
+				s: DataType.Length<string, 8>;
+				arr: DataType.Length<Array<number>, 3>;
+				buf: DataType.Length<buffer, 16>;
+				tup: DataType.Length<[string, ...number[]], 2>;
+			}`,
+		);
+		expect([...byName.entries()].sort()).toEqual([
+			["arr", 3],
+			["buf", 16],
+			["s", 8],
+			["tup", 2],
+		]);
+	});
+
+	// The write side counts entries as it iterates them, so it cannot promise
+	// a fixed number, and a mismatch would misread the rest of the buffer.
+	test("the exact form is a diagnostic on a Map, a Set, and a Record", () => {
+		for (const container of ["Map<string, number>", "Set<string>", "Record<string, number>"]) {
+			const { diagnostics } = walkDeclaration(
+				`import { DataType } from "@rbxts/surge"; interface T { c: DataType.Length<${container}, 4>; }`,
+				"T",
+				{ surge: true },
+			);
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0].message).toContain("counts entries as it iterates");
+		}
+	});
+
+	test("a negative or fractional exact count is a diagnostic", () => {
+		for (const count of ["-1", "2.5"]) {
+			const { diagnostics } = walkDeclaration(
+				`import { DataType } from "@rbxts/surge"; interface T { arr: DataType.Length<Array<number>, ${count}>; }`,
+				"T",
+				{ surge: true },
+			);
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0].message).toContain("whole number that is not negative");
+		}
+	});
+
 	// The inner type is walked before the width is checked, so a brand nested
 	// on a bad inner type reports once per brand. Both messages name the brand
 	// and the node is the same property either way, so the pair still reads.
