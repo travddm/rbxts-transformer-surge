@@ -8,7 +8,7 @@
 		"lib"
 	],
 	"scripts": {
-		"compile": "tsc -p tsconfig.json",
+		"compile": "node scripts/clear-orphaned-output.mjs && tsc -p tsconfig.json",
 		"prepare": "npm run compile",
 		"test": "jest",
 		"lint:check": "npm run lint:eslint && npm run lint:md",
