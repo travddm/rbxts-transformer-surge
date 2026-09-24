@@ -725,6 +725,9 @@ describe("Emitter write-side checks", () => {
 				length: 3,
 			}),
 		).toMatch(/size\(\) > 3/);
+		expect(
+			checkedWrite({ kind: "array", element: { kind: "literal", values: ["a", "b", undefined] }, length: 3 }),
+		).toMatch(/size\(\) > 3/);
 		expect(checkedWrite({ kind: "str", length: 4 })).toMatch(/size\(\) !== 4/);
 		expect(checkedWrite({ kind: "buffer", length: 4 })).toMatch(/buffer\.len\(src[0-9]+\) !== 4/);
 	});

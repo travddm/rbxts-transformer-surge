@@ -105,7 +105,8 @@ export type Field =
 	  }
 	| { readonly kind: "optional"; readonly inner: Field; readonly packed: boolean }
 	| { readonly kind: "literalConst"; readonly value: string | number | boolean | undefined }
-	| { readonly kind: "literal"; readonly values: ReadonlyArray<string | number | boolean> }
+	// `undefined` is a value like any other, last in canonical literal order.
+	| { readonly kind: "literal"; readonly values: ReadonlyArray<string | number | boolean | undefined> }
 	| {
 			readonly kind: "taggedUnion";
 			readonly tagKey: string;

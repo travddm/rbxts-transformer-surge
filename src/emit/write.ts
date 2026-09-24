@@ -122,8 +122,8 @@ function checkCountFits(ctx: EmitContext, width: LengthWidth, count: ts.Expressi
 /**
  * Under `writeChecks`, raises when a value in the exact form is not the length
  * its type declares. Unchecked, a longer one is truncated and a shorter one
- * pads or raises by element kind. `padsShort` is for an optional element, whose
- * padding is the contract rather than a defect (Wire format 6.6 in
+ * pads or raises by element kind. `padsShort` is for an element whose padding
+ * is the contract rather than a defect (Wire format 6.6 in
  * docs/specs/wire-format.md in the surge repo), so only a longer value raises.
  */
 function checkExactLength(
@@ -146,6 +146,19 @@ function checkExactLength(
 			),
 			`serialize given a value whose length is not the exact length ${exact} its type declares`,
 		),
+	);
+}
+
+/**
+ * Whether a missing element of this kind is written as a valid absent value:
+ * an `optional`, or a `literal` that includes `undefined`, which canonical
+ * literal order puts last (Wire format 6.6 in docs/specs/wire-format.md in the
+ * surge repo).
+ */
+function padsAsAbsent(element: Field): boolean {
+	return (
+		element.kind === "optional" ||
+		(element.kind === "literal" && element.values[element.values.length - 1] === undefined)
 	);
 }
 
@@ -297,7 +310,7 @@ function writeArray(
 		// elements, which raises for every element kind but an
 		// optional -- `nil` is what an absent optional writes, so
 		// there it pads instead (pinned in collections.spec.ts).
-		checkExactLength(ctx, ctx.sizeOf(arr), exact, field.element.kind === "optional", out);
+		checkExactLength(ctx, ctx.sizeOf(arr), exact, padsAsAbsent(field.element), out);
 		const i = ctx.fresh("i");
 		const body: ts.Statement[] = [];
 		writeField(ctx, field.element, f.createElementAccessExpression(arr, i), body);
@@ -350,7 +363,7 @@ function writeTuple(
 			ctx,
 			f.createBinaryExpression(ctx.sizeOf(tup), ctx.ts_.SyntaxKind.MinusToken, ctx.num(fixedCount)),
 			exact,
-			rest.kind === "optional",
+			padsAsAbsent(rest),
 			out,
 		);
 		const i = ctx.fresh("i");
