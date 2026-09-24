@@ -112,6 +112,16 @@ export function fieldToTypeNode(ctx: EmitContext, field: Field): ts.TypeNode {
 			return field.value
 				? f.createTypeReferenceNode("Map", [fieldToTypeNode(ctx, field.key), fieldToTypeNode(ctx, field.value)])
 				: f.createTypeReferenceNode("Set", [fieldToTypeNode(ctx, field.key)]);
+		case "bitSet":
+			return f.createTypeReferenceNode("Set", [
+				f.createUnionTypeNode(
+					field.members.map((member) =>
+						f.createLiteralTypeNode(
+							ctx.literalValueExpr(member) as ts.LiteralExpression | ts.BooleanLiteral,
+						),
+					),
+				),
+			]);
 		case "optional":
 			return f.createUnionTypeNode([fieldToTypeNode(ctx, field.inner), kw(ctx.ts_.SyntaxKind.UndefinedKeyword)]);
 		case "literalConst":

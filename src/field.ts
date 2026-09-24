@@ -46,6 +46,22 @@ export type CountSpec = LengthWidth | number;
 export type ComponentWidths = readonly [NumWidth, NumWidth, NumWidth];
 export const DEFAULT_COMPONENT_WIDTH: NumWidth = "f32";
 
+/**
+ * The values a `num` admits, set by `DataType.Range<T, Min, Max>` (Wire
+ * format 4.16 in docs/specs/wire-format.md in the surge repo). It changes no
+ * byte: the width it narrowed to is the field's own `width`. It is what
+ * `writeChecks` compares the value with. `whole` holds unless the width is an
+ * explicit float, so a fraction that its width would truncate is rejected too.
+ */
+export interface NumRange {
+	readonly min: number;
+	readonly max: number;
+	readonly whole: boolean;
+}
+
+/** A literal value a `bitSet` can hold. `undefined` cannot be a table key, so it is never one. */
+export type SetMember = string | number | boolean;
+
 export interface FieldKey {
 	readonly name: string;
 	// `{ 0: T }` and `{ "0": T }` are one property to TypeScript but two
@@ -59,7 +75,7 @@ export interface ObjectFieldEntry extends FieldKey {
 }
 
 export type Field =
-	| { readonly kind: "num"; readonly width: NumWidth }
+	| { readonly kind: "num"; readonly width: NumWidth; readonly range?: NumRange }
 	| { readonly kind: "bool"; readonly packed: boolean }
 	| { readonly kind: "str"; readonly length?: CountSpec }
 	| { readonly kind: "vector2" }
@@ -70,9 +86,15 @@ export type Field =
 	| { readonly kind: "vector3"; readonly components?: ComponentWidths }
 	// `packed`: inside `Packed<T>`, where a header byte replaces an axis-aligned
 	// rotation and a zero or one position. Absent, not `false`, outside it.
-	// `position` is the position's component widths; the rotation is always an
-	// f32 axis-angle triple, and the packed form takes no widths at all.
-	| { readonly kind: "cframe"; readonly packed?: true; readonly position?: ComponentWidths }
+	// `position` is the position's component widths, and the packed form takes
+	// none. `quantized`, set by `DataType.Quantized<T>` and never with `packed`,
+	// writes the rotation as three i16s instead of an f32 axis-angle triple.
+	| {
+			readonly kind: "cframe";
+			readonly packed?: true;
+			readonly position?: ComponentWidths;
+			readonly quantized?: true;
+	  }
 	| { readonly kind: "color3" }
 	| { readonly kind: "colorSequence" }
 	| { readonly kind: "numberSequence" }
@@ -104,6 +126,10 @@ export type Field =
 			// this one. Blink and Zap bound a map the same way, by width.
 			readonly length?: LengthWidth;
 	  }
+	// A `Set` of literal values inside `Packed<T>`: one bit per member, in
+	// canonical literal order, and no count (Wire format 8.8 in
+	// docs/specs/wire-format.md in the surge repo).
+	| { readonly kind: "bitSet"; readonly members: ReadonlyArray<SetMember> }
 	| { readonly kind: "optional"; readonly inner: Field; readonly packed: boolean }
 	| { readonly kind: "literalConst"; readonly value: string | number | boolean | undefined }
 	// `undefined` is a value like any other, last in canonical literal order.

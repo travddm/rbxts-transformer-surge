@@ -309,7 +309,13 @@ export abstract class EmitContext {
 	}
 
 	public num(n: number): ts.Expression {
-		return this.factory.createNumericLiteral(n);
+		// `createNumericLiteral` asserts on a negative number: the minus sign is an operator.
+		return n < 0
+			? this.factory.createPrefixUnaryExpression(
+					this.ts_.SyntaxKind.MinusToken,
+					this.factory.createNumericLiteral(-n),
+				)
+			: this.factory.createNumericLiteral(n);
 	}
 
 	public constStatement(name: ts.Identifier, initializer: ts.Expression): ts.Statement {

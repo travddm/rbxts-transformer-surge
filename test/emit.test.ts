@@ -70,6 +70,10 @@ describe("Emitter per-kind write/read snapshots", () => {
 		expect(emitSnapshot({ kind: "cframe" })).toMatchSnapshot();
 	});
 
+	test("bitSet", () => {
+		expect(emitSnapshot({ kind: "bitSet", members: [false, -1, "a"] })).toMatchSnapshot();
+	});
+
 	test("color3", () => {
 		expect(emitSnapshot({ kind: "color3" })).toMatchSnapshot();
 	});
@@ -575,9 +579,10 @@ describe("Emitter count widths", () => {
 		expect(output).not.toContain("buffer.readu32");
 	});
 
-	// Rule 4 of data-type-surface.md, on the bytes rather than on the IR: the
-	// walker records the default as absence, and the emitter has to turn that
-	// absence back into exactly the u32 every one of these wrote before.
+	// Rule 4 of DataType brands in docs/coding-standards.md in the surge repo,
+	// on the bytes rather than on the IR: the walker records the default as
+	// absence, and the emitter has to turn that absence back into exactly the
+	// u32 every one of these wrote before.
 	test.each(counted)("a %s with no branded width emits what it always did", (_label, build) => {
 		expect(emitSnapshot(build())).toBe(emitSnapshot(build("u32")));
 	});
@@ -647,8 +652,9 @@ describe("Emitter component widths", () => {
 		expect(reservations(output, "read")).toEqual([8]);
 	});
 
-	// Rule 4 of data-type-surface.md on the emitter's side of the IR: the
-	// walker records the all-default case as absence, and the two must agree.
+	// Rule 4 of DataType brands in docs/coding-standards.md in the surge repo,
+	// on the emitter's side of the IR: the walker records the all-default case
+	// as absence, and the two must agree.
 	test("the default widths emit exactly what absent widths do", () => {
 		expect(emitSnapshot({ kind: "vector3", components: ["f32", "f32", "f32"] })).toBe(
 			emitSnapshot({ kind: "vector3" }),
@@ -666,6 +672,25 @@ describe("Emitter component widths", () => {
 		expect(reservations(output, "read")).toEqual([18]);
 		expect(output).toContain("buffer.writei16(");
 		expect(output.match(/buffer\.writef32\(/g)).toHaveLength(3);
+	});
+
+	test("a quantized CFrame writes its rotation as three rounded i16s", () => {
+		const output = emitSnapshot({ kind: "cframe", quantized: true });
+		expect(output).toMatchSnapshot();
+		// 12 for the position, then 6 for the rotation.
+		expect(reservations(output, "write")).toEqual([18]);
+		expect(reservations(output, "read")).toEqual([18]);
+		expect(output.match(/buffer\.writei16\(/g)).toHaveLength(3);
+		expect(output.match(/math\.round\(/g)).toHaveLength(3);
+		expect(output.match(/buffer\.writef32\(/g)).toHaveLength(3);
+		expect(output.match(/buffer\.readi16\(/g)).toHaveLength(3);
+	});
+
+	test("a quantized CFrame keeps the position widths a Transform gives it", () => {
+		const output = emitSnapshot({ kind: "cframe", position: ["i16", "i16", "i16"], quantized: true });
+		expect(reservations(output, "write")).toEqual([12]);
+		expect(output.match(/buffer\.writei16\(/g)).toHaveLength(6);
+		expect(output).not.toContain("writef32");
 	});
 
 	test("a narrowed Vector3 joins the reservation of the fields beside it", () => {
@@ -736,9 +761,65 @@ describe("Emitter write-side checks", () => {
 		for (const field of [
 			{ kind: "array", element: { kind: "num", width: "u8" }, length: "u8" } as Field,
 			{ kind: "str", length: 4 } as Field,
+			{ kind: "num", width: "u8", range: { min: 0, max: 100, whole: true } } as Field,
 		]) {
 			expect(emitSnapshot(field)).not.toContain("@rbxts/surge: ");
 		}
+	});
+
+	// `!(n >= min && n <= max)` rather than `n < min || n > max`, which a NaN
+	// passes; the fraction test only where the range holds whole numbers.
+	test("a Range is checked against both bounds, and against a fraction where it holds whole numbers", () => {
+		const whole = checkedWrite({ kind: "num", width: "i8", range: { min: -100, max: 100, whole: true } });
+		expect(whole).toMatchSnapshot();
+		expect(whole).toMatch(/if \(!\(n[0-9]+ >= -100 && n[0-9]+ <= 100\) \|\| n[0-9]+ % 1 !== 0\)/);
+		expect(whole).toContain("does not admit");
+		const fractional = checkedWrite({ kind: "num", width: "f32", range: { min: 0, max: 0.5, whole: false } });
+		expect(fractional).toMatch(/if \(!\(n[0-9]+ >= 0 && n[0-9]+ <= 0\.5\)\)/);
+		expect(fractional).not.toContain("% 1");
+	});
+
+	// The read side checks no value: what a number means is the caller's to
+	// check (Runtime API 4.7 in docs/specs/runtime-api.md in the surge repo).
+	test("a Range adds nothing to the read side", () => {
+		const field: Field = { kind: "num", width: "u8", range: { min: 0, max: 100, whole: true } };
+		// Local names are numbered across both sides, so the write side's extra
+		// local renumbers the read side's; the numbers are dropped.
+		const read = (options: EmitOptions) => {
+			const output = emitSnapshot(field, new Map(), options);
+			return output.slice(output.indexOf("// read")).replace(/([a-z])[0-9]+/g, "$1");
+		};
+		expect(read({ checks: true, writeChecks: true })).toBe(read({ checks: true }));
+	});
+});
+
+describe("Emitter bit sets", () => {
+	const members = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+
+	test("one bit per member, each byte computed whole and written once", () => {
+		const output = emitSnapshot({ kind: "bitSet", members });
+		expect(output).toMatchSnapshot();
+		// Nine members are two bytes, and nothing else is reserved: there is no count.
+		expect(reservations(output, "write")).toEqual([2]);
+		expect(reservations(output, "read")).toEqual([2]);
+		const [write, read] = output.split("// read");
+		expect(write.match(/buffer\.writeu8\(/g)).toHaveLength(2);
+		expect(write.match(/\.has\(/g)).toHaveLength(9);
+		expect(write).toContain('set1.has("h") ? 128 : 0');
+		expect(read.match(/buffer\.readu8\(/g)).toHaveLength(2);
+		expect(read.match(/\.add\(/g)).toHaveLength(9);
+	});
+
+	test("a bit set joins the reservation of the fixed-size fields beside it", () => {
+		const output = emitSnapshot({
+			kind: "object",
+			fields: [
+				{ name: "id", field: { kind: "num", width: "u8" } },
+				{ name: "tags", field: { kind: "bitSet", members } },
+			],
+		});
+		expect(reservations(output, "write")).toEqual([3]);
+		expect(reservations(output, "read")).toEqual([3]);
 	});
 });
 

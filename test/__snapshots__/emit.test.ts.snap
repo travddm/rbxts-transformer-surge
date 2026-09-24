@@ -1,5 +1,44 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
+exports[`Emitter bit sets one bit per member, each byte computed whole and written once 1`] = `
+"// write
+const set1 = value as unknown as Set<"a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i">;
+const pos2 = __surge_cursor;
+__surge_cursor = pos2 + 2;
+if (__surge_cursor > __surge_capacity) {
+    __surge_scratch = __surge_grow(__surge_scratch, pos2, __surge_cursor);
+    __surge_capacity = buffer.len(__surge_scratch);
+}
+buffer.writeu8(__surge_scratch, pos2, (set1.has("a") ? 1 : 0) + (set1.has("b") ? 2 : 0) + (set1.has("c") ? 4 : 0) + (set1.has("d") ? 8 : 0) + (set1.has("e") ? 16 : 0) + (set1.has("f") ? 32 : 0) + (set1.has("g") ? 64 : 0) + (set1.has("h") ? 128 : 0));
+buffer.writeu8(__surge_scratch, pos2 + 1, set1.has("i") ? 1 : 0);
+
+// read
+const pos3 = __surge_readCursor;
+__surge_readCursor = pos3 + 2;
+const result4 = new Set<"a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i">();
+const bits5 = buffer.readu8(__surge_input, pos3);
+if ((bits5 & 1) !== 0)
+    result4.add("a");
+if ((bits5 & 2) !== 0)
+    result4.add("b");
+if ((bits5 & 4) !== 0)
+    result4.add("c");
+if ((bits5 & 8) !== 0)
+    result4.add("d");
+if ((bits5 & 16) !== 0)
+    result4.add("e");
+if ((bits5 & 32) !== 0)
+    result4.add("f");
+if ((bits5 & 64) !== 0)
+    result4.add("g");
+if ((bits5 & 128) !== 0)
+    result4.add("h");
+const bits6 = buffer.readu8(__surge_input, pos3 + 1);
+if ((bits6 & 1) !== 0)
+    result4.add("i");
+return result4;"
+`;
+
 exports[`Emitter component widths a CFrame narrows its position and leaves its rotation an f32 triple 1`] = `
 "// write
 const pos1 = __surge_cursor;
@@ -44,6 +83,33 @@ buffer.writef32(__surge_scratch, pos1 + 4, value.Z);
 const pos2 = __surge_readCursor;
 __surge_readCursor = pos2 + 8;
 return new Vector3(buffer.readu8(__surge_input, pos2), buffer.readu16(__surge_input, pos2 + 1) + buffer.readu8(__surge_input, pos2 + 1 + 2) * 65536, buffer.readf32(__surge_input, pos2 + 4));"
+`;
+
+exports[`Emitter component widths a quantized CFrame writes its rotation as three rounded i16s 1`] = `
+"// write
+const pos1 = __surge_cursor;
+__surge_cursor = pos1 + 18;
+if (__surge_cursor > __surge_capacity) {
+    __surge_scratch = __surge_grow(__surge_scratch, pos1, __surge_cursor);
+    __surge_capacity = buffer.len(__surge_scratch);
+}
+buffer.writef32(__surge_scratch, pos1, value.Position.X);
+buffer.writef32(__surge_scratch, pos1 + 4, value.Position.Y);
+buffer.writef32(__surge_scratch, pos1 + 8, value.Position.Z);
+const [axis2, angle3] = value.ToAxisAngle();
+const rv4 = axis2.mul((angle3 > 3.141592653589793 ? angle3 - 6.283185307179586 : angle3) * 10430.060040584269);
+buffer.writei16(__surge_scratch, pos1 + 12, math.round(rv4.X));
+buffer.writei16(__surge_scratch, pos1 + 14, math.round(rv4.Y));
+buffer.writei16(__surge_scratch, pos1 + 16, math.round(rv4.Z));
+
+// read
+const pos5 = __surge_readCursor;
+__surge_readCursor = pos5 + 18;
+const pos6 = new Vector3(buffer.readf32(__surge_input, pos5), buffer.readf32(__surge_input, pos5 + 4), buffer.readf32(__surge_input, pos5 + 8));
+const rv7 = new Vector3(buffer.readi16(__surge_input, pos5 + 12) * 0.00009587672516830327, buffer.readi16(__surge_input, pos5 + 14) * 0.00009587672516830327, buffer.readi16(__surge_input, pos5 + 16) * 0.00009587672516830327);
+const angle8 = rv7.Magnitude;
+const rotation9 = CFrame.fromAxisAngle(angle8 > 1e-6 ? rv7.Unit : Vector3.zAxis, angle8);
+return rotation9.add(pos6);"
 `;
 
 exports[`Emitter packed boolean padding packed booleans write one computed byte per group instead of per-bit packBit calls 1`] = `
@@ -219,6 +285,31 @@ for (const _i8 of $range(1, count6)) {
     result7.push(buffer.readf64(__surge_input, pos9));
 }
 return result7;"
+`;
+
+exports[`Emitter per-kind write/read snapshots bitSet 1`] = `
+"// write
+const set1 = value as unknown as Set<false | -1 | "a">;
+const pos2 = __surge_cursor;
+__surge_cursor = pos2 + 1;
+if (__surge_cursor > __surge_capacity) {
+    __surge_scratch = __surge_grow(__surge_scratch, pos2, __surge_cursor);
+    __surge_capacity = buffer.len(__surge_scratch);
+}
+buffer.writeu8(__surge_scratch, pos2, (set1.has(false) ? 1 : 0) + (set1.has(-1) ? 2 : 0) + (set1.has("a") ? 4 : 0));
+
+// read
+const pos3 = __surge_readCursor;
+__surge_readCursor = pos3 + 1;
+const result4 = new Set<false | -1 | "a">();
+const bits5 = buffer.readu8(__surge_input, pos3);
+if ((bits5 & 1) !== 0)
+    result4.add(false);
+if ((bits5 & 2) !== 0)
+    result4.add(-1);
+if ((bits5 & 4) !== 0)
+    result4.add("a");
+return result4;"
 `;
 
 exports[`Emitter per-kind write/read snapshots blob 1`] = `
@@ -1241,4 +1332,21 @@ return {
     id: buffer.readu32(__surge_input, pos5),
     at: new Vector3(buffer.readf32(__surge_input, pos6), buffer.readf32(__surge_input, pos6 + 4), buffer.readf32(__surge_input, pos6 + 8))
 };"
+`;
+
+exports[`Emitter write-side checks a Range is checked against both bounds, and against a fraction where it holds whole numbers 1`] = `
+"// write
+const n1 = value;
+if (!(n1 >= -100 && n1 <= 100) || n1 % 1 !== 0) {
+    throw "@rbxts/surge: serialize given a number its DataType.Range does not admit";
+}
+const pos2 = __surge_cursor;
+__surge_cursor = pos2 + 1;
+if (__surge_cursor > __surge_capacity) {
+    __surge_scratch = __surge_grow(__surge_scratch, pos2, __surge_cursor);
+    __surge_capacity = buffer.len(__surge_scratch);
+}
+buffer.writei8(__surge_scratch, pos2, n1);
+
+"
 `;

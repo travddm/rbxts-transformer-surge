@@ -174,6 +174,8 @@ const PARAMETERIZED_BRANDS = [
 	{ name: "Length", property: "_surge_length" },
 	{ name: "Vector", property: "_surge_vector" },
 	{ name: "Transform", property: "_surge_transform" },
+	{ name: "Range", property: "_surge_range" },
+	{ name: "Quantized", property: "_surge_quantized" },
 ] as const;
 
 type ParameterizedBrand = (typeof PARAMETERIZED_BRANDS)[number];
@@ -198,9 +200,10 @@ function argumentsFromBrandProperty(
 }
 
 /**
- * The outermost parameterized `DataType.*` brand on `type`, with its type
- * arguments (`Packed<T>` gives `[T]`, `Length<T, L>` gives `[T, L]`,
- * `Vector<X, Y, Z>` and `Transform<X, Y, Z>` give `[X, Y, Z]`).
+ * The outermost `DataType.*` brand on `type`, with its type arguments
+ * (`Packed<T>` and `Quantized<T>` give `[T]`, `Length<T, L>` gives `[T, L]`,
+ * `Vector<X, Y, Z>` and `Transform<X, Y, Z>` give `[X, Y, Z]`,
+ * `Range<T, Min, Max>` gives `[T, Min, Max]`, and a width brand gives none).
  *
  * Alias identity is tried first, and for every brand rather than one brand at
  * a time, because a composition flattens into an intersection carrying both
@@ -216,12 +219,15 @@ function argumentsFromBrandProperty(
  * outer one was applied and has lost it. A brand that fixes its own value
  * type records widths instead of a type and so is never the outer one, which
  * is the same answer: `Vector` and `Transform` cannot wrap anything.
+ *
+ * A width brand's property is read last. `Range<DataType.u8, 0, 100>` carries
+ * `_surge_u8` as well as `_surge_range`, and the width is the inner brand.
  */
 export function getSurgeBrand(checker: ts.TypeChecker, type: ts.Type): SurgeBrand | undefined {
-	const name = getDataTypeBrand(type);
-	if (name !== undefined) {
+	const aliasSymbol = (type as ts.Type & { aliasSymbol?: ts.Symbol }).aliasSymbol;
+	if (aliasSymbol && isFromSurgePackage(aliasSymbol.declarations)) {
 		const withArgs = type as ts.Type & { aliasTypeArguments?: readonly ts.Type[] };
-		return { name, args: withArgs.aliasTypeArguments ?? [] };
+		return { name: aliasSymbol.name, args: withArgs.aliasTypeArguments ?? [] };
 	}
 
 	const present: Array<{ brand: ParameterizedBrand; args: readonly ts.Type[] }> = [];
@@ -232,7 +238,8 @@ export function getSurgeBrand(checker: ts.TypeChecker, type: ts.Type): SurgeBran
 		}
 	}
 	if (present.length === 0) {
-		return undefined;
+		const width = widthFromBrandProperty(type);
+		return width === undefined ? undefined : { name: width, args: [] };
 	}
 	const outermost =
 		present.find(({ brand, args }) =>

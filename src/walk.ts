@@ -9,7 +9,16 @@ import {
 	isFromTypesPackage,
 	isRobloxNominalType,
 } from "./detect";
-import type { ComponentWidths, CountSpec, Field, FieldKey, LengthWidth, NumWidth, ObjectFieldEntry } from "./field";
+import type {
+	ComponentWidths,
+	CountSpec,
+	Field,
+	FieldKey,
+	LengthWidth,
+	NumWidth,
+	ObjectFieldEntry,
+	SetMember,
+} from "./field";
 import { DEFAULT_COMPONENT_WIDTH, DEFAULT_LENGTH_WIDTH, LENGTH_WIDTHS } from "./field";
 
 export interface WalkDiagnostic {
@@ -39,6 +48,7 @@ const RUNTIME_TYPE_TAGS: Partial<Record<Field["kind"], string>> = {
 	array: "table",
 	tuple: "table",
 	dict: "table",
+	bitSet: "table",
 	// Only an object type or a union is ever in progress (`tryWalkObject`,
 	// `walkUnion`), and a union is never a member of another union.
 	recursiveRef: "table",
@@ -51,6 +61,50 @@ const RUNTIME_TYPE_TAGS: Partial<Record<Field["kind"], string>> = {
 	numberSequence: "NumberSequence",
 	enum: "EnumItem",
 };
+
+/**
+ * The values each width holds exactly: every whole number between the two
+ * bounds for an integer width, and every finite single-precision value for
+ * `f32`.
+ */
+const WIDTH_LIMITS: Readonly<Record<NumWidth, readonly [number, number]>> = {
+	u8: [0, 255],
+	u16: [0, 65535],
+	u24: [0, 16777215],
+	u32: [0, 4294967295],
+	i8: [-128, 127],
+	i16: [-32768, 32767],
+	i24: [-8388608, 8388607],
+	i32: [-2147483648, 2147483647],
+	f32: [-3.4028234663852886e38, 3.4028234663852886e38],
+	f64: [-Infinity, Infinity],
+};
+
+/**
+ * The narrowest integer width holding every whole number from `min` to `max`
+ * (Wire format 4.16 in docs/specs/wire-format.md in the surge repo): unsigned
+ * when neither bound is negative, signed otherwise, and `f64` past 32 bits.
+ */
+function narrowestWidth(min: number, max: number): NumWidth {
+	const candidates: readonly NumWidth[] = min >= 0 ? ["u8", "u16", "u24", "u32"] : ["i8", "i16", "i24", "i32"];
+	return candidates.find((width) => min >= WIDTH_LIMITS[width][0] && max <= WIDTH_LIMITS[width][1]) ?? "f64";
+}
+
+/**
+ * The members of a `Set` whose key is a fixed list of literal values, in
+ * canonical literal order, or `undefined` for any other key. Inside
+ * `Packed<T>`, such a set is one bit per member (Wire format 8.8 in
+ * docs/specs/wire-format.md in the surge repo).
+ */
+function setMembers(key: Field): ReadonlyArray<SetMember> | undefined {
+	if (key.kind === "literalConst") {
+		return key.value === undefined ? undefined : [key.value];
+	}
+	if (key.kind === "literal" && key.values.every((value) => value !== undefined)) {
+		return key.values as ReadonlyArray<SetMember>;
+	}
+	return undefined;
+}
 
 function runtimeTypeTag(field: Field): string | undefined {
 	// A `datatype` is tagged with its own type name, so two different ones can share a union.
@@ -182,9 +236,14 @@ export class TypeWalker {
 		if (surgeBrand?.name === "Transform") {
 			return this.walkTransform(surgeBrand.args, node, packed);
 		}
-		const brand = getDataTypeBrand(type);
-		if (brand && NUM_BRAND_WIDTHS.has(brand)) {
-			return { kind: "num", width: brand as NumWidth };
+		if (surgeBrand?.name === "Range") {
+			return this.walkRange(surgeBrand.args, node);
+		}
+		if (surgeBrand?.name === "Quantized") {
+			return this.walkQuantized(surgeBrand.args, node, packed);
+		}
+		if (surgeBrand && NUM_BRAND_WIDTHS.has(surgeBrand.name)) {
+			return { kind: "num", width: surgeBrand.name as NumWidth };
 		}
 
 		if ((type.flags & ts_.TypeFlags.Union) !== 0) {
@@ -491,8 +550,9 @@ export class TypeWalker {
 	/**
 	 * The default width is recorded as absence rather than as itself, so a
 	 * fully defaulted brand walks to the very same field the unbranded type
-	 * does -- rule 4 of data-type-surface.md, checkable on the IR and not only
-	 * on the bytes. The kind is still checked either way, so
+	 * does -- rule 4 of DataType brands in docs/coding-standards.md in the surge
+	 * repo, checkable on the IR and not only on the bytes. The kind is still
+	 * checked either way, so
 	 * `Length<number, u32>` is a diagnostic and not a brand that does nothing.
 	 */
 	private withLength(field: Field, length: CountSpec, node: ts.Node): Field {
@@ -524,6 +584,13 @@ export class TypeWalker {
 				}
 				return length === DEFAULT_LENGTH_WIDTH ? field : { ...field, length };
 			}
+			case "bitSet":
+				this.report(
+					`"DataType.Length" has nothing to set on a Set of literal values inside "DataType.Packed" -- ` +
+						`it is written as one bit per value it can hold, with no count.`,
+					node,
+				);
+				return field;
 			default:
 				this.report(
 					`"DataType.Length" applies to a string, an array, a Map, a Set, a Record, a buffer, or a ` +
@@ -544,9 +611,10 @@ export class TypeWalker {
 	 *
 	 * All three at the default is recorded as no widths at all rather than as
 	 * three `f32`s, so a fully defaulted brand walks to the very same field the
-	 * unbranded type does -- rule 4 of data-type-surface.md, checkable on the IR
-	 * and not only on the bytes. A bad width reports and is dropped, which
-	 * leaves the same field and the diagnostic to explain it.
+	 * unbranded type does -- rule 4 of DataType brands in
+	 * docs/coding-standards.md in the surge repo, checkable on the IR and not
+	 * only on the bytes. A bad width reports and is dropped, which leaves the
+	 * same field and the diagnostic to explain it.
 	 */
 	private componentWidths(brand: string, args: readonly ts.Type[], node: ts.Node): ComponentWidths | undefined {
 		const parsed: NumWidth[] = [];
@@ -598,6 +666,113 @@ export class TypeWalker {
 			return { kind: "cframe", packed: true };
 		}
 		return { kind: "cframe", position };
+	}
+
+	/**
+	 * `DataType.Quantized<T>` writes a `CFrame`'s rotation as three i16s
+	 * instead of three f32s, and leaves its position to `T`, which may be a
+	 * `Transform`. Inside `Packed<T>` the rotation goes through
+	 * `writePackedCFrame` instead, so there is nothing for it to set.
+	 */
+	private walkQuantized(args: readonly ts.Type[], node: ts.Node, packed: boolean): Field {
+		const [innerType] = args;
+		if (!innerType) {
+			return { kind: "blob" };
+		}
+		const field = this.walk(innerType, node, packed);
+		if (field.kind !== "cframe") {
+			this.report(`"DataType.Quantized" applies to a CFrame, and "${field.kind}" is not one.`, node);
+			return field;
+		}
+		if (field.packed) {
+			this.report(
+				`"DataType.Quantized" has nothing to set on a CFrame inside "DataType.Packed" -- the packed ` +
+					`form writes the rotation through a runtime function, and only when its header does not ` +
+					`already give it.`,
+				node,
+			);
+			return field;
+		}
+		return { ...field, quantized: true };
+	}
+
+	// ---- DataType.Range<T, Min, Max> --------------------------------------
+
+	/**
+	 * `DataType.Range<T, Min, Max>` states the values a number takes. `T` is
+	 * `number`, which narrows to the smallest integer width holding every whole
+	 * number from `Min` to `Max`, or a width brand, which is kept and must hold
+	 * them. The range itself is recorded for `writeChecks` and changes no byte.
+	 *
+	 * A range the width cannot hold is a diagnostic rather than a silent
+	 * widening, and so is a fractional bound on anything but a float width:
+	 * narrowing to an integer width is what makes the value a whole number.
+	 */
+	private walkRange(args: readonly ts.Type[], node: ts.Node): Field {
+		const [valueType, minType, maxType] = args;
+		const fallback: Field = { kind: "num", width: "f64" };
+		if (valueType === undefined || minType === undefined || maxType === undefined) {
+			return fallback;
+		}
+		const explicitWidth = this.explicitRangeWidth(valueType, node);
+		if (explicitWidth === null) {
+			return fallback;
+		}
+		if (!minType.isNumberLiteral() || !maxType.isNumberLiteral()) {
+			this.report(
+				`"DataType.Range"'s bounds must each be a number literal, such as "DataType.Range<number, 0, 100>".`,
+				node,
+			);
+			return explicitWidth === undefined ? fallback : { kind: "num", width: explicitWidth };
+		}
+		const min = minType.value;
+		const max = maxType.value;
+		const width = explicitWidth ?? narrowestWidth(min, max);
+		if (min > max) {
+			this.report(`"DataType.Range"'s minimum ${min} is greater than its maximum ${max}.`, node);
+			return { kind: "num", width };
+		}
+		const whole = width !== "f32" && width !== "f64" ? true : explicitWidth === undefined;
+		if (whole && (!Number.isInteger(min) || !Number.isInteger(max))) {
+			this.report(
+				`"DataType.Range<${explicitWidth === undefined ? "number" : `DataType.${explicitWidth}`}, ${min}, ` +
+					`${max}>" holds whole numbers, so its bounds must be whole numbers. Give a fractional range a ` +
+					`float width, such as "DataType.Range<DataType.f32, ${min}, ${max}>".`,
+				node,
+			);
+			return { kind: "num", width };
+		}
+		const [lowest, highest] = WIDTH_LIMITS[width];
+		if (min < lowest || max > highest) {
+			this.report(
+				`"DataType.${width}" cannot hold every value of "DataType.Range<DataType.${width}, ${min}, ${max}>" ` +
+					`-- give the range a wider width, or "number" to have the narrowest one chosen.`,
+				node,
+			);
+			return { kind: "num", width };
+		}
+		return { kind: "num", width, range: { min, max, whole } };
+	}
+
+	/**
+	 * The width a `Range`'s value type asks for: `undefined` for `number`,
+	 * which narrows, a width for a width brand, and `null`, reported, for
+	 * anything else.
+	 */
+	private explicitRangeWidth(valueType: ts.Type, node: ts.Node): NumWidth | undefined | null {
+		const width = getSurgeBrand(this.checker, valueType)?.name;
+		if (width !== undefined && NUM_BRAND_WIDTHS.has(width)) {
+			return width as NumWidth;
+		}
+		if (width === undefined && (valueType.flags & this.typescript.TypeFlags.Number) !== 0) {
+			return undefined;
+		}
+		this.report(
+			`"DataType.Range"'s first argument must be "number" or one of the "DataType" number widths, not ` +
+				`"${this.checker.typeToString(valueType)}".`,
+			node,
+		);
+		return null;
 	}
 
 	// ---- arrays / tuples --------------------------------------------------
@@ -655,6 +830,10 @@ export class TypeWalker {
 		const isSet = this.isSetType(type);
 		const typeArgs = checker.getTypeArguments(type as ts.TypeReference);
 		const keyField = this.walk(typeArgs[0], node, packed);
+		const members = isSet && packed ? setMembers(keyField) : undefined;
+		if (members !== undefined) {
+			return { kind: "bitSet", members };
+		}
 		const valueField = isSet ? undefined : this.walk(typeArgs[1], node, packed);
 		return { kind: "dict", key: keyField, value: valueField, source: isSet ? "set" : "map" };
 	}

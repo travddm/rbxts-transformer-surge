@@ -6,7 +6,13 @@
 import { FIXED_DATATYPES } from "../datatypes";
 import type { ComponentWidths, CountSpec, Field, FieldKey, LengthWidth, ObjectFieldEntry } from "../field";
 import { DEFAULT_LENGTH_WIDTH } from "../field";
-import { ALLOC_RUN_FIELDS, DEFAULT_COMPONENTS, ROTATION_BYTES, WIDTH_BYTES } from "./constants";
+import {
+	ALLOC_RUN_FIELDS,
+	DEFAULT_COMPONENTS,
+	QUANTIZED_ROTATION_BYTES,
+	ROTATION_BYTES,
+	WIDTH_BYTES,
+} from "./constants";
 
 export function tagKeyOf(field: Extract<Field, { kind: "taggedUnion" }>): FieldKey {
 	return { name: field.tagKey, numericKey: field.tagKeyNumeric };
@@ -55,6 +61,16 @@ export function componentBytes(widths?: ComponentWidths): number {
 	return componentsOf(widths).reduce((total, width) => total + WIDTH_BYTES[width], 0);
 }
 
+/** The bytes a `cframe` outside `Packed<T>` writes: its position, then its rotation. */
+export function cframeBytes(field: Extract<Field, { kind: "cframe" }>): number {
+	return componentBytes(field.position) + (field.quantized ? QUANTIZED_ROTATION_BYTES : ROTATION_BYTES);
+}
+
+/** The bytes a `bitSet` writes: one bit per member, rounded up to whole bytes. */
+export function bitSetBytes(field: Extract<Field, { kind: "bitSet" }>): number {
+	return Math.ceil(field.members.length / 8);
+}
+
 /**
  * A lower bound on the bytes `field` reads, used to reject a count no
  * payload of this length could hold. It must never overstate: a bound above
@@ -77,7 +93,9 @@ export function minBytes(field: Field): number {
 			return 3;
 		case "cframe":
 			// The packed form's smallest value is its header alone.
-			return field.packed ? 1 : componentBytes(field.position) + ROTATION_BYTES;
+			return field.packed ? 1 : cframeBytes(field);
+		case "bitSet":
+			return bitSetBytes(field);
 		case "datatype":
 			return FIXED_DATATYPES[field.name].components.reduce(
 				(total, component) => total + WIDTH_BYTES[component.width],
@@ -164,7 +182,9 @@ export function fixedBytes(field: Field): number | undefined {
 		case "color3":
 			return 3;
 		case "cframe":
-			return field.packed ? undefined : componentBytes(field.position) + ROTATION_BYTES;
+			return field.packed ? undefined : cframeBytes(field);
+		case "bitSet":
+			return bitSetBytes(field);
 		case "datatype":
 			return FIXED_DATATYPES[field.name].components.reduce(
 				(total, component) => total + WIDTH_BYTES[component.width],

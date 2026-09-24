@@ -62,9 +62,19 @@ export const READ_LENGTH = importAlias("inputLength");
 export const INITIAL_CAPACITY = 64;
 /** The largest form `writePackedCFrame` can write: header, position, rotation. */
 export const PACKED_CFRAME_MAX_BYTES = 25;
-// A `cframe`'s rotation is always an f32 axis-angle triple. `DataType.Transform`
-// sets the widths of the position, and of nothing else.
+// A `cframe`'s rotation is an f32 axis-angle triple, or an i16 triple under
+// `DataType.Quantized`. `DataType.Transform` sets the widths of the position,
+// and of nothing else.
 export const ROTATION_BYTES = 12;
+export const QUANTIZED_ROTATION_BYTES = 6;
+export const QUANTIZED_COMPONENTS: ComponentWidths = ["i16", "i16", "i16"];
+/**
+ * What an axis-angle component is multiplied by before it is rounded to an
+ * i16 (Wire format 7.4 in docs/specs/wire-format.md in the surge repo). A
+ * component is at most pi once the angle is folded into [-pi, pi], and pi maps
+ * to the largest i16.
+ */
+export const QUANTIZED_ROTATION_SCALE = 32767 / Math.PI;
 /** The prefix every check's message carries, so one `pcall` can tell a rejection from a bug. */
 export const ERROR_PREFIX = "@rbxts/surge: ";
 /**

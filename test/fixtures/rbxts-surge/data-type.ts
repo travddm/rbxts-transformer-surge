@@ -21,6 +21,10 @@ export namespace DataType {
 
 	type Width = f32 | f64 | u8 | u16 | u24 | u32 | i8 | i16 | i24 | i32;
 
+	export type Range<T extends number, Min extends number, Max extends number> = T & {
+		readonly _surge_range?: [T, Min, Max];
+	};
+
 	export type Vector<X extends Width = f32, Y extends Width = X, Z extends Width = X> = Vector3 & {
 		readonly _surge_vector?: [X, Y, Z];
 	};
@@ -28,6 +32,8 @@ export namespace DataType {
 	export type Transform<X extends Width = f32, Y extends Width = X, Z extends Width = X> = CFrame & {
 		readonly _surge_transform?: [X, Y, Z];
 	};
+
+	export type Quantized<T extends CFrame> = T & { readonly _surge_quantized?: [T] };
 
 	export type Packed<T> = T & { readonly _surge_packed?: [T] };
 }

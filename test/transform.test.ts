@@ -401,6 +401,26 @@ describe("transform generated code", () => {
 		expect(errors).toEqual([]);
 	});
 
+	test("the generated code for ranges, quantized rotations and bit sets passes the type check", () => {
+		for (const options of ["", "{ writeChecks: true }"]) {
+			const errors = typeErrorsOfGeneratedCode(
+				`import { DataType, createBinarySerializer } from "@rbxts/surge";
+				interface T {
+					health: DataType.Range<number, 0, 100>;
+					offset: DataType.Range<number, -1000, 1000>;
+					ratio: DataType.Range<DataType.f32, 0, 1>;
+					scores: Map<DataType.Range<DataType.u16, 1, 500>, DataType.Range<number, -1, 1>>;
+					turn: -1 | 0 | 1;
+					placement: DataType.Quantized<CFrame>;
+					narrow?: DataType.Quantized<DataType.Transform<DataType.i16>>;
+					flags: DataType.Packed<{ tags: Set<"a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i">; modes?: ReadonlySet<1 | -2 | true>; each: Array<Set<"x">> }>;
+				}
+				export const s = createBinarySerializer<T>(${options});`,
+			);
+			expect(errors).toEqual([]);
+		}
+	});
+
 	test("the generated code for packed optionals passes the type check", () => {
 		const errors = typeErrorsOfGeneratedCode(
 			`import { DataType, createBinarySerializer } from "@rbxts/surge";

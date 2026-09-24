@@ -2,12 +2,20 @@
 import type ts from "typescript";
 
 import { FIXED_DATATYPES } from "../datatypes";
-import type { ComponentWidths, CountSpec, Field, LengthWidth, ObjectFieldEntry } from "../field";
-import { CURSOR, DEFAULT_COMPONENTS, PACKED_CFRAME_MAX_BYTES, ROTATION_BYTES, WIDTH_BYTES } from "./constants";
+import type { ComponentWidths, CountSpec, Field, LengthWidth, NumRange, ObjectFieldEntry } from "../field";
+import {
+	CURSOR,
+	DEFAULT_COMPONENTS,
+	PACKED_CFRAME_MAX_BYTES,
+	QUANTIZED_ROTATION_SCALE,
+	WIDTH_BYTES,
+} from "./constants";
 import type { EmitContext, ScopedItem, Slot } from "./context";
 import type { PackedBit } from "./layout";
 import {
 	allocRuns,
+	bitSetBytes,
+	cframeBytes,
 	componentBytes,
 	componentsOf,
 	exactCount,
@@ -38,7 +46,7 @@ export function writeField(ctx: EmitContext, field: Field, value: ts.Expression,
 		case "color3":
 			return writeColor3(ctx, value, out);
 		case "cframe":
-			return field.packed ? writePackedCFrame(ctx, value, out) : writeCFrame(ctx, value, field.position, out);
+			return field.packed ? writePackedCFrame(ctx, value, out) : writeCFrame(ctx, field, value, out);
 		case "colorSequence":
 			return writeSequence(ctx, value, "ColorSequence", out);
 		case "numberSequence":
@@ -55,6 +63,8 @@ export function writeField(ctx: EmitContext, field: Field, value: ts.Expression,
 			return writeTuple(ctx, field, value, out);
 		case "dict":
 			return writeDict(ctx, field, value, out);
+		case "bitSet":
+			return writeBitSet(ctx, field, value, out);
 		case "optional":
 			return writeOptional(ctx, field, value, out, true);
 		case "literalConst":
@@ -76,9 +86,49 @@ function writeNum(
 	value: ts.Expression,
 	out: ts.Statement[],
 ): void {
+	let written = value;
+	if (ctx.writeChecks && field.range !== undefined) {
+		const n = ctx.fresh("n");
+		out.push(ctx.constStatement(n, value));
+		checkRange(ctx, field.range, n, out);
+		written = n;
+	}
 	const { buf, pos, statements } = ctx.destructureAlloc("alloc", WIDTH_BYTES[field.width]);
 	out.push(...statements);
-	out.push(...ctx.writeNumberAt(field.width, buf, pos, value));
+	out.push(...ctx.writeNumberAt(field.width, buf, pos, written));
+}
+
+/**
+ * Under `writeChecks`, raises for a number its `DataType.Range` does not
+ * admit. The bounds are tested as `!(n >= min && n <= max)`, which a NaN fails,
+ * where `n < min || n > max` would let it through. A range that holds whole
+ * numbers also rejects a fraction, which its width would truncate.
+ */
+function checkRange(ctx: EmitContext, range: NumRange, value: ts.Expression, out: ts.Statement[]): void {
+	const f = ctx.factory;
+	const syntax = ctx.ts_.SyntaxKind;
+	let rejected: ts.Expression = f.createPrefixUnaryExpression(
+		syntax.ExclamationToken,
+		f.createParenthesizedExpression(
+			f.createBinaryExpression(
+				f.createBinaryExpression(value, syntax.GreaterThanEqualsToken, ctx.num(range.min)),
+				syntax.AmpersandAmpersandToken,
+				f.createBinaryExpression(value, syntax.LessThanEqualsToken, ctx.num(range.max)),
+			),
+		),
+	);
+	if (range.whole) {
+		rejected = f.createBinaryExpression(
+			rejected,
+			syntax.BarBarToken,
+			f.createBinaryExpression(
+				f.createBinaryExpression(value, syntax.PercentToken, ctx.num(1)),
+				syntax.ExclamationEqualsEqualsToken,
+				ctx.num(0),
+			),
+		);
+	}
+	out.push(ctx.throwIf(rejected, "serialize given a number its DataType.Range does not admit"));
 }
 
 function writeBool(ctx: EmitContext, value: ts.Expression, out: ts.Statement[]): void {
@@ -527,18 +577,18 @@ function writeColor3(ctx: EmitContext, value: ts.Expression, out: ts.Statement[]
 
 function writeCFrame(
 	ctx: EmitContext,
+	field: Extract<Field, { kind: "cframe" }>,
 	value: ts.Expression,
-	position: ComponentWidths | undefined,
 	out: ts.Statement[],
 ): void {
 	const f = ctx.factory;
-	const widths = componentsOf(position);
+	const widths = componentsOf(field.position);
 	const positionBytes = componentBytes(widths);
 	// One reservation for both halves. `ToAxisAngle` and `Vector3.mul`
 	// sit between the two writes, and neither can grow the scratch
 	// buffer, so `buf` is still the buffer `alloc` handed back when the
 	// rotation is written.
-	const { buf, pos, statements } = ctx.destructureAlloc("alloc", positionBytes + ROTATION_BYTES);
+	const { buf, pos, statements } = ctx.destructureAlloc("alloc", cframeBytes(field));
 	out.push(...statements);
 	writeNum3(
 		ctx,
@@ -572,13 +622,84 @@ function writeCFrame(
 		),
 	);
 	const rv = ctx.fresh("rv");
+	const rotationSlot = { buf, pos, offset: positionBytes };
+	if (!field.quantized) {
+		out.push(
+			ctx.constStatement(
+				rv,
+				f.createCallExpression(f.createPropertyAccessExpression(axis, "mul"), undefined, [angle]),
+			),
+		);
+		writeNum3(ctx, rv, "X", "Y", "Z", DEFAULT_COMPONENTS, rotationSlot, out);
+		return;
+	}
+	// The angle is folded into [-pi, pi], which turns the same rotation the
+	// other way round the axis, so that no component is larger than pi and the
+	// scale maps each onto an i16. Rounded, not truncated, which halves the error.
+	const syntax = ctx.ts_.SyntaxKind;
+	const turn = f.createConditionalExpression(
+		f.createBinaryExpression(angle, syntax.GreaterThanToken, ctx.num(Math.PI)),
+		undefined,
+		f.createBinaryExpression(angle, syntax.MinusToken, ctx.num(2 * Math.PI)),
+		undefined,
+		angle,
+	);
 	out.push(
 		ctx.constStatement(
 			rv,
-			f.createCallExpression(f.createPropertyAccessExpression(axis, "mul"), undefined, [angle]),
+			f.createCallExpression(f.createPropertyAccessExpression(axis, "mul"), undefined, [
+				f.createBinaryExpression(
+					f.createParenthesizedExpression(turn),
+					syntax.AsteriskToken,
+					ctx.num(QUANTIZED_ROTATION_SCALE),
+				),
+			]),
 		),
 	);
-	writeNum3(ctx, rv, "X", "Y", "Z", DEFAULT_COMPONENTS, { buf, pos, offset: positionBytes }, out);
+	const rounded = (component: string) =>
+		f.createCallExpression(f.createPropertyAccessExpression(f.createIdentifier("math"), "round"), undefined, [
+			f.createPropertyAccessExpression(rv, component),
+		]);
+	["X", "Y", "Z"].forEach((component, i) => {
+		out.push(...ctx.writeNumberAt("i16", buf, ctx.at(rotationSlot, i * 2), rounded(component)));
+	});
+}
+
+/**
+ * One bit per member, in the order of `field.members`, each set when the set
+ * holds that member. Every byte is computed whole from its bits and written
+ * once, as the packed region is, so bits past the last member are always 0
+ * and no bit keeps what an earlier `serialize()` left in the scratch buffer.
+ */
+function writeBitSet(
+	ctx: EmitContext,
+	field: Extract<Field, { kind: "bitSet" }>,
+	value: ts.Expression,
+	out: ts.Statement[],
+): void {
+	const f = ctx.factory;
+	const set = ctx.fresh("set");
+	out.push(ctx.constStatement(set, ctx.castTo(value, fieldToTypeNode(ctx, field))));
+	const { buf, pos, statements } = ctx.destructureAlloc("alloc", bitSetBytes(field));
+	out.push(...statements);
+	for (let byteIndex = 0; byteIndex * 8 < field.members.length; byteIndex++) {
+		let byteExpr: ts.Expression | undefined;
+		field.members.slice(byteIndex * 8, byteIndex * 8 + 8).forEach((member, bitIndex) => {
+			const term = f.createConditionalExpression(
+				f.createCallExpression(f.createPropertyAccessExpression(set, "has"), undefined, [
+					ctx.literalValueExpr(member),
+				]),
+				undefined,
+				ctx.num(1 << bitIndex),
+				undefined,
+				ctx.num(0),
+			);
+			byteExpr = byteExpr ? f.createBinaryExpression(byteExpr, ctx.ts_.SyntaxKind.PlusToken, term) : term;
+		});
+		out.push(
+			f.createExpressionStatement(ctx.bufferCall("writeu8", [buf, ctx.offsetFrom(pos, byteIndex), byteExpr!])),
+		);
+	}
 }
 
 function writeSequence(
@@ -1021,6 +1142,7 @@ function guardFor(ctx: EmitContext, field: Field, value: ts.Expression): ts.Expr
 		case "array":
 		case "tuple":
 		case "dict":
+		case "bitSet":
 		case "recursiveRef":
 			return typeIs("table");
 		case "vector2":

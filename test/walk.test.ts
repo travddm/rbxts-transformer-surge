@@ -1,4 +1,5 @@
 import { FIXED_DATATYPES } from "../src/datatypes";
+import type { Field } from "../src/field";
 import { loadDeclaration, walkDeclaration } from "./harness";
 
 describe("TypeWalker classification", () => {
@@ -910,9 +911,9 @@ describe("TypeWalker Length<T, L>", () => {
 		]);
 	});
 
-	// Rule 4 of data-type-surface.md: a fully defaulted brand has to encode
-	// exactly what the unbranded type encodes, so it must leave no `length`
-	// behind for the emitter to act on.
+	// Rule 4 of DataType brands in docs/coding-standards.md in the surge repo:
+	// a fully defaulted brand has to encode exactly what the unbranded type
+	// encodes, so it must leave no `length` behind for the emitter to act on.
 	test("the default argument leaves the field identical to the unbranded one", () => {
 		const { field: branded } = walkDeclaration(
 			`import { DataType } from "@rbxts/surge"; interface T { arr: DataType.Length<Array<string>>; }`,
@@ -1097,8 +1098,9 @@ describe("TypeWalker Vector<X, Y, Z> and Transform<X, Y, Z>", () => {
 		expect(byName.get("two")).toEqual(["u8", "u16", "u8"]);
 	});
 
-	// Rule 4 of data-type-surface.md, as for `Length<T, L>`: a fully defaulted
-	// brand has to leave no widths behind for the emitter to act on.
+	// Rule 4 of DataType brands in docs/coding-standards.md in the surge repo,
+	// as for `Length<T, L>`: a fully defaulted brand has to leave no widths
+	// behind for the emitter to act on.
 	test("the default arguments leave the field identical to the unbranded one", () => {
 		const { field: branded, diagnostics } = walkDeclaration(
 			`import { DataType } from "@rbxts/surge";
@@ -1204,5 +1206,244 @@ describe("TypeWalker Vector<X, Y, Z> and Transform<X, Y, Z>", () => {
 			expect(diagnostics).toHaveLength(1);
 			expect(diagnostics[0].message).toContain(`"DataType.${brand}"'s component widths`);
 		}
+	});
+});
+
+describe("TypeWalker Range<T, Min, Max>", () => {
+	/** The field a one-property `T` walks its property `n` to, with no diagnostic expected. */
+	function rangeField(type: string): Field {
+		const { field, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { n: ${type}; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toEqual([]);
+		if (field.kind !== "object") throw new Error("expected an object");
+		return field.fields[0].field;
+	}
+
+	/** The diagnostics a one-property `T` reports for its property `n`. */
+	function rangeDiagnostics(type: string): string[] {
+		const { diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { n: ${type}; }`,
+			"T",
+			{ surge: true },
+		);
+		return diagnostics.map((diagnostic) => diagnostic.message);
+	}
+
+	// Wire format 4.16: unsigned when neither bound is negative, signed
+	// otherwise, and f64 past 32 bits. Each row sits on a width's edge.
+	test.each([
+		[0, 255, "u8"],
+		[0, 256, "u16"],
+		[0, 65535, "u16"],
+		[0, 65536, "u24"],
+		[0, 16777216, "u32"],
+		[0, 4294967295, "u32"],
+		[0, 4294967296, "f64"],
+		[-1, 1, "i8"],
+		[-128, 127, "i8"],
+		[-128, 128, "i16"],
+		[-129, 0, "i16"],
+		[-32769, 0, "i24"],
+		[-8388609, 0, "i32"],
+		[-2147483649, 0, "f64"],
+	])("Range<number, %d, %d> narrows to %s and records the range", (min, max, width) => {
+		expect(rangeField(`DataType.Range<number, ${min}, ${max}>`)).toEqual({
+			kind: "num",
+			width,
+			range: { min, max, whole: true },
+		});
+	});
+
+	test("an explicit width is kept, and only a float width admits fractions", () => {
+		expect(rangeField("DataType.Range<DataType.u16, 0, 10>")).toEqual({
+			kind: "num",
+			width: "u16",
+			range: { min: 0, max: 10, whole: true },
+		});
+		expect(rangeField("DataType.Range<DataType.f32, -0.5, 0.5>")).toEqual({
+			kind: "num",
+			width: "f32",
+			range: { min: -0.5, max: 0.5, whole: false },
+		});
+	});
+
+	// A re-alias has lost the brand alias, and the width brand's own property
+	// is on the same intersection, so the width must not be read first.
+	test("a re-alias of a Range over a width brand resolves to the Range", () => {
+		const { field, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			type Health = DataType.Range<DataType.u8, 0, 100>;
+			interface T { n: Health; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toEqual([]);
+		if (field.kind !== "object") throw new Error("expected an object");
+		expect(field.fields[0].field).toEqual({ kind: "num", width: "u8", range: { min: 0, max: 100, whole: true } });
+	});
+
+	test("a Record keyed by a Range keeps the range on its key", () => {
+		expect(rangeField("Record<DataType.Range<number, 0, 10>, number>")).toEqual({
+			kind: "dict",
+			key: { kind: "num", width: "u8", range: { min: 0, max: 10, whole: true } },
+			value: { kind: "num", width: "f64" },
+			source: "record",
+		});
+	});
+
+	test("a fractional bound is a diagnostic unless the width is a float", () => {
+		const messages = [
+			...rangeDiagnostics("DataType.Range<number, 0, 0.5>"),
+			...rangeDiagnostics("DataType.Range<DataType.u8, 0, 2.5>"),
+		];
+		expect(messages).toHaveLength(2);
+		for (const message of messages) {
+			expect(message).toContain("holds whole numbers, so its bounds must be whole numbers");
+		}
+	});
+
+	test("a range the explicit width cannot hold is a diagnostic, not a silent widening", () => {
+		const messages = rangeDiagnostics("DataType.Range<DataType.u8, 0, 300>");
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain('"DataType.u8" cannot hold every value');
+		expect(rangeDiagnostics("DataType.Range<DataType.i8, -129, 0>")).toHaveLength(1);
+		expect(rangeDiagnostics("DataType.Range<DataType.u16, -1, 0>")).toHaveLength(1);
+	});
+
+	test("a minimum above the maximum is a diagnostic", () => {
+		const messages = rangeDiagnostics("DataType.Range<number, 10, 0>");
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain("minimum 10 is greater than its maximum 0");
+	});
+
+	test("a bound that is not a number literal is a diagnostic", () => {
+		const messages = rangeDiagnostics("DataType.Range<number, 0, number>");
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain("bounds must each be a number literal");
+	});
+
+	test("a first argument that is neither number nor a width brand is a diagnostic", () => {
+		const messages = rangeDiagnostics("DataType.Range<5, 0, 10>");
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain('first argument must be "number" or one of the "DataType" number widths');
+	});
+});
+
+describe("TypeWalker Quantized<T>", () => {
+	function quantizedField(type: string): { field: Field; messages: string[] } {
+		const { field, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { c: ${type}; }`,
+			"T",
+			{ surge: true },
+		);
+		if (field.kind !== "object") throw new Error("expected an object");
+		return { field: field.fields[0].field, messages: diagnostics.map((diagnostic) => diagnostic.message) };
+	}
+
+	test("marks a CFrame's rotation as quantized and leaves its position alone", () => {
+		expect(quantizedField("DataType.Quantized<CFrame>")).toEqual({
+			field: { kind: "cframe", quantized: true },
+			messages: [],
+		});
+	});
+
+	test("composes with Transform, which still sets the position's widths", () => {
+		const expected = { kind: "cframe", position: ["i16", "i16", "i16"], quantized: true };
+		expect(quantizedField("DataType.Quantized<DataType.Transform<DataType.i16>>")).toEqual({
+			field: expected,
+			messages: [],
+		});
+		const { field, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			type Placement = DataType.Quantized<DataType.Transform<DataType.i16>>;
+			interface T { c: Placement; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toEqual([]);
+		if (field.kind !== "object") throw new Error("expected an object");
+		expect(field.fields[0].field).toEqual(expected);
+	});
+
+	test("an optional quantized CFrame is an optional of the quantized form", () => {
+		const { field, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { c?: DataType.Quantized<CFrame>; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toEqual([]);
+		if (field.kind !== "object") throw new Error("expected an object");
+		expect(field.fields[0].field).toEqual({
+			kind: "optional",
+			inner: { kind: "cframe", quantized: true },
+			packed: false,
+		});
+	});
+
+	// The packed CFrame writes its rotation through `writePackedCFrame`, at a
+	// layout of its own and only when the header does not already give it.
+	test("a Quantized inside a Packed subtree is a diagnostic", () => {
+		const { field, messages } = quantizedField("DataType.Packed<DataType.Quantized<CFrame>>");
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain('"DataType.Quantized" has nothing to set on a CFrame inside "DataType.Packed"');
+		expect(field).toEqual({ kind: "cframe", packed: true });
+	});
+});
+
+describe("TypeWalker bit sets inside Packed<T>", () => {
+	function packedProperty(type: string): { field: Field; messages: string[] } {
+		const { field, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { p: DataType.Packed<{ s: ${type} }>; }`,
+			"T",
+			{ surge: true },
+		);
+		if (field.kind !== "object") throw new Error("expected an object");
+		const inner = field.fields[0].field;
+		if (inner.kind !== "object") throw new Error("expected an object");
+		return { field: inner.fields[0].field, messages: diagnostics.map((diagnostic) => diagnostic.message) };
+	}
+
+	test("a Set of literal values is one bit per member, in canonical literal order", () => {
+		expect(packedProperty(`Set<"west" | "east" | 2 | true>`)).toEqual({
+			field: { kind: "bitSet", members: [true, 2, "east", "west"] },
+			messages: [],
+		});
+		expect(packedProperty(`ReadonlySet<"only">`)).toEqual({
+			field: { kind: "bitSet", members: ["only"] },
+			messages: [],
+		});
+	});
+
+	// `Packed<T>` covers its whole subtree, so the set need not be a direct property.
+	test("a Set of literal values anywhere in the subtree is a bit set", () => {
+		expect(packedProperty(`Array<Set<"a" | "b">>`).field).toEqual({
+			kind: "array",
+			element: { kind: "bitSet", members: ["a", "b"] },
+		});
+	});
+
+	test("a Set of anything else keeps its count", () => {
+		expect(packedProperty("Set<string>").field).toMatchObject({ kind: "dict", source: "set" });
+		expect(packedProperty(`Set<"a" | undefined>`).field).toMatchObject({ kind: "dict", source: "set" });
+	});
+
+	test("a Set of literal values outside Packed<T> keeps its count", () => {
+		const { field } = walkDeclaration(`interface T { s: Set<"a" | "b">; }`, "T", { surge: true });
+		if (field.kind !== "object") throw new Error("expected an object");
+		expect(field.fields[0].field).toMatchObject({ kind: "dict", source: "set" });
+	});
+
+	test("an enum Set inside Packed<T> keeps its count", () => {
+		expect(packedProperty("Set<Enum.SortOrder>").field).toMatchObject({ kind: "dict", source: "set" });
+	});
+
+	test("a Length on a bit set is a diagnostic", () => {
+		const { field, messages } = packedProperty(`DataType.Length<Set<"a" | "b">, DataType.u8>`);
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain("nothing to set on a Set of literal values");
+		expect(field).toEqual({ kind: "bitSet", members: ["a", "b"] });
 	});
 });

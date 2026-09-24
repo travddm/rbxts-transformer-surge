@@ -5,16 +5,19 @@ import { FIXED_DATATYPES } from "../datatypes";
 import type { ComponentWidths, CountSpec, Field, FieldKey, ObjectFieldEntry } from "../field";
 import {
 	DEFAULT_COMPONENTS,
+	QUANTIZED_COMPONENTS,
+	QUANTIZED_ROTATION_SCALE,
 	READ_BUFFER,
 	READ_CURSOR,
 	READ_LENGTH,
-	ROTATION_BYTES,
 	WIDTH_BYTES,
 	ZERO_SIZE_COUNT_CAP,
 } from "./constants";
 import type { EmitContext, ScopedItem, Slot } from "./context";
 import {
 	allocRuns,
+	bitSetBytes,
+	cframeBytes,
 	componentBytes,
 	componentsOf,
 	exactCount,
@@ -45,7 +48,7 @@ export function readField(ctx: EmitContext, field: Field, out: ts.Statement[]): 
 		case "color3":
 			return readColor3(ctx, out);
 		case "cframe":
-			return field.packed ? readPackedCFrame(ctx, out) : readCFrame(ctx, field.position, out);
+			return field.packed ? readPackedCFrame(ctx, out) : readCFrame(ctx, field, out);
 		case "colorSequence":
 			return readSequence(ctx, "ColorSequence", out);
 		case "numberSequence":
@@ -62,6 +65,8 @@ export function readField(ctx: EmitContext, field: Field, out: ts.Statement[]): 
 			return readTuple(ctx, field, out);
 		case "dict":
 			return readDict(ctx, field, out);
+		case "bitSet":
+			return readBitSet(ctx, field, out);
 		case "optional":
 			return readOptional(ctx, field, out, undefined);
 		case "literalConst":
@@ -362,12 +367,12 @@ function readColor3(ctx: EmitContext, out: ts.Statement[]): ts.Expression {
 	return f.createNewExpression(f.createIdentifier("Color3"), undefined, [channel(0), channel(1), channel(2)]);
 }
 
-function readCFrame(ctx: EmitContext, position: ComponentWidths | undefined, out: ts.Statement[]): ts.Expression {
+function readCFrame(ctx: EmitContext, field: Extract<Field, { kind: "cframe" }>, out: ts.Statement[]): ts.Expression {
 	const f = ctx.factory;
-	const widths = componentsOf(position);
+	const widths = componentsOf(field.position);
 	const positionBytes = componentBytes(widths);
 	// One reservation for both halves, mirroring `writeCFrame`.
-	const { buf, pos, statements } = ctx.destructureAlloc("readAlloc", positionBytes + ROTATION_BYTES);
+	const { buf, pos, statements } = ctx.destructureAlloc("readAlloc", cframeBytes(field));
 	out.push(...statements);
 	const [px, py, pz] = readNum3(ctx, widths, { buf, pos, offset: 0 });
 	const positionValue = ctx.fresh("pos");
@@ -377,7 +382,18 @@ function readCFrame(ctx: EmitContext, position: ComponentWidths | undefined, out
 			f.createNewExpression(f.createIdentifier("Vector3"), undefined, [px, py, pz]),
 		),
 	);
-	const [rx, ry, rz] = readNum3(ctx, DEFAULT_COMPONENTS, { buf, pos, offset: positionBytes });
+	const rotationSlot = { buf, pos, offset: positionBytes };
+	const rotationWidths: ComponentWidths = field.quantized ? QUANTIZED_COMPONENTS : DEFAULT_COMPONENTS;
+	let [rx, ry, rz] = readNum3(ctx, rotationWidths, rotationSlot);
+	if (field.quantized) {
+		[rx, ry, rz] = [rx, ry, rz].map((component) =>
+			f.createBinaryExpression(
+				component,
+				ctx.ts_.SyntaxKind.AsteriskToken,
+				ctx.num(1 / QUANTIZED_ROTATION_SCALE),
+			),
+		);
+	}
 	const rv = ctx.fresh("rv");
 	out.push(ctx.constStatement(rv, f.createNewExpression(f.createIdentifier("Vector3"), undefined, [rx, ry, rz])));
 	const angle = ctx.fresh("angle");
@@ -558,6 +574,43 @@ function readSequence(ctx: EmitContext, kind: "ColorSequence" | "NumberSequence"
 	);
 	out.push(ctx.countedLoop(i, count, body));
 	return f.createNewExpression(f.createIdentifier(kind), undefined, [keypoints]);
+}
+
+/**
+ * Reads each byte of a bit set once and adds the member each set bit stands
+ * for. Bits past the last member are not read.
+ */
+function readBitSet(ctx: EmitContext, field: Extract<Field, { kind: "bitSet" }>, out: ts.Statement[]): ts.Expression {
+	const f = ctx.factory;
+	const syntax = ctx.ts_.SyntaxKind;
+	const { buf, pos, statements } = ctx.destructureAlloc("readAlloc", bitSetBytes(field));
+	out.push(...statements);
+	const typeNode = fieldToTypeNode(ctx, field) as ts.TypeReferenceNode;
+	const result = ctx.fresh("result");
+	out.push(ctx.constStatement(result, f.createNewExpression(f.createIdentifier("Set"), typeNode.typeArguments, [])));
+	for (let byteIndex = 0; byteIndex * 8 < field.members.length; byteIndex++) {
+		const bits = ctx.fresh("bits");
+		out.push(ctx.constStatement(bits, ctx.bufferCall("readu8", [buf, ctx.offsetFrom(pos, byteIndex)])));
+		field.members.slice(byteIndex * 8, byteIndex * 8 + 8).forEach((member, bitIndex) => {
+			out.push(
+				f.createIfStatement(
+					f.createBinaryExpression(
+						f.createParenthesizedExpression(
+							f.createBinaryExpression(bits, syntax.AmpersandToken, ctx.num(1 << bitIndex)),
+						),
+						syntax.ExclamationEqualsEqualsToken,
+						ctx.num(0),
+					),
+					f.createExpressionStatement(
+						f.createCallExpression(f.createPropertyAccessExpression(result, "add"), undefined, [
+							ctx.literalValueExpr(member),
+						]),
+					),
+				),
+			);
+		});
+	}
+	return result;
 }
 
 function readDatatype(ctx: EmitContext, name: string, out: ts.Statement[]): ts.Expression {

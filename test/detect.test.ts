@@ -229,4 +229,64 @@ describe("getDataTypeBrand / getSurgeBrand", () => {
 			cleanup();
 		}
 	});
+
+	/**
+	 * The brand `getSurgeBrand` finds on property `p` of `T`, declared by
+	 * `source`, with each argument as the width brand it names or as the
+	 * checker prints it.
+	 */
+	function brandOfP(source: string): { name: string | undefined; args: string[] } {
+		const { checker, sourceFile, cleanup } = createFixtureProgram(source, { surge: true });
+		try {
+			const declarationNode = findDeclaration(sourceFile, "T");
+			const prop = checker.getTypeAtLocation(declarationNode).getProperty("p")!;
+			const brand = getSurgeBrand(checker, checker.getTypeOfSymbolAtLocation(prop, declarationNode));
+			return {
+				name: brand?.name,
+				args: (brand?.args ?? []).map((arg) => getDataTypeBrand(arg) ?? checker.typeToString(arg)),
+			};
+		} finally {
+			cleanup();
+		}
+	}
+
+	test("reads Range<T, Min, Max>'s three type arguments, aliased and re-aliased", () => {
+		const expected = { name: "Range", args: ["u8", "0", "100"] };
+		expect(
+			brandOfP(
+				`import { DataType } from "@rbxts/surge"; interface T { p: DataType.Range<DataType.u8, 0, 100>; }`,
+			),
+		).toEqual(expected);
+		expect(
+			brandOfP(
+				`import { DataType } from "@rbxts/surge"; type Health = DataType.Range<DataType.u8, 0, 100>; interface T { p: Health; }`,
+			),
+		).toEqual(expected);
+	});
+
+	// The width brand's property is on the same intersection as the range's,
+	// and it is the inner brand, so reading it first would drop the range.
+	test("a re-aliased Range over a width brand is not read as the width", () => {
+		const { checker, sourceFile, cleanup } = createFixtureProgram(
+			`import { DataType } from "@rbxts/surge"; type Health = DataType.Range<DataType.u8, 0, 100>; interface T { p: Health; }`,
+			{ surge: true },
+		);
+		try {
+			const declarationNode = findDeclaration(sourceFile, "T");
+			const prop = checker.getTypeAtLocation(declarationNode).getProperty("p")!;
+			const propType = checker.getTypeOfSymbolAtLocation(prop, declarationNode);
+			expect(propType.getProperty("_surge_u8")).toBeDefined();
+			expect(getSurgeBrand(checker, propType)?.name).toBe("Range");
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("a re-aliased Quantized<Transform<X>> resolves to Quantized", () => {
+		expect(
+			brandOfP(
+				`import { DataType } from "@rbxts/surge"; type Placement = DataType.Quantized<DataType.Transform<DataType.i16>>; interface T { p: Placement; }`,
+			).name,
+		).toBe("Quantized");
+	});
 });
