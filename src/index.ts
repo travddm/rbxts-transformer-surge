@@ -1,6 +1,6 @@
 import type ts from "typescript";
 
-import { type FactoryName, resolveFactoryName } from "./detect";
+import { type FactoryName, declaredResultCarriesBlobs, resolveFactoryName } from "./detect";
 import { Emitter, importAlias } from "./emit";
 import { TypeWalker } from "./walk";
 
@@ -187,7 +187,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 			}
 
 			function buildReplacement(
-				factoryName: string,
+				factoryName: FactoryName,
 				node: ts.CallExpression,
 				typeArgumentNode: ts.TypeNode,
 				options: { checks: boolean; writeChecks: boolean },
@@ -245,6 +245,21 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 
 				const usesBlobs = emitter.usedImports.has("pushBlob") || emitter.usedImports.has("nextBlob");
 
+				// The package's `Serialized<T>` decides whether the result has a
+				// `blobs` array. It says so wherever it cannot tell, which costs an
+				// empty array; a blob it misses would be dropped by a caller that
+				// follows the type, so that is a diagnostic.
+				const resultCarriesBlobs = declaredResultCarriesBlobs(typescript, checker, node, factoryName);
+				if (needsWrite && usesBlobs && !resultCarriesBlobs) {
+					report(
+						node,
+						`"${checker.typeToString(type)}" holds a value that goes into "blobs", but the result type ` +
+							`@rbxts/surge declares for it has no "blobs". The two disagree, which is a surge bug; ` +
+							`please report it with this type.`,
+					);
+					return node;
+				}
+
 				// Built only for a side the factory returns: assembling a side
 				// registers its imports, such as `finishWrite` for the write side.
 				const buildSerialize = (): ts.ArrowFunction => {
@@ -253,29 +268,48 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 						writeBody.push(f.createExpressionStatement(surgeCall("beginWriteBlobs", [])));
 					}
 					writeBody.push(...writeStatements);
+					const resultProperties = [f.createPropertyAssignment("buffer", emitter.finishWriteExpression())];
+					if (usesBlobs) {
+						resultProperties.push(f.createPropertyAssignment("blobs", surgeCall("finishWriteBlobs", [])));
+					} else if (resultCarriesBlobs) {
+						// The declared result has an array that this shape never
+						// fills. Asserted, because an empty array literal is `never[]`.
+						resultProperties.push(
+							f.createPropertyAssignment(
+								"blobs",
+								f.createAsExpression(
+									f.createArrayLiteralExpression([]),
+									f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
+								),
+							),
+						);
+					}
+					const result = f.createObjectLiteralExpression(resultProperties, false);
 					writeBody.push(
 						f.createReturnStatement(
-							f.createObjectLiteralExpression(
-								[
-									f.createPropertyAssignment("buffer", emitter.finishWriteExpression()),
-									f.createPropertyAssignment(
-										"blobs",
-										usesBlobs
-											? surgeCall("finishWriteBlobs", [])
-											: // `Serializer<T>` still declares the property, so it
-												// needs a value; an empty literal is what the channel
-												// would have returned. Asserted, because an empty array
-												// literal is `never[]`.
-												f.createAsExpression(
-													f.createArrayLiteralExpression([]),
-													f.createTypeReferenceNode("Array", [
-														f.createTypeReferenceNode("defined"),
-													]),
-												),
+							usesBlobs || resultCarriesBlobs
+								? result
+								: // roblox-ts type-checks the generated code again after the
+									// transform, where the literal alone types as `{ buffer: buffer }`
+									// and a caller's `result.blobs` does not exist. The assertion
+									// gives it the declared shape and emits nothing.
+									f.createAsExpression(
+										result,
+										f.createTypeLiteralNode([
+											f.createPropertySignature(
+												undefined,
+												"buffer",
+												undefined,
+												f.createTypeReferenceNode("buffer"),
+											),
+											f.createPropertySignature(
+												undefined,
+												"blobs",
+												f.createToken(typescript.SyntaxKind.QuestionToken),
+												f.createKeywordTypeNode(typescript.SyntaxKind.UndefinedKeyword),
+											),
+										]),
 									),
-								],
-								false,
-							),
 						),
 					);
 					// An arrow function, not `createFunctionExpression`: roblox-ts treats a

@@ -51,11 +51,111 @@ describe("transform (end-to-end)", () => {
 			for (const name of ["beginWriteBlobs", "finishWriteBlobs", "beginReadBlobs"]) {
 				expect(printed).not.toContain(name);
 			}
-			// The property is still there, because `Serializer<T>` declares it.
-			expect(printed).toContain("blobs: [] as Array<defined>");
+			// `Serialized<P>` declares no array, so the result has none.
+			expect(printed).not.toContain("blobs:");
 			// Nothing reads the parameter, so its name keeps a consumer's
 			// `noUnusedParameters` quiet.
 			expect(printed).toContain("_inputBlobs");
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("a shape whose declared result keeps an array it never fills returns an empty one", () => {
+		// `Serialized<T>` counts any `_nominal_*` property as a Roblox type it
+		// passes through; the walk checks where it is declared, and encodes
+		// this one.
+		const { printed, diagnostics, cleanup } = runTransform(
+			`import { createBinarySerializer } from "@rbxts/surge";
+			interface P { _nominal_P: "p"; x: number; }
+			const s = createBinarySerializer<P>();`,
+		);
+		try {
+			expect(diagnostics).toHaveLength(0);
+			expect(printed).not.toContain("pushBlob");
+			expect(printed).toContain("blobs: [] as Array<defined>");
+		} finally {
+			cleanup();
+		}
+	});
+
+	test.each([
+		["numbers, strings and booleans", "interface P { a: number; b: string; c: boolean; d?: string }", false],
+		[
+			"the DataType brands",
+			`interface P {
+				a: DataType.u8;
+				b: DataType.Length<string, DataType.u8>;
+				c: DataType.Packed<{ x: boolean }>;
+				d: DataType.Vector<DataType.i16>;
+				e: DataType.Transform<DataType.i16>;
+				f: DataType.Quantized<CFrame>;
+				g: DataType.Range<DataType.u8, 0, 100>;
+			}`,
+			false,
+		],
+		[
+			"every Roblox type surge encodes",
+			`interface P {
+				a: Vector2; b: Vector3; c: CFrame; d: Color3; e: ColorSequence; f: NumberSequence; g: buffer;
+				h: Vector3int16; i: UDim; j: UDim2; k: BrickColor; l: NumberRange; m: Rect; n: DateTime;
+				o: Enum.KeyCode;
+			}`,
+			false,
+		],
+		[
+			"arrays, tuples, maps, sets and records",
+			`interface P {
+				a: number[]; b: [string, boolean]; c: Map<string, number>; d: Set<string>;
+				e: Record<string, number>; f: "x" | "y" | undefined;
+			}`,
+			false,
+		],
+		["a recursive object", "interface P { children: P[]; name: string }", false],
+		[
+			"a recursive tagged union",
+			'type E = { kind: "num"; v: number } | { kind: "add"; l: E; r: E }; interface P { e: E }',
+			false,
+		],
+		["an Instance", "interface P { part: Instance }", true],
+		["an unknown", "interface P { data: unknown }", true],
+		["a Roblox type surge does not encode", "interface P { region: Region3 }", true],
+		["an array of Instances", "interface P { parts: BasePart[] }", true],
+		["a Map keyed by Instance", "interface P { map: Map<Instance, number> }", true],
+		["a blob three objects down", "interface P { a: { b: { c: unknown } } }", true],
+		["a recursive object with a blob", "interface P { next?: P; part?: Instance }", true],
+		["a defined", "interface P { value: defined }", true],
+	])(
+		"the declared result has a blobs array exactly when the walk finds a blob: %s",
+		(_name, declaration, carries) => {
+			const { printed, diagnostics, cleanup } = runTransform(
+				`import { DataType, createBinarySerializer } from "@rbxts/surge";
+			${declaration}
+			const s = createBinarySerializer<P>();`,
+			);
+			try {
+				expect(diagnostics).toHaveLength(0);
+				expect(printed.includes("pushBlob")).toBe(carries);
+				expect(printed.includes("blobs:")).toBe(carries);
+			} finally {
+				cleanup();
+			}
+		},
+	);
+
+	test("a Roblox type with properties of its own is a blob to the declared result type too", () => {
+		// The walk passes `Vector3 & { tag: 1 }` through as a blob, so
+		// `Serialized<P>` must declare the array, or the call site is a
+		// diagnostic.
+		const { printed, diagnostics, cleanup } = runTransform(
+			`import { createBinarySerializer } from "@rbxts/surge";
+			interface P { v: Vector3 & { tag: 1 }; }
+			const s = createBinarySerializer<P>();`,
+		);
+		try {
+			expect(diagnostics).toHaveLength(0);
+			expect(printed).toContain("pushBlob");
+			expect(printed).toContain("blobs: __surge_finishWriteBlobs()");
 		} finally {
 			cleanup();
 		}
@@ -294,6 +394,24 @@ describe("transform generated code", () => {
 			`import { createBinarySerializer } from "@rbxts/surge";
 			${declarations}
 			export const s = createBinarySerializer<T>();`,
+		);
+		expect(errors).toEqual([]);
+	});
+
+	// Checked after the transform, a variable holds the generated code's own
+	// type, so its result must still have the `blobs` a caller reads.
+	test.each([
+		["no blob", "interface T { v: number; }"],
+		["a blob", "interface T { part: Instance; }"],
+	])("a caller reading blobs off a result with %s passes the type check", (_name, declarations) => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { createBinarySerializer } from "@rbxts/surge";
+			${declarations}
+			const s = createBinarySerializer<T>();
+			export function send(value: T): T {
+				const { buffer, blobs } = s.serialize(value);
+				return s.deserialize(buffer, blobs);
+			}`,
 		);
 		expect(errors).toEqual([]);
 	});

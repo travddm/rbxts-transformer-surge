@@ -12,4 +12,4 @@ export {
 	unpackBit,
 	writePackedCFrame,
 } from "./runtime";
-export { createBinarySerializer, createDeserializer, createSerializer, Serializer } from "./serializer";
+export { createBinarySerializer, createDeserializer, createSerializer, Serialized, Serializer } from "./serializer";

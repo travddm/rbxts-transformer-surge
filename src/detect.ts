@@ -116,6 +116,36 @@ export function resolveFactoryName(
 }
 
 /**
+ * Whether the result `@rbxts/surge` declares for this call site's `serialize`
+ * has a `blobs` array: its `Serialized<T>` resolved for the call's type
+ * argument (Runtime API 3.6 in docs/specs/runtime-api.md in the surge repo).
+ * The package's type decides the shape, because the caller's code is checked
+ * against it. A `blobs` declared `undefined`, or not declared, is no array. A
+ * package whose result always declares one, as before `Serialized<T>`, gets
+ * one on every call site.
+ */
+export function declaredResultCarriesBlobs(
+	typescript: typeof ts,
+	checker: ts.TypeChecker,
+	node: ts.CallExpression,
+	factoryName: FactoryName,
+): boolean {
+	if (factoryName === "createDeserializer") {
+		return false;
+	}
+	const returned = checker.getTypeAtLocation(node);
+	const serializeSymbol = factoryName === "createSerializer" ? undefined : returned.getProperty("serialize");
+	const serialize = serializeSymbol ? checker.getTypeOfSymbolAtLocation(serializeSymbol, node) : returned;
+	const result = serialize.getCallSignatures()[0]?.getReturnType();
+	const blobs = result?.getProperty("blobs");
+	if (!blobs) {
+		return false;
+	}
+	const blobsType = checker.getNonNullableType(checker.getTypeOfSymbolAtLocation(blobs, node));
+	return (blobsType.flags & typescript.TypeFlags.Never) === 0;
+}
+
+/**
  * If `type` is a reference to one of `@rbxts/surge`'s branded
  * `DataType.*` type aliases (see data-type.ts in @rbxts/surge), returns
  * its bare name (`"f32"`, `"Packed"`, ...). Detected via `type.aliasSymbol`
