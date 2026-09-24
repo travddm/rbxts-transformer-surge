@@ -6,9 +6,9 @@ import { TypeWalker } from "./walk";
 
 /**
  * `rbxts-transformer-surge`'s entry point. Registered in a project's
- * `tsconfig.json` `plugins` by package name (see docs/testing.md), roblox-ts
- * loads this as a `type: "program"` (the default) plugin and calls it with
- * `(program, config, { ts })` -- confirmed via
+ * `tsconfig.json` `plugins` by package name (see docs/getting-started.md in
+ * the surge repo), roblox-ts loads this as a `type: "program"` (the default)
+ * plugin and calls it with `(program, config, { ts })` -- confirmed via
  * `createTransformerList.js`/`getTransformerFromFactory` in roblox-ts's own
  * source, matching docs/research/compile-time-specialization.md in the surge repo.
  * Relying on the injected `ts` here (rather than importing our own

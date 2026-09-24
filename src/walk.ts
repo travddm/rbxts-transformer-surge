@@ -231,7 +231,8 @@ export class TypeWalker {
 		// Identity-based, not a bare name match: a user-declared
 		// `interface Vector3 { foo: string }` has `type.symbol.name ===
 		// "Vector3"` too, so the scalar-kind table only applies to the real
-		// `@rbxts/types` declaration (see blob-classification.md).
+		// `@rbxts/types` declaration (Transformer 4.1 in
+		// docs/specs/transformer.md in the surge repo).
 		const symbolName = type.symbol?.name;
 		if (symbolName && symbolName in ROBLOX_SCALAR_KINDS && isFromTypesPackage(type.symbol?.declarations)) {
 			const kind = ROBLOX_SCALAR_KINDS[symbolName];
@@ -245,10 +246,11 @@ export class TypeWalker {
 		// Roblox datatype not covered above with its own `_nominal_*`
 		// property (fbs and serio both key off the same brand). Routing them
 		// to the blob passthrough channel here, before any structural check
-		// below can walk their declared properties, is the fix for
-		// blob-classification.md: `Instance` has hundreds of properties and
-		// `Region3`/`TweenInfo`/etc. have their own, so without this check
-		// they never reach the "opaque type" fallback further down.
+		// below can walk their declared properties, is what makes them blobs
+		// (Transformer 4.1 in docs/specs/transformer.md in the surge repo):
+		// `Instance` has hundreds of properties and `Region3`/`TweenInfo`/etc.
+		// have their own, so without this check they never reach the "opaque
+		// type" fallback further down.
 		if (isRobloxNominalType(type)) {
 			return { kind: "blob" };
 		}
@@ -574,7 +576,7 @@ export class TypeWalker {
 	/**
 	 * `DataType.Transform<X, Y, Z>` sets the widths of a `CFrame`'s position.
 	 * The rotation is not its business: it stays an f32 axis-angle triple, as
-	 * data-type-surface.md records.
+	 * Wire format 7.1 in docs/specs/wire-format.md in the surge repo states.
 	 *
 	 * Inside `Packed<T>` there is nothing to set. That `CFrame` goes through
 	 * `writePackedCFrame`, whose header decides whether a position is written
@@ -706,7 +708,8 @@ export class TypeWalker {
 				// the general `string` type rather than a member's literal name, so
 				// there is no member list to index into. Reported instead of
 				// classified, since the alternative is `Enum.Enum.EnumItem` on the
-				// read side, which errors at runtime (see enum-encoding.md).
+				// read side, which errors at runtime (Transformer 7.2 in
+				// docs/specs/transformer.md in the surge repo).
 				this.report(
 					`a bare "EnumItem" field isn't supported -- narrow it to a specific enum type, e.g. "Enum.KeyCode".`,
 					node,
@@ -864,9 +867,10 @@ export class TypeWalker {
 
 		// Every constituent routed to the opaque passthrough channel (for
 		// example a union of `Instance` subclasses, now that they're
-		// nominally detected -- see blob-classification.md): there is
-		// nothing left to guard on, since `pushBlob`/`nextBlob` write and
-		// read identically regardless of which variant produced the value.
+		// nominally detected -- Transformer 4.4 in docs/specs/transformer.md in
+		// the surge repo): there is nothing left to guard on, since
+		// `pushBlob`/`nextBlob` write and read identically regardless of which
+		// variant produced the value.
 		if (fields.length > 0 && fields.every((f) => f.kind === "blob")) {
 			return { kind: "blob" };
 		}

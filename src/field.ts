@@ -16,8 +16,9 @@ export type NumWidth = "f32" | "f64" | "u8" | "u16" | "u24" | "u32" | "i8" | "i1
 
 /**
  * The width of the count a variable-length kind writes ahead of its contents,
- * set by `DataType.Length<T, L>` (see data-type-surface.md). Unsigned only: a
- * count is never negative and never fractional.
+ * set by `DataType.Length<T, L>` (Wire format 6 in docs/specs/wire-format.md
+ * in the surge repo). Unsigned only: a count is never negative and never
+ * fractional.
  *
  * Absent on a field means `u32`, which is what every one of these kinds wrote
  * before the brand existed, so an unbranded shape's bytes do not move.
@@ -37,7 +38,7 @@ export type CountSpec = LengthWidth | number;
 /**
  * The widths a `Vector3`'s three components, or a `CFrame`'s position, are
  * stored at, set by `DataType.Vector<X, Y, Z>` and `DataType.Transform<X, Y,
- * Z>` (see data-type-surface.md).
+ * Z>` (Wire format 7 in docs/specs/wire-format.md in the surge repo).
  *
  * Absent on a field means three `f32`s, which is what both wrote before the
  * brands existed, so an unbranded shape's bytes do not move.

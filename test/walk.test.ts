@@ -584,10 +584,6 @@ describe("TypeWalker wire-format determinism", () => {
 	});
 });
 
-// Regression test for the enum-encoding finding in
-// docs/research/september-2026-review.md in the surge repo: a bare `EnumItem`
-// field (not a specific `Enum.*` type) has no member list to index into and
-// must be rejected, not silently classified into an unusable read.
 describe("TypeWalker type parameters", () => {
 	test.each([
 		["a type parameter", "interface Box<T> { v: T; }"],
@@ -666,6 +662,10 @@ describe("TypeWalker Map and Set by declaration", () => {
 	});
 });
 
+// Regression test for the enum-encoding finding in
+// docs/research/september-2026-review.md in the surge repo: a bare `EnumItem`
+// field (not a specific `Enum.*` type) has no member list to index into and
+// must be rejected, not silently classified into an unusable read.
 describe("TypeWalker bare EnumItem", () => {
 	test("a bare EnumItem field is rejected with a diagnostic instead of classified as an enum", () => {
 		const { field, diagnostics } = walkDeclaration("interface T { any: EnumItem; }", "T", { roblox: true });

@@ -32,10 +32,10 @@ export function lengthWidth(length: CountSpec | undefined): LengthWidth {
  * The element or byte count of the exact form, where no count is written
  * at all and both sides use this number, or `undefined` for the counted
  * form. The value has to have exactly this many: a longer one is
- * truncated, and a shorter one raises wherever writing the missing part
- * touches it -- except for an optional element, which pads. The type
- * states the length and nothing checks it until write-side validation
- * lands (data-type-surface.md).
+ * truncated, and what a shorter one writes depends on its element type
+ * (Wire format 6.3, 6.6 and 6.7 in docs/specs/wire-format.md in the surge
+ * repo). The type states the length, and only `writeChecks` checks it
+ * (Runtime API 3.10 in docs/specs/runtime-api.md in the surge repo).
  */
 export function exactCount(length: CountSpec | undefined): number | undefined {
 	return typeof length === "number" ? length : undefined;

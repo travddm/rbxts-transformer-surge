@@ -59,10 +59,11 @@ function isFromSurgePackage(declarations: ts.Declaration[] | undefined): boolean
  * own uniquely named `_nominal_<TypeName>: unique symbol` property --
  * `Instance` and each of its subclasses, plus `Vector2`, `BrickColor`,
  * `CFrame`, and every other datatype (confirmed via `grep -n "_nominal_"` in
- * the package's own `.d.ts` files; see blob-classification.md). Checking
- * property shape plus declaration origin, rather than a fixed name list,
- * covers all of them uniformly and can't be triggered by an unrelated user
- * type that happens to declare its own `_nominal_*`-named property.
+ * the package's own `.d.ts` files; see Transformer 4.1 in
+ * docs/specs/transformer.md in the surge repo). Checking property shape plus
+ * declaration origin, rather than a fixed name list, covers all of them
+ * uniformly and can't be triggered by an unrelated user type that happens to
+ * declare its own `_nominal_*`-named property.
  */
 export function isRobloxNominalType(type: ts.Type): boolean {
 	return type
