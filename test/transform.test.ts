@@ -206,6 +206,27 @@ describe("transform diagnostics", () => {
 			cleanup();
 		}
 	});
+
+	// A serializer is generated for one concrete type. Transformed, an
+	// unconstrained parameter became a blob serializer, and a constrained one
+	// a serializer for its constraint that dropped every other property.
+	test.each([
+		["an unconstrained type parameter", "<T>", "T"],
+		["a type parameter constrained to an object type", "<T extends { a: number }>", "T"],
+		["an object type with a type-parameter property", "<T>", "{ v: T }"],
+	])("a call site inside a generic function whose type argument is %s reports a diagnostic", (_name, params, arg) => {
+		const source = `import { createBinarySerializer } from "@rbxts/surge";
+			export function make${params}() { return createBinarySerializer<${arg}>(); }`;
+		const { printed, diagnostics, cleanup } = runTransform(source);
+		try {
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0].messageText).toContain("depends on a type parameter");
+			// Left untransformed: nothing was generated and nothing imported.
+			expect(printed).not.toContain("__surge_");
+		} finally {
+			cleanup();
+		}
+	});
 });
 
 describe("transform injected imports", () => {
@@ -220,6 +241,20 @@ describe("transform injected imports", () => {
 			expect(printed).toContain("grow as __surge_grow");
 			expect(printed).toContain("__surge_grow(__surge_scratch,");
 			expect(printed).not.toMatch(/[^_]grow[(]__surge_scratch/);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("a createDeserializer call site imports and emits nothing of the write side", () => {
+		const { printed, cleanup } = runTransform(
+			`import { createDeserializer } from "@rbxts/surge";
+			interface T { v: number; next?: T; }
+			export const d = createDeserializer<T>();`,
+		);
+		try {
+			expect(printed).toMatch(/function surge_T_\d+_read/);
+			expect(printed).not.toMatch(/finishWrite|__surge_grow|__surge_scratch|_write\b/);
 		} finally {
 			cleanup();
 		}
@@ -256,6 +291,26 @@ describe("transform generated code", () => {
 			`import { createBinarySerializer } from "@rbxts/surge";
 			${declarations}
 			export const s = createBinarySerializer<T>();`,
+		);
+		expect(errors).toEqual([]);
+	});
+
+	// A factory that returns one function declares only that side's state, so a
+	// recursion helper emitted for the other side would name state that does
+	// not exist.
+	const recursiveShapes = [
+		["a recursive object", `interface T { v: number; next?: T; tags: string[]; }`],
+		["a recursive discriminated union", `type T = { kind: "leaf"; label: string } | { kind: "pair"; l: T; r: T };`],
+	];
+	test.each(
+		["createSerializer", "createDeserializer"].flatMap((factory) =>
+			recursiveShapes.map(([name, declarations]) => [factory, name, declarations]),
+		),
+	)("%s on %s generates code that passes the type check", (factory, _name, declarations) => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { ${factory} } from "@rbxts/surge";
+			${declarations}
+			export const s = ${factory}<T>();`,
 		);
 		expect(errors).toEqual([]);
 	});

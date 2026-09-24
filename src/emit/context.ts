@@ -53,6 +53,14 @@ export interface ScopedItem {
  * their own, so the cursor, the local budget, and the open alloc run have
  * exactly one owner. Internal to `src/emit/`: `Emitter` is what leaves it.
  */
+/** Which of a serializer's two functions a call site's factory returns. */
+export interface EmitSides {
+	readonly write: boolean;
+	readonly read: boolean;
+}
+
+export const BOTH_SIDES: EmitSides = { write: true, read: true };
+
 export abstract class EmitContext {
 	protected tempCounter = 0;
 	// Locals declared so far in the function being emitted. Locals declared
@@ -87,12 +95,19 @@ export abstract class EmitContext {
 		protected readonly helperFields: ReadonlyMap<string, Field>,
 		/**
 		 * Emit the read-side bounds checks of the `checks` factory option
-		 * (Transformer 5.10 in docs/specs/transformer.md in the surge repo). Off, the read path is what it always was:
-		 * no branch per read, and a malformed payload is a raw Luau error or
-		 * worse. Per call site, so one place can hold a checked serializer for
-		 * a remote boundary and an unchecked one for its own storage.
+		 * (Transformer 5.10 in docs/specs/transformer.md in the surge repo).
+		 * Off, the read path is what it always was: no branch per read, and a
+		 * malformed payload is a raw Luau error or worse. Per call site, so one
+		 * place can hold a checked serializer for a remote boundary and an
+		 * unchecked one for its own storage.
 		 */
 		public readonly checks = false,
+		/**
+		 * The sides the call site's factory returns. A recursion helper is
+		 * emitted for these sides only: the closure declares only their state,
+		 * so a helper for the other side would name state that does not exist.
+		 */
+		public readonly sides: EmitSides = BOTH_SIDES,
 	) {}
 
 	public fresh(base: string): ts.Identifier {

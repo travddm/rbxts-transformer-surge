@@ -540,6 +540,56 @@ describe("TypeWalker wire-format determinism", () => {
 // docs/research/september-2026-review.md in the surge repo: a bare `EnumItem`
 // field (not a specific `Enum.*` type) has no member list to index into and
 // must be rejected, not silently classified into an unusable read.
+describe("TypeWalker type parameters", () => {
+	test.each([
+		["a type parameter", "interface Box<T> { v: T; }"],
+		["a type parameter constrained to an object type", "interface Box<T extends { a: number }> { v: T; }"],
+		["keyof a type parameter", "interface Box<T> { k: keyof T; }"],
+		["an indexed access on a type parameter", 'interface Box<T extends { a: number }> { a: T["a"]; }'],
+	])("a property whose type is %s is a diagnostic", (_name, source) => {
+		const { diagnostics } = walkDeclaration(source, "Box");
+		expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+			expect.stringContaining("depends on a type parameter"),
+		]);
+	});
+
+	test("an instantiation of a generic interface walks as its concrete type", () => {
+		const { field, diagnostics } = walkDeclaration(
+			"interface Box<T> { v: T; } interface Holder { box: Box<number>; }",
+			"Holder",
+		);
+		expect(diagnostics).toEqual([]);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{
+					name: "box",
+					field: { kind: "object", fields: [{ name: "v", field: { kind: "num", width: "f64" } }] },
+				},
+			],
+		});
+	});
+});
+
+describe("TypeWalker Map and Set by declaration", () => {
+	test.each([
+		["Map", {}],
+		["ReadonlyMap", {}],
+		["Set", {}],
+		["ReadonlySet", {}],
+		["Map", { roblox: true }],
+		["Set", { roblox: true }],
+	])("a user type named %s walks as an object, not a dict (%o)", (name, options) => {
+		const { field, diagnostics } = walkDeclaration(
+			`export interface ${name} { label: string; size: number; }`,
+			name,
+			options,
+		);
+		expect(diagnostics).toEqual([]);
+		expect(field).toMatchObject({ kind: "object", fields: [{ name: "label" }, { name: "size" }] });
+	});
+});
+
 describe("TypeWalker bare EnumItem", () => {
 	test("a bare EnumItem field is rejected with a diagnostic instead of classified as an enum", () => {
 		const { field, diagnostics } = walkDeclaration("interface T { any: EnumItem; }", "T", { roblox: true });

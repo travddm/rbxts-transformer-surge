@@ -1,7 +1,13 @@
 import type ts from "typescript";
 
 import { isFixedDatatype } from "./datatypes";
-import { getDataTypeBrand, getSurgeBrand, isFromTypesPackage, isRobloxNominalType } from "./detect";
+import {
+	getDataTypeBrand,
+	getSurgeBrand,
+	isBuiltinCollection,
+	isFromTypesPackage,
+	isRobloxNominalType,
+} from "./detect";
 import type { ComponentWidths, CountSpec, Field, FieldKey, LengthWidth, NumWidth, ObjectFieldEntry } from "./field";
 import { DEFAULT_COMPONENT_WIDTH, DEFAULT_LENGTH_WIDTH, LENGTH_WIDTHS } from "./field";
 
@@ -150,6 +156,21 @@ export class TypeWalker {
 	public walk(type: ts.Type, node: ts.Node, packed: boolean): Field {
 		const ts_ = this.typescript;
 		const checker = this.checker;
+
+		// A serializer is generated for one concrete type, so a type that still
+		// depends on a type parameter has no encoding to generate. Walked on, an
+		// unconstrained parameter has no properties and would pass through as a
+		// blob, and a constrained one would walk as its constraint and drop every
+		// other property of the type it is called with.
+		if ((type.flags & (ts_.TypeFlags.InstantiableNonPrimitive | ts_.TypeFlags.Index)) !== 0) {
+			this.report(
+				`"${checker.typeToString(type)}" depends on a type parameter, so it has no single encoding -- a ` +
+					`serializer is generated at compile time for one concrete type. Call the factory where the type ` +
+					`argument is concrete.`,
+				node,
+			);
+			return { kind: "blob" };
+		}
 
 		// `DataType.*` brands are detected by alias identity (detect.ts),
 		// independent of the structural checks below, so they must be checked
@@ -610,10 +631,12 @@ export class TypeWalker {
 	// ---- map / set / record (unified `dict`) -----------------------------
 
 	private isMapType(type: ts.Type): boolean {
-		return type.symbol?.name === "Map" || type.symbol?.name === "ReadonlyMap";
+		const symbol = type.symbol;
+		return (symbol?.name === "Map" || symbol?.name === "ReadonlyMap") && isBuiltinCollection(symbol.declarations);
 	}
 	private isSetType(type: ts.Type): boolean {
-		return type.symbol?.name === "Set" || type.symbol?.name === "ReadonlySet";
+		const symbol = type.symbol;
+		return (symbol?.name === "Set" || symbol?.name === "ReadonlySet") && isBuiltinCollection(symbol.declarations);
 	}
 
 	private walkMapOrSet(type: ts.Type, node: ts.Node, packed: boolean): Field {

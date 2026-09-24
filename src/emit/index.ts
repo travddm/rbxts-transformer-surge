@@ -64,42 +64,48 @@ export class Emitter extends EmitContext {
 		const typeRef = f.createTypeReferenceNode(`${name}_Type`);
 
 		const valueParam = f.createParameterDeclaration(undefined, undefined, "value", undefined, typeRef, undefined);
-		this.beginFunction();
-		const writeBody: ts.Statement[] = [];
-		if (field.kind === "object") {
-			writeObjectInline(this, field.fields, f.createIdentifier("value"), writeBody);
-		} else {
-			writeField(this, field, f.createIdentifier("value"), writeBody);
+		if (this.sides.write) {
+			this.beginFunction();
+			const writeBody: ts.Statement[] = [];
+			if (field.kind === "object") {
+				writeObjectInline(this, field.fields, f.createIdentifier("value"), writeBody);
+			} else {
+				writeField(this, field, f.createIdentifier("value"), writeBody);
+			}
+			this.helperDecls.push(
+				f.createFunctionDeclaration(
+					undefined,
+					undefined,
+					`${name}_write`,
+					undefined,
+					[valueParam],
+					undefined,
+					f.createBlock(writeBody, true),
+				),
+			);
 		}
-		this.helperDecls.push(
-			f.createFunctionDeclaration(
-				undefined,
-				undefined,
-				`${name}_write`,
-				undefined,
-				[valueParam],
-				undefined,
-				f.createBlock(writeBody, true),
-			),
-		);
 
-		this.beginFunction();
-		const readBody: ts.Statement[] = [];
-		const resultExpr =
-			field.kind === "object" ? readObjectInline(this, field.fields, readBody) : readField(this, field, readBody);
-		readBody.push(f.createReturnStatement(resultExpr));
+		if (this.sides.read) {
+			this.beginFunction();
+			const readBody: ts.Statement[] = [];
+			const resultExpr =
+				field.kind === "object"
+					? readObjectInline(this, field.fields, readBody)
+					: readField(this, field, readBody);
+			readBody.push(f.createReturnStatement(resultExpr));
+			this.helperDecls.push(
+				f.createFunctionDeclaration(
+					undefined,
+					undefined,
+					`${name}_read`,
+					undefined,
+					[],
+					typeRef,
+					f.createBlock(readBody, true),
+				),
+			);
+		}
 		this.liveLocals = callerLocals;
-		this.helperDecls.push(
-			f.createFunctionDeclaration(
-				undefined,
-				undefined,
-				`${name}_read`,
-				undefined,
-				[],
-				typeRef,
-				f.createBlock(readBody, true),
-			),
-		);
 	}
 
 	public getHelperDecls(): ts.Statement[] {

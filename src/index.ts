@@ -189,7 +189,14 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					return node;
 				}
 
-				const emitter = new Emitter(typescript, f, walker.getHelperFields(), checks);
+				// Only the sides the factory returns are emitted, so the closure
+				// declares, and the file imports, only what those sides use.
+				const needsWrite = factoryName !== "createDeserializer";
+				const needsRead = factoryName !== "createSerializer";
+				const emitter = new Emitter(typescript, f, walker.getHelperFields(), checks, {
+					write: needsWrite,
+					read: needsRead,
+				});
 
 				const valueParam = f.createParameterDeclaration(
 					undefined,
@@ -199,7 +206,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					typeArgumentNode,
 					undefined,
 				);
-				// Both bodies are emitted before either is assembled, because
+				// The bodies are emitted before either is assembled, because
 				// whether this shape uses the blob side channel at all is only
 				// known once they are: the emitter records `pushBlob`/`nextBlob`
 				// in `usedImports` as it emits them, including from inside any
@@ -207,106 +214,119 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				// field -- which is most of them -- then pays nothing for the
 				// channel: no `beginWriteBlobs` table allocation per call, and
 				// no `finishWriteBlobs`/`beginReadBlobs` call either.
-				emitter.beginFunction();
 				const writeStatements: ts.Statement[] = [];
-				emitter.writeField(rootField, f.createIdentifier("value"), writeStatements);
+				if (needsWrite) {
+					emitter.beginFunction();
+					emitter.writeField(rootField, f.createIdentifier("value"), writeStatements);
+				}
 
-				emitter.beginFunction();
 				const readStatements: ts.Statement[] = [];
-				const resultExpr = emitter.readField(rootField, readStatements);
+				let resultExpr: ts.Expression | undefined;
+				if (needsRead) {
+					emitter.beginFunction();
+					resultExpr = emitter.readField(rootField, readStatements);
+				}
 
 				const usesBlobs = emitter.usedImports.has("pushBlob") || emitter.usedImports.has("nextBlob");
 
-				const writeBody: ts.Statement[] = [...emitter.beginWriteStatements()];
-				if (usesBlobs) {
-					writeBody.push(f.createExpressionStatement(surgeCall("beginWriteBlobs", [])));
-				}
-				writeBody.push(...writeStatements);
-				writeBody.push(
-					f.createReturnStatement(
-						f.createObjectLiteralExpression(
-							[
-								f.createPropertyAssignment("buffer", emitter.finishWriteExpression()),
-								f.createPropertyAssignment(
-									"blobs",
-									usesBlobs
-										? surgeCall("finishWriteBlobs", [])
-										: // `Serializer<T>` still declares the property, so it
-											// needs a value; an empty literal is what the channel
-											// would have returned. Asserted, because an empty array
-											// literal is `never[]`.
-											f.createAsExpression(
-												f.createArrayLiteralExpression([]),
-												f.createTypeReferenceNode("Array", [
-													f.createTypeReferenceNode("defined"),
-												]),
-											),
-								),
-							],
-							false,
+				// Built only for a side the factory returns: assembling a side
+				// registers its imports, such as `finishWrite` for the write side.
+				const buildSerialize = (): ts.ArrowFunction => {
+					const writeBody: ts.Statement[] = [...emitter.beginWriteStatements()];
+					if (usesBlobs) {
+						writeBody.push(f.createExpressionStatement(surgeCall("beginWriteBlobs", [])));
+					}
+					writeBody.push(...writeStatements);
+					writeBody.push(
+						f.createReturnStatement(
+							f.createObjectLiteralExpression(
+								[
+									f.createPropertyAssignment("buffer", emitter.finishWriteExpression()),
+									f.createPropertyAssignment(
+										"blobs",
+										usesBlobs
+											? surgeCall("finishWriteBlobs", [])
+											: // `Serializer<T>` still declares the property, so it
+												// needs a value; an empty literal is what the channel
+												// would have returned. Asserted, because an empty array
+												// literal is `never[]`.
+												f.createAsExpression(
+													f.createArrayLiteralExpression([]),
+													f.createTypeReferenceNode("Array", [
+														f.createTypeReferenceNode("defined"),
+													]),
+												),
+									),
+								],
+								false,
+							),
 						),
-					),
-				);
-				// An arrow function, not `createFunctionExpression`: roblox-ts treats a
-				// function expression assigned as an object-literal property as a method
-				// and injects an implicit `self` parameter, which would silently break
-				// every call site that uses `Serializer<T>`'s declared arrow-typed
-				// `serialize`/`deserialize` properties (those get called with `.`, not `:`).
-				const serializeFn = f.createArrowFunction(
-					undefined,
-					undefined,
-					[valueParam],
-					undefined,
-					f.createToken(typescript.SyntaxKind.EqualsGreaterThanToken),
-					f.createBlock(writeBody, true),
-				);
-
-				const inputParam = f.createParameterDeclaration(
-					undefined,
-					undefined,
-					"input",
-					undefined,
-					f.createTypeReferenceNode("buffer"),
-					undefined,
-				);
-				const inputBlobsParam = f.createParameterDeclaration(
-					undefined,
-					undefined,
-					// The parameter stays, because `Serializer<T>` declares it and a
-					// caller may pass one; an underscore keeps it from failing a
-					// consumer's `noUnusedParameters` when nothing reads it.
-					usesBlobs ? "inputBlobs" : "_inputBlobs",
-					f.createToken(typescript.SyntaxKind.QuestionToken),
-					f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
-					undefined,
-				);
-				const readBody: ts.Statement[] = [...emitter.beginReadStatements(f.createIdentifier("input"))];
-				if (usesBlobs) {
-					readBody.push(
-						f.createExpressionStatement(surgeCall("beginReadBlobs", [f.createIdentifier("inputBlobs")])),
 					);
-				}
-				readBody.push(...readStatements);
-				readBody.push(f.createReturnStatement(resultExpr));
-				const deserializeFn = f.createArrowFunction(
-					undefined,
-					undefined,
-					[inputParam, inputBlobsParam],
-					undefined,
-					f.createToken(typescript.SyntaxKind.EqualsGreaterThanToken),
-					f.createBlock(readBody, true),
-				);
+					// An arrow function, not `createFunctionExpression`: roblox-ts treats a
+					// function expression assigned as an object-literal property as a method
+					// and injects an implicit `self` parameter, which would silently break
+					// every call site that uses `Serializer<T>`'s declared arrow-typed
+					// `serialize`/`deserialize` properties (those get called with `.`, not `:`).
+					return f.createArrowFunction(
+						undefined,
+						undefined,
+						[valueParam],
+						undefined,
+						f.createToken(typescript.SyntaxKind.EqualsGreaterThanToken),
+						f.createBlock(writeBody, true),
+					);
+				};
+
+				const buildDeserialize = (): ts.ArrowFunction => {
+					const inputParam = f.createParameterDeclaration(
+						undefined,
+						undefined,
+						"input",
+						undefined,
+						f.createTypeReferenceNode("buffer"),
+						undefined,
+					);
+					const inputBlobsParam = f.createParameterDeclaration(
+						undefined,
+						undefined,
+						// The parameter stays, because `Serializer<T>` declares it and a
+						// caller may pass one; an underscore keeps it from failing a
+						// consumer's `noUnusedParameters` when nothing reads it.
+						usesBlobs ? "inputBlobs" : "_inputBlobs",
+						f.createToken(typescript.SyntaxKind.QuestionToken),
+						f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
+						undefined,
+					);
+					const readBody: ts.Statement[] = [...emitter.beginReadStatements(f.createIdentifier("input"))];
+					if (usesBlobs) {
+						readBody.push(
+							f.createExpressionStatement(
+								surgeCall("beginReadBlobs", [f.createIdentifier("inputBlobs")]),
+							),
+						);
+					}
+					readBody.push(...readStatements);
+					readBody.push(f.createReturnStatement(resultExpr));
+					return f.createArrowFunction(
+						undefined,
+						undefined,
+						[inputParam, inputBlobsParam],
+						undefined,
+						f.createToken(typescript.SyntaxKind.EqualsGreaterThanToken),
+						f.createBlock(readBody, true),
+					);
+				};
 
 				let resultValue: ts.Expression;
 				if (factoryName === "createSerializer") {
-					resultValue = serializeFn;
+					resultValue = buildSerialize();
 				} else if (factoryName === "createDeserializer") {
-					resultValue = deserializeFn;
+					resultValue = buildDeserialize();
 				} else {
 					resultValue = f.createObjectLiteralExpression(
 						[
-							f.createPropertyAssignment("serialize", serializeFn),
-							f.createPropertyAssignment("deserialize", deserializeFn),
+							f.createPropertyAssignment("serialize", buildSerialize()),
+							f.createPropertyAssignment("deserialize", buildDeserialize()),
 						],
 						false,
 					);
@@ -314,8 +334,6 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 
 				emitter.usedImports.forEach((name) => usedImports.add(name));
 
-				const needsWrite = factoryName !== "createDeserializer";
-				const needsRead = factoryName !== "createSerializer";
 				const iifeBody = [
 					...(needsWrite ? emitter.writeStateDecls() : []),
 					...(needsRead ? emitter.readStateDecls() : []),
