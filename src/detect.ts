@@ -80,9 +80,9 @@ export function isFromTypesPackage(declarations: ts.Declaration[] | undefined): 
  * and returns which `@rbxts/surge` factory it identifies, if any.
  * Detection by declaration identity, not by matching the name
  * "createSerializer" as text: confirmed via a spike
- * (docs/research/compile-time-specialization.md in the surge repo) that a re-exported/aliased import still
- * resolves correctly, while an unrelated same-named local declaration does
- * not.
+ * (docs/research/compile-time-specialization.md in the surge repo) that a
+ * re-exported/aliased import still resolves correctly, while an unrelated
+ * same-named local declaration does not.
  */
 export function resolveFactoryName(
 	typescript: typeof ts,

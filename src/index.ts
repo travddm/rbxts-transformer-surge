@@ -80,8 +80,9 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 			}
 
 			/**
-			 * The `checks` of the factory's options argument (Transformer Design
-			 * §7), or `undefined` when the call site cannot be read.
+			 * The `checks` of the factory's options argument (Transformer 3.3 in
+			 * docs/specs/transformer.md in the surge repo), or `undefined` when the
+			 * call site cannot be read.
 			 *
 			 * Only an object literal with literal property values is accepted. A
 			 * value computed at run time cannot decide what is emitted at compile

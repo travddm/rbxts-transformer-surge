@@ -604,7 +604,8 @@ function literalIndexExpr(
  * itself has no iteration protocol for a bare indexed object: the cast
  * only affects what the *type checker* sees, and a `Record`'s runtime
  * representation is already an indistinguishable plain table (behavior 2 in
- * docs/research/compile-time-specialization.md in the surge repo), so the cast is lossless either way.
+ * docs/research/compile-time-specialization.md in the surge repo), so the
+ * cast is lossless either way.
  */
 function asMapOrSet(
 	ctx: EmitContext,
@@ -804,9 +805,10 @@ function writePackedBits(
 	// `alloc()` doesn't zero a region it didn't just grow into, so a
 	// bit-at-a-time write would leave any bit past `bits.length`
 	// holding whatever an earlier `serialize()` call left there (the
-	// wire-format-determinism finding in docs/research/september-2026-review.md in the surge repo). Computing the whole byte writes every
-	// bit, including the unused high ones (implicitly zero), so the
-	// result is deterministic by construction.
+	// wire-format-determinism finding in
+	// docs/research/september-2026-review.md in the surge repo). Computing the
+	// whole byte writes every bit, including the unused high ones (implicitly
+	// zero), so the result is deterministic by construction.
 	for (let byteIndex = 0; byteIndex < byteCount; byteIndex++) {
 		const chunk = bits.slice(byteIndex * 8, byteIndex * 8 + 8);
 		const byteExpr = packedByteExpr(ctx, chunk, value);

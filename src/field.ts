@@ -114,6 +114,7 @@ export type Field =
 	| { readonly kind: "guardedUnion"; readonly variants: ReadonlyArray<Field> }
 	| { readonly kind: "blob" }
 	// A self-referential type reappearing on its own walk path -- compiles to
-	// a call into a named module-scoped helper instead of infinite inlining
-	// (Transformer Design §6).
+	// a call into a named helper in the call site's closure instead of
+	// infinite inlining (Transformer 4.2 and 5.2 in docs/specs/transformer.md
+	// in the surge repo).
 	| { readonly kind: "recursiveRef"; readonly helperName: string };

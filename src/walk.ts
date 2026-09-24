@@ -70,8 +70,9 @@ function nextHelperName(base: string): string {
 
 // `type.types`/`type.getProperties()` order reflects the checker's type-id
 // or declaration-creation order -- stable for one program, but not across
-// two programs that differ only in an unrelated file (Transformer Design §3
-// promises field order is a pure function of the type itself). Every place
+// two programs that differ only in an unrelated file (Wire format 10.1 in
+// docs/specs/wire-format.md in the surge repo promises the bytes depend only
+// on the value and the type). Every place
 // that assigns a wire-format index from declaration/creation order must sort
 // by value first.
 const LITERAL_TYPE_ORDER: Readonly<Record<string, number>> = { boolean: 0, number: 1, string: 2, undefined: 3 };
@@ -947,7 +948,8 @@ export class TypeWalker {
 			return { tagValue, fields };
 		});
 		// Sorted by tag value for the same reason object properties are
-		// sorted by name (Transformer Design §3): union constituent order
+		// sorted by name (Wire format 5.1 and 5.6 in docs/specs/wire-format.md
+		// in the surge repo): union constituent order
 		// from `type.types` reflects declaration/normalization order, not
 		// anything guaranteed stable across differently-constructed
 		// equivalent types, and the variant index is encoded in the buffer.

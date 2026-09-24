@@ -87,7 +87,7 @@ export abstract class EmitContext {
 		protected readonly helperFields: ReadonlyMap<string, Field>,
 		/**
 		 * Emit the read-side bounds checks of the `checks` factory option
-		 * (Transformer Design §7). Off, the read path is what it always was:
+		 * (Transformer 5.10 in docs/specs/transformer.md in the surge repo). Off, the read path is what it always was:
 		 * no branch per read, and a malformed payload is a raw Luau error or
 		 * worse. Per call site, so one place can hold a checked serializer for
 		 * a remote boundary and an unchecked one for its own storage.
@@ -343,7 +343,8 @@ export abstract class EmitContext {
 	 * side-effect free. A bare `object`/`recursiveRef` helper call and a
 	 * `blob`'s `nextBlob()` are not, so their `readField` cases route through
 	 * this instead of returning the call expression directly (the
-	 * read-order-side-effects finding in docs/research/september-2026-review.md in the surge repo).
+	 * read-order-side-effects finding in
+	 * docs/research/september-2026-review.md in the surge repo).
 	 */
 	public bindSideEffect(expr: ts.Expression, out: ts.Statement[]): ts.Expression {
 		const tmp = this.fresh("val");
@@ -625,9 +626,11 @@ export abstract class EmitContext {
 
 	/**
 	 * Declares the write-side `{[name]: index}` map and read-side
-	 * `EnumItem[]` for one enum field (Wire format 4.12 in docs/specs/wire-format.md in the surge repo
-	 * promises an O(1) lookup, not the linear ternary chain this replaced --
-	 * see enum-encoding.md), and returns their names, generating the
+	 * `EnumItem[]` for one enum field (an O(1) lookup, not the linear ternary
+	 * chain this replaced -- see the enum-encoding finding in
+	 * docs/research/september-2026-review.md in the surge repo; the index they
+	 * hold is Wire format 4.12 in docs/specs/wire-format.md there), and
+	 * returns their names, generating the
 	 * declarations only the first time this exact member list is seen.
 	 * Keyed by the full member list rather than `enumName`: a field using
 	 * only a subset of an enum's members (still classified with that enum's

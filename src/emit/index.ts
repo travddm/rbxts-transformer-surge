@@ -15,12 +15,13 @@ import { writeField, writeObjectInline } from "./write";
 export { importAlias } from "./constants";
 
 /**
- * Turns a `Field` IR tree into `write`/`read` statements (Transformer
- * Design §5). Every field, fixed or variable-size, is inlined in source
- * order with no runtime dispatch on kind -- the exception is a
- * self-referential field (an `object` carrying `helperName`, or a bare
- * `recursiveRef`), which compiles to a call into a named module-scoped
- * helper instead (§6); `ensureHelper` generates that helper's body lazily,
+ * Turns a `Field` IR tree into `write`/`read` statements (Transformer 5.1
+ * and 5.2 in docs/specs/transformer.md in the surge repo). Every field,
+ * fixed or variable-size, is inlined in source order with no runtime
+ * dispatch on kind -- the exception is a self-referential field (an `object`
+ * carrying `helperName`, or a bare `recursiveRef`), which compiles to a call
+ * into a named helper declared in the call site's closure instead (Transformer
+ * 4.2); `ensureHelper` generates that helper's body lazily,
  * the first time it's actually referenced.
  */
 export class Emitter extends EmitContext {
