@@ -322,7 +322,15 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 						);
 					}
 					readBody.push(...readStatements);
-					readBody.push(f.createReturnStatement(resultExpr));
+					// Asserted as the type argument, which gives the value `T` as its
+					// contextual type: inferred instead, a literal in an object
+					// literal widens to `string` or `number`, and the result is not
+					// assignable to the caller's own type. An assertion rather than a
+					// declared return type, because the read side builds some values
+					// with a wider type than `T` names but comparable to it, such as
+					// a string enum's values as plain literals, or a blob as
+					// `defined`.
+					readBody.push(f.createReturnStatement(f.createAsExpression(resultExpr!, typeArgumentNode)));
 					return f.createArrowFunction(
 						undefined,
 						undefined,

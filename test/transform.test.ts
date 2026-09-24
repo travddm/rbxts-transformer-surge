@@ -358,6 +358,29 @@ describe("transform generated code", () => {
 		expect(errors).toEqual([]);
 	});
 
+	// `deserialize` returns the type the caller declared; inferred instead, a
+	// literal property widens to its primitive and the result is not assignable
+	// to the caller's own type.
+	test.each([
+		["a literal union", `interface T { k: "a" | "b"; }`],
+		["an optional literal union", `interface T { k?: "a" | "b"; }`],
+		["one literal", `interface T { version: 1; }`],
+		["a tuple", `interface T { pair: [string, number]; }`],
+		["an array of one literal", `interface T { marks: Array<"x">; }`],
+		["a string enum", `enum Color { Red = "red", Green = "green" } interface T { color: Color; }`],
+		["a blob", `interface T { part: Instance; }`],
+	])("a deserialize result with %s is assignable to its type argument", (_name, declarations) => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { createBinarySerializer } from "@rbxts/surge";
+			${declarations}
+			const s = createBinarySerializer<T>();
+			export function read(input: buffer): T {
+				return s.deserialize(input);
+			}`,
+		);
+		expect(errors).toEqual([]);
+	});
+
 	// Checks each row of `FIXED_DATATYPES` against `@rbxts/types`: the property
 	// paths, their types, and the constructor's arguments.
 	test.each(Object.keys(FIXED_DATATYPES))("the generated code for %s passes the type check", (name) => {
