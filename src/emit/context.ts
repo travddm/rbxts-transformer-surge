@@ -61,6 +61,32 @@ export interface EmitSides {
 
 export const BOTH_SIDES: EmitSides = { write: true, read: true };
 
+/** What a call site asks the emitter for, from its factory and its options. */
+export interface EmitOptions {
+	/**
+	 * Emit the read-side bounds checks of the `checks` factory option
+	 * (Transformer 5.10 in docs/specs/transformer.md in the surge repo).
+	 * Off, the read path is what it always was: no branch per read, and a
+	 * malformed payload is a raw Luau error or worse. Per call site, so one
+	 * place can hold a checked serializer for a remote boundary and an
+	 * unchecked one for its own storage.
+	 */
+	readonly checks?: boolean;
+	/**
+	 * Emit the write-side checks of the `writeChecks` factory option
+	 * (Transformer 5.14 in docs/specs/transformer.md in the surge repo): a
+	 * value whose length or count does not fit its type raises instead of
+	 * being padded, truncated or wrapped.
+	 */
+	readonly writeChecks?: boolean;
+	/**
+	 * The sides the call site's factory returns. A recursion helper is
+	 * emitted for these sides only: the closure declares only their state,
+	 * so a helper for the other side would name state that does not exist.
+	 */
+	readonly sides?: EmitSides;
+}
+
 export abstract class EmitContext {
 	protected tempCounter = 0;
 	// Locals declared so far in the function being emitted. Locals declared
@@ -93,22 +119,17 @@ export abstract class EmitContext {
 		public readonly ts_: typeof ts,
 		public readonly factory: ts.NodeFactory,
 		protected readonly helperFields: ReadonlyMap<string, Field>,
-		/**
-		 * Emit the read-side bounds checks of the `checks` factory option
-		 * (Transformer 5.10 in docs/specs/transformer.md in the surge repo).
-		 * Off, the read path is what it always was: no branch per read, and a
-		 * malformed payload is a raw Luau error or worse. Per call site, so one
-		 * place can hold a checked serializer for a remote boundary and an
-		 * unchecked one for its own storage.
-		 */
-		public readonly checks = false,
-		/**
-		 * The sides the call site's factory returns. A recursion helper is
-		 * emitted for these sides only: the closure declares only their state,
-		 * so a helper for the other side would name state that does not exist.
-		 */
-		public readonly sides: EmitSides = BOTH_SIDES,
-	) {}
+		options: EmitOptions = {},
+	) {
+		this.checks = options.checks ?? false;
+		this.writeChecks = options.writeChecks ?? false;
+		this.sides = options.sides ?? BOTH_SIDES;
+	}
+
+	/** See {@link EmitOptions}. */
+	public readonly checks: boolean;
+	public readonly writeChecks: boolean;
+	public readonly sides: EmitSides;
 
 	public fresh(base: string): ts.Identifier {
 		this.tempCounter += 1;

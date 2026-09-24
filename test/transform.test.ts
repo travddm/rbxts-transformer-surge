@@ -529,7 +529,7 @@ describe("transform checks option", () => {
 		);
 		try {
 			expect(diagnostics).toHaveLength(1);
-			expect(diagnostics[0].messageText).toContain('one property, "checks"');
+			expect(diagnostics[0].messageText).toContain('options take "checks" and "writeChecks"');
 		} finally {
 			cleanup();
 		}
@@ -544,7 +544,55 @@ describe("transform checks option", () => {
 		);
 		try {
 			expect(diagnostics).toHaveLength(1);
-			expect(diagnostics[0].messageText).toContain("createSerializer() takes no options");
+			expect(diagnostics[0].messageText).toContain(
+				'createSerializer() has no read side, so it takes no "checks"',
+			);
+		} finally {
+			cleanup();
+		}
+	});
+});
+
+describe("transform writeChecks option", () => {
+	test("writeChecks: true emits the write-side checks, and the same shape without them does not", () => {
+		const source = `import { DataType, createBinarySerializer } from "@rbxts/surge";
+			interface P { name: DataType.Length<string, DataType.u8>; code: DataType.Length<string, 4>; }
+			const guarded = createBinarySerializer<P>({ writeChecks: true });
+			const plain = createBinarySerializer<P>();`;
+		const { printed, diagnostics, cleanup } = runTransform(source);
+		try {
+			expect(diagnostics).toHaveLength(0);
+			const [guardedHalf, plainHalf] = printed.split("const plain =");
+			expect(guardedHalf).toContain("@rbxts/surge: serialize given a value whose count does not fit");
+			expect(guardedHalf).toContain("@rbxts/surge: serialize given a value whose length is not");
+			expect(plainHalf).not.toContain("@rbxts/surge: ");
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("createSerializer takes writeChecks, and its generated code type-checks", () => {
+		expect(
+			typeErrorsOfGeneratedCode(
+				`import { DataType, createSerializer } from "@rbxts/surge";
+				interface P { list: DataType.Length<Array<number>, DataType.u16>; pair: DataType.Length<Array<string | undefined>, 2>; tags: DataType.Length<Map<string, number>, DataType.u8>; }
+				const s = createSerializer<P>({ writeChecks: true });`,
+			),
+		).toEqual([]);
+	});
+
+	// There is no write path to check, so accepting it would say otherwise.
+	test("writeChecks on createDeserializer reports a diagnostic", () => {
+		const { diagnostics, cleanup } = runTransform(
+			`import { createDeserializer } from "@rbxts/surge";
+			interface P { x: number; }
+			const d = createDeserializer<P>({ writeChecks: true });`,
+		);
+		try {
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0].messageText).toContain(
+				'createDeserializer() has no write side, so it takes no "writeChecks"',
+			);
 		} finally {
 			cleanup();
 		}

@@ -2,7 +2,7 @@
 import type ts from "typescript";
 
 import { FIXED_DATATYPES } from "../datatypes";
-import type { ComponentWidths, CountSpec, Field, ObjectFieldEntry } from "../field";
+import type { ComponentWidths, CountSpec, Field, LengthWidth, ObjectFieldEntry } from "../field";
 import { CURSOR, DEFAULT_COMPONENTS, PACKED_CFRAME_MAX_BYTES, ROTATION_BYTES, WIDTH_BYTES } from "./constants";
 import type { EmitContext, ScopedItem, Slot } from "./context";
 import type { PackedBit } from "./layout";
@@ -96,9 +96,63 @@ function writeBool(ctx: EmitContext, value: ts.Expression, out: ts.Statement[]):
 	);
 }
 
+/**
+ * The largest count each narrower width holds. A `u32` count is not checked:
+ * no Luau string, buffer or table comes near it.
+ */
+const COUNT_LIMITS: Partial<Readonly<Record<LengthWidth, number>>> = { u8: 255, u16: 65535, u24: 16777215 };
+
+/**
+ * Under `writeChecks`, raises when `count` does not fit its width. Unchecked,
+ * the width's `buffer` write wraps it, and the read side reads that many.
+ */
+function checkCountFits(ctx: EmitContext, width: LengthWidth, count: ts.Expression, out: ts.Statement[]): void {
+	const limit = COUNT_LIMITS[width];
+	if (!ctx.writeChecks || limit === undefined) {
+		return;
+	}
+	out.push(
+		ctx.throwIf(
+			ctx.factory.createBinaryExpression(count, ctx.ts_.SyntaxKind.GreaterThanToken, ctx.num(limit)),
+			`serialize given a value whose count does not fit its ${width} Length width`,
+		),
+	);
+}
+
+/**
+ * Under `writeChecks`, raises when a value in the exact form is not the length
+ * its type declares. Unchecked, a longer one is truncated and a shorter one
+ * pads or raises by element kind. `padsShort` is for an optional element, whose
+ * padding is the contract rather than a defect (Wire format 6.6 in
+ * docs/specs/wire-format.md in the surge repo), so only a longer value raises.
+ */
+function checkExactLength(
+	ctx: EmitContext,
+	actual: ts.Expression,
+	exact: number,
+	padsShort: boolean,
+	out: ts.Statement[],
+): void {
+	if (!ctx.writeChecks) {
+		return;
+	}
+	const syntax = ctx.ts_.SyntaxKind;
+	out.push(
+		ctx.throwIf(
+			ctx.factory.createBinaryExpression(
+				actual,
+				padsShort ? syntax.GreaterThanToken : syntax.ExclamationEqualsEqualsToken,
+				ctx.num(exact),
+			),
+			`serialize given a value whose length is not the exact length ${exact} its type declares`,
+		),
+	);
+}
+
 /** Reserves and writes the count a variable-length kind puts ahead of its contents. */
 function writeCount(ctx: EmitContext, length: CountSpec | undefined, count: ts.Expression, out: ts.Statement[]): void {
 	const width = lengthWidth(length);
+	checkCountFits(ctx, width, count, out);
 	const { buf, pos, statements } = ctx.destructureAlloc("alloc", WIDTH_BYTES[width]);
 	out.push(...statements);
 	out.push(...ctx.writeNumberAt(width, buf, pos, count));
@@ -116,6 +170,7 @@ function writeStr(
 	const lenExpr = f.createCallExpression(f.createPropertyAccessExpression(s, "size"), undefined, []);
 	const exact = exactCount(field.length);
 	if (exact !== undefined) {
+		checkExactLength(ctx, lenExpr, exact, false, out);
 		const { buf, pos, statements } = ctx.destructureAlloc("alloc", exact);
 		out.push(...statements);
 		// The fourth argument is a byte count, so a longer string is
@@ -140,6 +195,7 @@ function writeBuffer(
 	out.push(ctx.constStatement(source, value));
 	const exact = exactCount(field.length);
 	if (exact !== undefined) {
+		checkExactLength(ctx, ctx.bufferCall("len", [source]), exact, false, out);
 		const { buf, pos, statements } = ctx.destructureAlloc("alloc", exact);
 		out.push(...statements);
 		// `buffer.copy`'s count is what is read from the source, so a
@@ -241,6 +297,7 @@ function writeArray(
 		// elements, which raises for every element kind but an
 		// optional -- `nil` is what an absent optional writes, so
 		// there it pads instead (pinned in collections.spec.ts).
+		checkExactLength(ctx, ctx.sizeOf(arr), exact, field.element.kind === "optional", out);
 		const i = ctx.fresh("i");
 		const body: ts.Statement[] = [];
 		writeField(ctx, field.element, f.createElementAccessExpression(arr, i), body);
@@ -289,6 +346,13 @@ function writeTuple(
 	const restElement = (i: ts.Identifier): ts.Expression =>
 		ctx.castTo(f.createElementAccessExpression(tup, i), fieldToTypeNode(ctx, rest));
 	if (exact !== undefined) {
+		checkExactLength(
+			ctx,
+			f.createBinaryExpression(ctx.sizeOf(tup), ctx.ts_.SyntaxKind.MinusToken, ctx.num(fixedCount)),
+			exact,
+			rest.kind === "optional",
+			out,
+		);
 		const i = ctx.fresh("i");
 		const body: ts.Statement[] = [];
 		writeField(ctx, rest, restElement(i), body);
@@ -682,6 +746,7 @@ function writeDict(
 			),
 		);
 	}
+	checkCountFits(ctx, countWidth, count, out);
 	out.push(...ctx.writeNumberAt(countWidth, cbuf, cpos, count));
 }
 

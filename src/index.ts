@@ -80,32 +80,28 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 			}
 
 			/**
-			 * The `checks` of the factory's options argument (Transformer 3.3 in
-			 * docs/specs/transformer.md in the surge repo), or `undefined` when the
-			 * call site cannot be read.
+			 * The `checks` and `writeChecks` of the factory's options argument
+			 * (Transformer 3.3 in docs/specs/transformer.md in the surge repo), or
+			 * `undefined` when the call site cannot be read.
 			 *
 			 * Only an object literal with literal property values is accepted. A
 			 * value computed at run time cannot decide what is emitted at compile
 			 * time, and defaulting it to `false` would leave a boundary a user
 			 * meant to protect silently unchecked, so it is a diagnostic instead.
+			 * Each option belongs to one side, so a factory that has no such side
+			 * does not take it: accepting it would say it does something.
 			 */
-			function readChecksOption(factoryName: FactoryName, node: ts.CallExpression): boolean | undefined {
+			function readOptions(
+				factoryName: FactoryName,
+				node: ts.CallExpression,
+			): { checks: boolean; writeChecks: boolean } | undefined {
+				const result = { checks: false, writeChecks: false };
 				const [options, ...rest] = node.arguments;
 				if (options === undefined) {
-					return false;
+					return result;
 				}
 				if (rest.length > 0) {
 					report(node, `${factoryName}() takes one options argument at most.`);
-					return undefined;
-				}
-				// `createSerializer` has no read path, so there is nothing for
-				// `checks` to do there and accepting it would say otherwise.
-				if (factoryName === "createSerializer") {
-					report(
-						options,
-						`createSerializer() takes no options: "checks" is read-side, so it belongs on ` +
-							`createDeserializer() or createBinarySerializer().`,
-					);
 					return undefined;
 				}
 				if (!typescript.isObjectLiteralExpression(options)) {
@@ -115,28 +111,48 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					);
 					return undefined;
 				}
-				let checks = false;
+				const accepted: ReadonlyArray<"checks" | "writeChecks"> =
+					factoryName === "createSerializer"
+						? ["writeChecks"]
+						: factoryName === "createDeserializer"
+							? ["checks"]
+							: ["checks", "writeChecks"];
+				const described = accepted.map((name) => `"${name}"`).join(" and ");
 				for (const property of options.properties) {
-					if (
-						!typescript.isPropertyAssignment(property) ||
-						!typescript.isIdentifier(property.name) ||
-						property.name.text !== "checks"
-					) {
-						report(property, `${factoryName}()'s options take one property, "checks".`);
+					const name =
+						typescript.isPropertyAssignment(property) && typescript.isIdentifier(property.name)
+							? property.name.text
+							: undefined;
+					if (name !== "checks" && name !== "writeChecks") {
+						report(property, `${factoryName}()'s options take ${described}.`);
 						return undefined;
 					}
-					const value = property.initializer.kind;
-					if (value !== typescript.SyntaxKind.TrueKeyword && value !== typescript.SyntaxKind.FalseKeyword) {
+					if (!accepted.includes(name)) {
 						report(
-							property.initializer,
-							`"checks" must be written as "true" or "false" at the call site -- it decides what is ` +
+							property,
+							name === "checks"
+								? `${factoryName}() has no read side, so it takes no "checks" -- that option ` +
+										`belongs on createDeserializer() or createBinarySerializer().`
+								: `${factoryName}() has no write side, so it takes no "writeChecks" -- that option ` +
+										`belongs on createSerializer() or createBinarySerializer().`,
+						);
+						return undefined;
+					}
+					const value = (property as ts.PropertyAssignment).initializer;
+					if (
+						value.kind !== typescript.SyntaxKind.TrueKeyword &&
+						value.kind !== typescript.SyntaxKind.FalseKeyword
+					) {
+						report(
+							value,
+							`"${name}" must be written as "true" or "false" at the call site -- it decides what is ` +
 								`emitted, so it cannot be a value the game works out as it runs.`,
 						);
 						return undefined;
 					}
-					checks = value === typescript.SyntaxKind.TrueKeyword;
+					result[name] = value.kind === typescript.SyntaxKind.TrueKeyword;
 				}
-				return checks;
+				return result;
 			}
 
 			function visit(node: ts.Node): ts.Node {
@@ -144,11 +160,11 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					const factoryName = resolveFactoryName(typescript, checker, node.expression);
 					if (factoryName) {
 						if (node.typeArguments?.length === 1) {
-							const checks = readChecksOption(factoryName, node);
+							const options = readOptions(factoryName, node);
 							// Left untransformed: the diagnostic fails the build before emit.
-							return checks === undefined
+							return options === undefined
 								? node
-								: buildReplacement(factoryName, node, node.typeArguments[0], checks);
+								: buildReplacement(factoryName, node, node.typeArguments[0], options);
 						}
 						report(
 							node,
@@ -174,7 +190,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				factoryName: string,
 				node: ts.CallExpression,
 				typeArgumentNode: ts.TypeNode,
-				checks: boolean,
+				options: { checks: boolean; writeChecks: boolean },
 			): ts.Expression {
 				const f = ctx.factory;
 				const type = checker.getTypeFromTypeNode(typeArgumentNode);
@@ -193,9 +209,9 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				// declares, and the file imports, only what those sides use.
 				const needsWrite = factoryName !== "createDeserializer";
 				const needsRead = factoryName !== "createSerializer";
-				const emitter = new Emitter(typescript, f, walker.getHelperFields(), checks, {
-					write: needsWrite,
-					read: needsRead,
+				const emitter = new Emitter(typescript, f, walker.getHelperFields(), {
+					...options,
+					sides: { write: needsWrite, read: needsRead },
 				});
 
 				const valueParam = f.createParameterDeclaration(

@@ -2,12 +2,17 @@ import * as ts from "typescript";
 
 import { FIXED_DATATYPES } from "../src/datatypes";
 import { Emitter } from "../src/emit";
+import type { EmitOptions } from "../src/emit/context";
 import type { Field } from "../src/field";
 import { printNodes } from "./harness";
 
 /** Runs `field` through `Emitter.writeField`/`readField` and prints the resulting statements, for snapshotting. */
-function emitSnapshot(field: Field, helperFields: ReadonlyMap<string, Field> = new Map(), checks = false): string {
-	const emitter = new Emitter(ts, ts.factory, helperFields, checks);
+function emitSnapshot(
+	field: Field,
+	helperFields: ReadonlyMap<string, Field> = new Map(),
+	options: EmitOptions = {},
+): string {
+	const emitter = new Emitter(ts, ts.factory, helperFields, options);
 	const writeOut: ts.Statement[] = [];
 	emitter.writeField(field, ts.factory.createIdentifier("value"), writeOut);
 
@@ -677,10 +682,67 @@ describe("Emitter component widths", () => {
 	});
 });
 
+describe("Emitter write-side checks", () => {
+	/** The write half of `field` emitted with `writeChecks: true`. */
+	function checkedWrite(field: Field): string {
+		const output = emitSnapshot(field, new Map(), { writeChecks: true });
+		return output.slice(0, output.indexOf("// read"));
+	}
+
+	test("a count is checked against every width narrower than u32", () => {
+		for (const [width, limit] of [
+			["u8", 255],
+			["u16", 65535],
+			["u24", 16777215],
+		] as const) {
+			expect(checkedWrite({ kind: "array", element: { kind: "num", width: "f64" }, length: width })).toContain(
+				`> ${limit}`,
+			);
+		}
+		expect(checkedWrite({ kind: "array", element: { kind: "num", width: "f64" } })).not.toContain("@rbxts/surge: ");
+	});
+
+	test("a dict's count is checked once it is known, before it is written back", () => {
+		const output = checkedWrite({
+			kind: "dict",
+			key: { kind: "str" },
+			value: { kind: "num", width: "u8" },
+			source: "map",
+			length: "u8",
+		});
+		expect(output).toMatch(/count[0-9]+ > 255/);
+		expect(output.indexOf("> 255")).toBeGreaterThan(output.indexOf("for ("));
+	});
+
+	test("an exact length must match, and an array of optionals may only be shorter", () => {
+		expect(checkedWrite({ kind: "array", element: { kind: "num", width: "u8" }, length: 3 })).toMatch(
+			/size\(\) !== 3/,
+		);
+		expect(
+			checkedWrite({
+				kind: "array",
+				element: { kind: "optional", inner: { kind: "num", width: "u8" }, packed: false },
+				length: 3,
+			}),
+		).toMatch(/size\(\) > 3/);
+		expect(checkedWrite({ kind: "str", length: 4 })).toMatch(/size\(\) !== 4/);
+		expect(checkedWrite({ kind: "buffer", length: 4 })).toMatch(/buffer\.len\(src[0-9]+\) !== 4/);
+	});
+
+	test("writeChecks off emits no check", () => {
+		for (const field of [
+			{ kind: "array", element: { kind: "num", width: "u8" }, length: "u8" } as Field,
+			{ kind: "str", length: 4 } as Field,
+		]) {
+			expect(emitSnapshot(field)).not.toContain("@rbxts/surge: ");
+		}
+	});
+});
+
 describe("Emitter read-side checks", () => {
 	/** The read half of `field` emitted with `checks: true`. */
 	function checkedRead(field: Field): string {
-		const output = emitSnapshot(field, new Map(), true);
+		const output = emitSnapshot(field, new Map(), { checks: true });
 		return output.slice(output.indexOf("// read"));
 	}
 
@@ -777,7 +839,7 @@ describe("Emitter read-side checks", () => {
 	});
 
 	test("the input length is read once per deserialize", () => {
-		const emitter = new Emitter(ts, ts.factory, new Map(), true);
+		const emitter = new Emitter(ts, ts.factory, new Map(), { checks: true });
 		emitter.beginFunction();
 		emitter.readField({ kind: "num", width: "u8" }, []);
 		expect(printNodes(emitter.readStateDecls())).toContain("__surge_inputLength");

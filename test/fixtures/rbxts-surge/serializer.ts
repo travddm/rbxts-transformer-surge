@@ -13,15 +13,20 @@ function notConfigured(): never {
 	throw "fixture @rbxts/surge: createSerializer/createDeserializer/createBinarySerializer have no real implementation.";
 }
 
-export function createSerializer<T>(): (value: T) => { buffer: buffer; blobs: Array<defined> } {
+export interface SerializerOptions {
+	readonly checks?: boolean;
+	readonly writeChecks?: boolean;
+}
+
+export function createSerializer<T>(
+	options?: Pick<SerializerOptions, "writeChecks">,
+): (value: T) => { buffer: buffer; blobs: Array<defined> } {
 	return notConfigured();
 }
 
-export interface SerializerOptions {
-	readonly checks?: boolean;
-}
-
-export function createDeserializer<T>(options?: SerializerOptions): (input: buffer, inputBlobs?: Array<defined>) => T {
+export function createDeserializer<T>(
+	options?: Pick<SerializerOptions, "checks">,
+): (input: buffer, inputBlobs?: Array<defined>) => T {
 	return notConfigured();
 }
 
