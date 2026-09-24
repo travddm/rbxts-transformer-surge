@@ -2,38 +2,44 @@
 
 [![CI](https://github.com/travddm/rbxts-transformer-surge/actions/workflows/ci.yml/badge.svg)](https://github.com/travddm/rbxts-transformer-surge/actions/workflows/ci.yml)
 
-The TypeScript transformer for [`@rbxts/surge`](https://github.com/travddm/surge):
-detects `createSerializer<T>()`/`createDeserializer<T>()`/`createBinarySerializer<T>()`
-calls and replaces them with specialized serialize/deserialize code generated
-from `T` at compile time. No runtime code of its own — see
-[`@rbxts/surge`](https://github.com/travddm/surge) for the package its
-generated code calls into.
+The TypeScript transformer for [`@rbxts/surge`](https://github.com/travddm/surge).
+It finds each `createBinarySerializer<T>()`, `createSerializer<T>()` and
+`createDeserializer<T>()` call and replaces it with serialize and deserialize
+code generated for `T` at compile time. It has no run-time code of its own;
+the code it generates calls `@rbxts/surge`.
 
-What this transformer guarantees is specified in
-[travddm/surge's docs/specs/](https://github.com/travddm/surge/tree/master/docs/specs):
-`transformer.md` for detection, classification, emission and diagnostics, and
-`wire-format.md` for the bytes the generated code writes. Why the approach
-works is in `docs/research/compile-time-specialization.md` there, and how both
-repositories are tested is in `docs/testing.md`. All of it is kept in one
-place across both repos rather than duplicated here.
+Register it in a roblox-ts project's `tsconfig.json`:
 
-## Local development
-
-```sh
-npm install
-npm run compile   # tsc -p tsconfig.json
-npm run test      # unit tests (Jest, plain Node -- see docs/testing.md in the surge repo)
+```json
+{
+	"compilerOptions": {
+		"plugins": [{ "transform": "rbxts-transformer-surge" }]
+	}
+}
 ```
 
-`mise run ci` runs the full verification suite (lint, format, spell, compile,
-test) in the same order as the `.github/workflows/ci.yml` GitHub Actions
-workflow (which runs it automatically on every push/PR) and the opt-in
-pre-push hook (`mise run hooks:install`); VS Code users can instead run the
-`mise: ci` task (`.vscode/tasks.json`, with a Windows shell override to Git
-Bash, since mise tasks assume a POSIX shell). `lint:check`/`lint:fix` run
-both ESLint and markdownlint (`.markdownlint.json`).
+Install it beside `@rbxts/surge`, pinned to the same release; surge's
+[getting-started.md](https://github.com/travddm/surge/blob/master/docs/getting-started.md)
+has the steps.
 
-To exercise this transformer against real roblox-ts output, use the
-`tests/` project in [travddm/surge](https://github.com/travddm/surge), which
-depends on this package directly (as a sibling checkout during local
-development, or a `github:` dependency otherwise).
+## Documentation
+
+Both repositories' documentation lives in surge. What this transformer
+guarantees is
+[docs/specs/transformer.md](https://github.com/travddm/surge/blob/master/docs/specs/transformer.md),
+and the bytes its code writes are
+[docs/specs/wire-format.md](https://github.com/travddm/surge/blob/master/docs/specs/wire-format.md).
+
+## Contributing
+
+Start with [AGENTS.md](AGENTS.md). Check this repository out beside surge,
+then:
+
+```sh
+mise install
+mise run ci   # lint, format, spell, compile, and the Jest suites
+```
+
+VS Code users can run the `transformer: ci` task instead. What the generated
+code does when it runs is tested in surge, whose `mise run ci` compiles its
+tests through this transformer.
