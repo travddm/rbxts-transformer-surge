@@ -1,7 +1,7 @@
 /**
  * Fixture mirror of @rbxts/surge's src/data-type.ts, kept in sync by hand
- * (see Repository layout in surge's architecture.md for why this can't be a
- * real cross-repo dependency). Update this alongside the real file if its
+ * (see Package boundaries in surge's docs/coding-standards.md for why this
+ * can't be a real cross-repo dependency). Update this alongside the real file if its
  * brand shapes change.
  */
 // eslint-disable-next-line @typescript-eslint/no-namespace -- matches the real file's namespace, needed for the real `DataType.f32` dotted-type-reference syntax.

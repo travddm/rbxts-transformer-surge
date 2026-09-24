@@ -23,7 +23,7 @@ export interface FixtureOptions {
 	/**
 	 * Adds `test/fixtures/rbxts-surge` (a hand-maintained stand-in for the
 	 * real `@rbxts/surge`, which lives in a separate repository -- see
-	 * Repository layout in surge's architecture.md) to the program under the
+	 * Package boundaries in surge's docs/coding-standards.md) to the program under the
 	 * `@rbxts/surge` package name, so `DataType.*`, `Packed<T>`, and the
 	 * `createSerializer`/`createDeserializer`/`createBinarySerializer`
 	 * factories can appear in fixture source and be resolved by
