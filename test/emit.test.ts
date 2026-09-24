@@ -181,7 +181,8 @@ describe("Emitter per-kind write/read snapshots", () => {
 	});
 });
 
-// Regression tests for docs/future-work/read-order-side-effects.md:
+// Regression tests for the read-order-side-effects finding in
+// docs/research/september-2026-review.md in the surge repo:
 // `readObjectInline` pushes each field's read *statements* in field order but
 // evaluates each field's returned *expression* later, inside the object
 // literal -- sound only if every returned expression is side-effect free. A
@@ -243,7 +244,8 @@ describe("Emitter read-order for side-effecting fields", () => {
 	});
 });
 
-// Regression test for docs/future-work/wire-format-determinism.md: packed
+// Regression test for the wire-format-determinism finding in
+// docs/research/september-2026-review.md in the surge repo: packed
 // booleans must write a whole computed byte (zeroing any unused high bits by
 // construction) instead of one `packBit` call per bit into scratch memory
 // that may still hold a previous payload's bits.
@@ -322,7 +324,8 @@ describe("Emitter packed boolean padding", () => {
 	});
 });
 
-// Regression tests for docs/future-work/enum-encoding.md: an enum index
+// Regression tests for the enum-encoding finding in
+// docs/research/september-2026-review.md in the surge repo: an enum index
 // wider than one byte, and an O(1) lookup table instead of a linear ternary
 // chain of string/index comparisons.
 describe("Emitter enum index width and lookup table", () => {
@@ -484,7 +487,7 @@ describe("Emitter shared reservations", () => {
 });
 
 // Luau allows 200 registers per function; 100 `const [buf, pos]` pairs in one
-// scope exceed it (see Risks in docs/transformer.md in the surge repo).
+// scope exceed it (see Transformer 5.8 in docs/specs/transformer.md in the surge repo).
 describe("Emitter local-register ceiling", () => {
 	const manyFields = (count: number): Field => ({
 		kind: "object",

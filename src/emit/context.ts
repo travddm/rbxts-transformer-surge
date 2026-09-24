@@ -342,8 +342,8 @@ export abstract class EmitContext {
 	 * inside the object literal -- sound only if every such expression is
 	 * side-effect free. A bare `object`/`recursiveRef` helper call and a
 	 * `blob`'s `nextBlob()` are not, so their `readField` cases route through
-	 * this instead of returning the call expression directly (see
-	 * read-order-side-effects.md).
+	 * this instead of returning the call expression directly (the
+	 * read-order-side-effects finding in docs/research/september-2026-review.md in the surge repo).
 	 */
 	public bindSideEffect(expr: ts.Expression, out: ts.Statement[]): ts.Expression {
 		const tmp = this.fresh("val");
@@ -625,7 +625,7 @@ export abstract class EmitContext {
 
 	/**
 	 * Declares the write-side `{[name]: index}` map and read-side
-	 * `EnumItem[]` for one enum field (Type Coverage in transformer.md
+	 * `EnumItem[]` for one enum field (Wire format 4.12 in docs/specs/wire-format.md in the surge repo
 	 * promises an O(1) lookup, not the linear ternary chain this replaced --
 	 * see enum-encoding.md), and returns their names, generating the
 	 * declarations only the first time this exact member list is seen.

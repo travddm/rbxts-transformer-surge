@@ -79,8 +79,8 @@ export function isFromTypesPackage(declarations: ts.Declaration[] | undefined): 
  * following `checker.getAliasedSymbol` through any re-export/import alias --
  * and returns which `@rbxts/surge` factory it identifies, if any.
  * Detection by declaration identity, not by matching the name
- * "createSerializer" as text: confirmed (Transformer Design §1 in
- * docs/transformer.md) via a spike that a re-exported/aliased import still
+ * "createSerializer" as text: confirmed via a spike
+ * (docs/research/compile-time-specialization.md in the surge repo) that a re-exported/aliased import still
  * resolves correctly, while an unrelated same-named local declaration does
  * not.
  */

@@ -9,11 +9,13 @@ from `T` at compile time. No runtime code of its own — see
 [`@rbxts/surge`](https://github.com/travddm/surge) for the package its
 generated code calls into.
 
-The full design (why this approach works, the detection/type-walk/codegen
-design, the type coverage table, testing strategy) lives in
-[travddm/surge's docs/](https://github.com/travddm/surge/tree/master/docs),
-particularly `transformer.md` and `testing.md` — kept in one place across
-both repos rather than duplicated here.
+What this transformer guarantees is specified in
+[travddm/surge's docs/specs/](https://github.com/travddm/surge/tree/master/docs/specs):
+`transformer.md` for detection, classification, emission and diagnostics, and
+`wire-format.md` for the bytes the generated code writes. Why the approach
+works is in `docs/research/compile-time-specialization.md` there, and how both
+repositories are tested is in `docs/testing.md`. All of it is kept in one
+place across both repos rather than duplicated here.
 
 ## Local development
 

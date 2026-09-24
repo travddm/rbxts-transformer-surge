@@ -1,7 +1,7 @@
 /**
  * The internal IR every `createSerializer`/`createDeserializer`/
- * `createBinarySerializer` call site is walked into (see Transformer Design
- * §2 in docs/transformer.md), and the only input the emitter
+ * `createBinarySerializer` call site is walked into (see section 4 of
+ * docs/specs/transformer.md in the surge repo), and the only input the emitter
  * (`emit/`) consumes. Producing this from a `ts.Type` is `walk.ts`'s job; turning it
  * into statements is the emitter's.
  */
@@ -81,8 +81,8 @@ export type Field =
 	  }
 	// `value` is `undefined` for a Set: only the key is written, and the read
 	// side reconstructs the table by setting each read key to `true`. `source`
-	// doesn't affect the byte encoding (identical for all three -- see Type
-	// Coverage in transformer.md) but does affect what the read side casts
+	// doesn't affect the byte encoding (identical for all three -- Wire format
+	// 5.4 in docs/specs/wire-format.md in the surge repo) but does affect what the read side casts
 	// the reconstructed table's TypeScript type to, so a `Record` comes back
 	// as a `Record` (plain bracket access) rather than a non-functional `Map`.
 	| {

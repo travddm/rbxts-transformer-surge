@@ -229,10 +229,11 @@ describe("TypeWalker classification with fixture packages", () => {
 		expect(field).toMatchObject({ fields: [{ name: "item", field: { kind: "object" } }] });
 	});
 
-	// `Instance` is documented as the opaque blob-passthrough channel (Type
-	// Coverage in transformer.md); it's detected by `@rbxts/types`' own
+	// `Instance` is documented as the opaque blob-passthrough channel (section 4
+	// of docs/specs/transformer.md in the surge repo); it's detected by `@rbxts/types`' own
 	// `_nominal_Instance` brand property, not by walking its (hundreds of)
-	// declared properties -- see docs/future-work/blob-classification.md.
+	// declared properties -- see the blob-classification finding in
+	// docs/research/september-2026-review.md in the surge repo.
 	test("Instance falls back to the blob passthrough channel instead of walking its declared properties", () => {
 		const { field } = walkDeclaration("interface T { i: Instance; }", "T", { roblox: true });
 		expect(field).toEqual({
@@ -341,7 +342,8 @@ describe("TypeWalker classification with fixture packages", () => {
 	});
 });
 
-// Regression tests for docs/future-work/walk-type-identity.md: `resolved`,
+// Regression tests for the walk-type-identity finding in
+// docs/research/september-2026-review.md in the surge repo: `resolved`,
 // `inProgress`, and `helperNames` are keyed by `ts.Type` identity, not by
 // the shared declaration symbol, so two instantiations of one generic
 // classify independently instead of colliding.
@@ -413,7 +415,8 @@ describe("TypeWalker generic instantiation identity", () => {
 	});
 });
 
-// Regression tests for docs/future-work/recursive-union-types.md: recursion
+// Regression tests for the recursive-union-types finding in
+// docs/research/september-2026-review.md in the surge repo: recursion
 // re-entering through a union (a discriminated union, not only a named
 // interface) must compile to a helper instead of recursing the walker
 // itself forever (these hung with "Maximum call stack size exceeded" before
@@ -484,7 +487,8 @@ describe("TypeWalker recursion through unions", () => {
 	});
 });
 
-// Regression tests for docs/future-work/wire-format-determinism.md: the
+// Regression tests for the wire-format-determinism finding in
+// docs/research/september-2026-review.md in the surge repo: the
 // checker assigns literal types and enumerates union constituents in
 // type-id/creation order, which depends on what else was declared earlier
 // in the program -- these fixtures reproduce that by declaring the exact
@@ -532,7 +536,8 @@ describe("TypeWalker wire-format determinism", () => {
 	});
 });
 
-// Regression test for docs/future-work/enum-encoding.md: a bare `EnumItem`
+// Regression test for the enum-encoding finding in
+// docs/research/september-2026-review.md in the surge repo: a bare `EnumItem`
 // field (not a specific `Enum.*` type) has no member list to index into and
 // must be rejected, not silently classified into an unusable read.
 describe("TypeWalker bare EnumItem", () => {
@@ -545,7 +550,8 @@ describe("TypeWalker bare EnumItem", () => {
 	});
 });
 
-// Regression tests for docs/future-work/blob-classification.md.
+// Regression tests for the blob-classification finding in
+// docs/research/september-2026-review.md in the surge repo.
 describe("TypeWalker blob classification", () => {
 	// The scalar-kind table matched by bare symbol name before this fix, so a
 	// user's own unrelated same-named type would misclassify as the Roblox

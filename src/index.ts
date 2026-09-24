@@ -10,7 +10,7 @@ import { TypeWalker } from "./walk";
  * loads this as a `type: "program"` (the default) plugin and calls it with
  * `(program, config, { ts })` -- confirmed via
  * `createTransformerList.js`/`getTransformerFromFactory` in roblox-ts's own
- * source, matching docs/transformer.md's "Why this is portable" section.
+ * source, matching docs/research/compile-time-specialization.md in the surge repo.
  * Relying on the injected `ts` here (rather than importing our own
  * `typescript` dependency) is what keeps this transformer from being a
  * second source of TypeScript-version drift against whatever roblox-ts
