@@ -156,6 +156,20 @@ function readEnum(ctx: EmitContext, field: Extract<Field, { kind: "enum" }>, out
 	out.push(...statements);
 	const idx = ctx.fresh("idx");
 	out.push(ctx.constStatement(idx, ctx.bufferCall(bytes === 1 ? "readu8" : "readu16", [buf, pos])));
+	if (ctx.checks) {
+		// Past the items, the lookup would return `undefined` where the type
+		// says an `EnumItem`, so the index is bounded like a count.
+		out.push(
+			ctx.throwIf(
+				ctx.factory.createBinaryExpression(
+					idx,
+					ctx.ts_.SyntaxKind.GreaterThanEqualsToken,
+					ctx.num(field.members.length),
+				),
+				"deserialize read an enum index past its items",
+			),
+		);
+	}
 	return enumFromIndexExpr(ctx, field.enumName, field.members, idx);
 }
 
@@ -396,6 +410,9 @@ function readCFrame(ctx: EmitContext, position: ComponentWidths | undefined, out
 function readPackedCFrame(ctx: EmitContext, out: ts.Statement[]): ts.Expression {
 	const f = ctx.factory;
 	ctx.usesReadBytes = true;
+	if (ctx.checks) {
+		out.push(...packedCFrameChecks(ctx));
+	}
 	const value = ctx.fresh("val");
 	const used = ctx.fresh("size");
 	out.push(
@@ -427,6 +444,79 @@ function readPackedCFrame(ctx: EmitContext, out: ts.Statement[]): ts.Expression 
 		),
 	);
 	return value;
+}
+
+// The header of Wire format 8.6: bits 0-4 the rotation code, 0 to 23 for an
+// axis-aligned rotation and 31 for any other; bits 5-6 the position code, 0
+// when the position follows. Each part the header does not give is 3 f32s.
+const PACKED_GENERAL_ROTATION = 31;
+const PACKED_LAST_ALIGNED_ROTATION = 23;
+const PACKED_PART_BYTES = 12;
+
+/**
+ * The bound on a packed `CFrame` under `checks`. Its size is in its own
+ * header, so the header byte is bounded first, and then the bytes it says
+ * follow, before the runtime reads any of them. A rotation code that names no
+ * rotation is rejected here too: the runtime would otherwise raise an error
+ * that does not carry the prefix.
+ */
+function packedCFrameChecks(ctx: EmitContext): ts.Statement[] {
+	const f = ctx.factory;
+	const syntax = ctx.ts_.SyntaxKind;
+	const cursor = f.createIdentifier(READ_CURSOR);
+	const length = f.createIdentifier(READ_LENGTH);
+	const pastEnd = (size: ts.Expression) =>
+		ctx.throwIf(
+			f.createBinaryExpression(
+				f.createBinaryExpression(cursor, syntax.PlusToken, size),
+				syntax.GreaterThanToken,
+				length,
+			),
+			"deserialize read past the end of the input buffer",
+		);
+	const header = ctx.fresh("header");
+	const rotation = ctx.fresh("rotation");
+	const size = ctx.fresh("size");
+	const extra = (condition: ts.Expression) =>
+		f.createParenthesizedExpression(
+			f.createConditionalExpression(condition, undefined, ctx.num(PACKED_PART_BYTES), undefined, ctx.num(0)),
+		);
+	return [
+		pastEnd(ctx.num(1)),
+		ctx.constStatement(header, ctx.bufferCall("readu8", [f.createIdentifier(READ_BUFFER), cursor])),
+		ctx.constStatement(rotation, f.createBinaryExpression(header, syntax.PercentToken, ctx.num(32))),
+		ctx.throwIf(
+			f.createBinaryExpression(
+				f.createBinaryExpression(rotation, syntax.GreaterThanToken, ctx.num(PACKED_LAST_ALIGNED_ROTATION)),
+				syntax.AmpersandAmpersandToken,
+				f.createBinaryExpression(
+					rotation,
+					syntax.ExclamationEqualsEqualsToken,
+					ctx.num(PACKED_GENERAL_ROTATION),
+				),
+			),
+			"deserialize read a packed CFrame rotation code that names no rotation",
+		),
+		ctx.constStatement(
+			size,
+			f.createBinaryExpression(
+				f.createBinaryExpression(
+					ctx.num(1),
+					syntax.PlusToken,
+					extra(
+						f.createBinaryExpression(
+							rotation,
+							syntax.EqualsEqualsEqualsToken,
+							ctx.num(PACKED_GENERAL_ROTATION),
+						),
+					),
+				),
+				syntax.PlusToken,
+				extra(f.createBinaryExpression(header, syntax.LessThanToken, ctx.num(32))),
+			),
+		),
+		pastEnd(size),
+	];
 }
 
 function readSequence(ctx: EmitContext, kind: "ColorSequence" | "NumberSequence", out: ts.Statement[]): ts.Expression {

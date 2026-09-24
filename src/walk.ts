@@ -210,6 +210,18 @@ export class TypeWalker {
 			return { kind: "optional", inner: { kind: "blob" }, packed };
 		}
 
+		// `undefined` and `void` hold one value each, so both sides know it and
+		// nothing is written. Walked on, neither has properties, so each fell to
+		// the blob fallback, where an `undefined` pushes no blob and moves every
+		// later blob one position early.
+		if ((type.flags & (ts_.TypeFlags.Undefined | ts_.TypeFlags.Void)) !== 0) {
+			return { kind: "literalConst", value: undefined };
+		}
+		if ((type.flags & ts_.TypeFlags.Never) !== 0) {
+			this.report(`"never" has no value to encode -- a property that can never be set can be removed.`, node);
+			return { kind: "blob" };
+		}
+
 		if ((type.flags & ts_.TypeFlags.BooleanLiteral) !== 0) {
 			const value = checker.typeToString(type) === "true";
 			return { kind: "literalConst", value };
@@ -599,7 +611,13 @@ export class TypeWalker {
 
 	// ---- arrays / tuples --------------------------------------------------
 
+	// Guarded like a union, so a cycle through arrays or tuples alone, such as
+	// `type Nest = Nest[]`, compiles to a helper instead of recursing forever.
 	private walkArrayOrTuple(type: ts.Type, node: ts.Node, packed: boolean): Field {
+		return this.walkGuarded(type, packed, () => this.walkArrayOrTupleBody(type, node, packed));
+	}
+
+	private walkArrayOrTupleBody(type: ts.Type, node: ts.Node, packed: boolean): Field {
 		const checker = this.checker;
 		if (checker.isTupleType(type)) {
 			const typeArgs = checker.getTypeArguments(type as ts.TypeReference);
@@ -757,6 +775,16 @@ export class TypeWalker {
 	 * helper's body from).
 	 */
 	private walkUnion(type: ts.UnionType, node: ts.Node, packed: boolean): Field {
+		return this.walkGuarded(type, packed, () => this.walkUnionBody(type, node, packed));
+	}
+
+	/**
+	 * The recursion guard of {@link walkUnion}, for a type whose `Field` has no
+	 * `helperName` slot: a union, an array or a tuple. A type that reappears on
+	 * its own walk path becomes a `recursiveRef`, and once a helper exists every
+	 * reference to the type, the outermost included, is one.
+	 */
+	private walkGuarded(type: ts.Type, packed: boolean, walkBody: () => Field): Field {
 		const cached = this.getResolved(type, packed);
 		if (cached !== undefined) {
 			const helperName = this.getHelperName(type, packed);
@@ -766,7 +794,7 @@ export class TypeWalker {
 			return { kind: "recursiveRef", helperName: this.helperNameFor(type, packed) };
 		}
 		this.inProgress.add(type);
-		const field = this.walkUnionBody(type, node, packed);
+		const field = walkBody();
 		this.inProgress.delete(type);
 		this.setResolved(type, packed, field);
 		const helperName = this.getHelperName(type, packed);
@@ -831,7 +859,11 @@ export class TypeWalker {
 	}
 
 	private classifyUnion(constituents: ts.Type[], node: ts.Node, packed: boolean): Field {
-		const objectLike = constituents.filter((t) => t.getProperties().length > 0);
+		// A tuple's `length` is a literal, but a tuple is not an object with a
+		// tag: walked as one, its inherited `Array` methods each fail the walk.
+		const objectLike = constituents.filter(
+			(t) => t.getProperties().length > 0 && !this.checker.isTupleType(t) && !this.checker.isArrayType(t),
+		);
 		if (objectLike.length === constituents.length) {
 			const discriminant = this.findDiscriminant(objectLike, node);
 			if (discriminant) {

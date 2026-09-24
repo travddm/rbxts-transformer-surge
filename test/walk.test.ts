@@ -487,6 +487,54 @@ describe("TypeWalker recursion through unions", () => {
 	});
 });
 
+describe("TypeWalker recursion through arrays and tuples", () => {
+	test.each([
+		["an array of itself", "type Nest = Nest[];", "array"],
+		["a tuple holding an array of itself", "type Nest = [number, Nest[]];", "tuple"],
+	])("%s resolves to a helper reference, not a stack overflow", (_name, source, kind) => {
+		const { type, node, walker, cleanup } = loadDeclaration(source, "Nest");
+		try {
+			const field = walker.walk(type, node, false);
+			expect(walker.diagnostics).toEqual([]);
+			expect(field.kind).toBe("recursiveRef");
+			if (field.kind !== "recursiveRef") throw new Error("unreachable");
+			expect(walker.getHelperFields().get(field.helperName)?.kind).toBe(kind);
+		} finally {
+			cleanup();
+		}
+	});
+});
+
+describe("TypeWalker undefined, void and never", () => {
+	test("undefined and void walk as a constant that writes nothing", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { a: undefined; b: void; }", "T");
+		expect(diagnostics).toEqual([]);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{ name: "a", field: { kind: "literalConst", value: undefined } },
+				{ name: "b", field: { kind: "literalConst", value: undefined } },
+			],
+		});
+	});
+
+	test("never is a diagnostic", () => {
+		const { diagnostics } = walkDeclaration("interface T { a: never; b: number; }", "T");
+		expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+			expect.stringContaining('"never" has no value to encode'),
+		]);
+	});
+});
+
+describe("TypeWalker unions of tuples", () => {
+	test("a union of tuples is two table-shaped variants, not a tagged union on length", () => {
+		const { diagnostics } = walkDeclaration("type T = [number] | [number, number];", "T");
+		expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+			expect.stringContaining("two or more table-shaped variants"),
+		]);
+	});
+});
+
 // Regression tests for the wire-format-determinism finding in
 // docs/research/september-2026-review.md in the surge repo: the
 // checker assigns literal types and enumerates union constituents in

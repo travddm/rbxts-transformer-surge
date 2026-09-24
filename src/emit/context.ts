@@ -698,8 +698,9 @@ export abstract class EmitContext {
 		return entry;
 	}
 
-	public literalValueExpr(value: string | number | boolean): ts.Expression {
+	public literalValueExpr(value: string | number | boolean | undefined): ts.Expression {
 		const f = this.factory;
+		if (value === undefined) return f.createIdentifier("undefined");
 		if (typeof value === "string") return f.createStringLiteral(value);
 		if (typeof value === "number") return this.num(value);
 		return value ? f.createTrue() : f.createFalse();

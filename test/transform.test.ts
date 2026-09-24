@@ -285,6 +285,9 @@ describe("transform generated code", () => {
 			`interface Tree { byName: Record<string, Tree>; counts: { [id: number]: number }; } type T = Tree;`,
 		],
 		["a required property of type unknown", `interface T { anything: unknown; }`],
+		["an array of itself", `type T = T[];`],
+		["a tuple holding an array of itself", `type T = [number, T[]];`],
+		["properties of type undefined and void", `interface T { a: undefined; b: void; c: number; }`],
 		["an optional property of type unknown", `interface T { anything?: unknown; list: unknown[]; }`],
 	])("the generated code for %s passes the type check", (_name, declarations) => {
 		const errors = typeErrorsOfGeneratedCode(

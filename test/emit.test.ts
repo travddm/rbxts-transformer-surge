@@ -701,6 +701,24 @@ describe("Emitter read-side checks", () => {
 		}
 	});
 
+	// Its size is in its header, so the header is bounded before it is read,
+	// and the bytes it says follow before the runtime reads them.
+	test("a packed CFrame is bounded in two steps, and its rotation code is checked", () => {
+		const output = checkedRead({ kind: "cframe", packed: true });
+		expect(output).toMatch(/__surge_readCursor \+ 1 > __surge_inputLength/);
+		expect(output).toMatch(/rotation[0-9]+ > 23 && rotation[0-9]+ !== 31/);
+		expect(output).toMatch(/__surge_readCursor \+ size[0-9]+ > __surge_inputLength/);
+		expect(output.indexOf("> __surge_inputLength")).toBeLessThan(output.indexOf("__surge_readPackedCFrame("));
+		expect(emitSnapshot({ kind: "cframe", packed: true })).not.toContain("@rbxts/surge: ");
+	});
+
+	test("an enum index is bounded by the number of items", () => {
+		const members = ["A", "B", "C"];
+		const output = checkedRead({ kind: "enum", enumName: "Letter", members });
+		expect(output).toMatch(/idx[0-9]+ >= 3/);
+		expect(emitSnapshot({ kind: "enum", enumName: "Letter", members })).not.toContain("@rbxts/surge: ");
+	});
+
 	test("a count is bounded by what the rest of the input could hold", () => {
 		const output = checkedRead({ kind: "array", element: { kind: "num", width: "f64" } });
 		expect(output).toMatchSnapshot();

@@ -104,7 +104,7 @@ export type Field =
 			readonly length?: LengthWidth;
 	  }
 	| { readonly kind: "optional"; readonly inner: Field; readonly packed: boolean }
-	| { readonly kind: "literalConst"; readonly value: string | number | boolean }
+	| { readonly kind: "literalConst"; readonly value: string | number | boolean | undefined }
 	| { readonly kind: "literal"; readonly values: ReadonlyArray<string | number | boolean> }
 	| {
 			readonly kind: "taggedUnion";
