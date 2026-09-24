@@ -77,8 +77,10 @@ export function isFromTypesPackage(declarations: ts.Declaration[] | undefined): 
 /**
  * Whether a `Map`, `ReadonlyMap`, `Set` or `ReadonlySet` is the built-in one:
  * declared by `@rbxts/compiler-types` in a roblox-ts project, or by
- * TypeScript's own lib in a program compiled without it. A user type of the
- * same name is neither.
+ * TypeScript's own lib in a program compiled without it. Only the first occurs
+ * in a real build; the second is what this repository's own tests compile
+ * against unless they ask for the Roblox types. A user type of the same name
+ * is neither.
  */
 export function isBuiltinCollection(declarations: ts.Declaration[] | undefined): boolean {
 	return isFromPackage(declarations, "@rbxts/compiler-types") || isFromPackage(declarations, "typescript");

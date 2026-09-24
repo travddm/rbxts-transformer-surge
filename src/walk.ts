@@ -161,7 +161,9 @@ export class TypeWalker {
 		// depends on a type parameter has no encoding to generate. Walked on, an
 		// unconstrained parameter has no properties and would pass through as a
 		// blob, and a constrained one would walk as its constraint and drop every
-		// other property of the type it is called with.
+		// other property of the type it is called with. A polymorphic `this`
+		// never reaches this check: the checker instantiates it as the type whose
+		// properties the walk is reading, so it walks as a recursion.
 		if ((type.flags & (ts_.TypeFlags.InstantiableNonPrimitive | ts_.TypeFlags.Index)) !== 0) {
 			this.report(
 				`"${checker.typeToString(type)}" depends on a type parameter, so it has no single encoding -- a ` +

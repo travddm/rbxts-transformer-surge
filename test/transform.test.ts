@@ -295,6 +295,25 @@ describe("transform generated code", () => {
 		expect(errors).toEqual([]);
 	});
 
+	// A polymorphic `this` is instantiated by the checker, so it walks as a
+	// recursion rather than failing the type-parameter check.
+	test.each([
+		["an interface", `interface T { v: number; next?: this; }`],
+		["a class", `class T { v = 1; next?: this; }`],
+	])("a polymorphic this in %s compiles to a recursion helper", (_name, declarations) => {
+		const { printed, diagnostics, cleanup } = runTransform(
+			`import { createBinarySerializer } from "@rbxts/surge";
+			${declarations}
+			export const s = createBinarySerializer<T>();`,
+		);
+		try {
+			expect(diagnostics).toHaveLength(0);
+			expect(printed).toMatch(/function surge_T_\d+_write/);
+		} finally {
+			cleanup();
+		}
+	});
+
 	// A factory that returns one function declares only that side's state, so a
 	// recursion helper emitted for the other side would name state that does
 	// not exist.
