@@ -358,6 +358,17 @@ describe("Emitter enum index width and lookup table", () => {
 	});
 });
 
+describe("Emitter literal index width", () => {
+	test("a literal with more than 256 values uses a 2-byte index", () => {
+		const values = Array.from({ length: 257 }, (_, i) => i);
+		const output = emitSnapshot({ kind: "literal", values });
+		expect(output).toContain("buffer.writeu16(");
+		expect(output).toContain("buffer.readu16(");
+		expect(reservations(output, "write")).toEqual([2]);
+		expect(emitSnapshot({ kind: "literal", values: values.slice(0, 256) })).toContain("buffer.writeu8(");
+	});
+});
+
 describe("Emitter property names that are not identifiers", () => {
 	test("a non-identifier name uses element access and a quoted key; a numeric key stays a number", () => {
 		const output = emitSnapshot({

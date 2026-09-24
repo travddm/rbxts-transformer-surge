@@ -79,7 +79,24 @@ describe("TypeWalker classification", () => {
 	test("a union with two table-shaped variants and no shared discriminant is rejected with a diagnostic", () => {
 		const { field, diagnostics } = walkDeclaration(`type T = { a: number } | { b: number };`, "T");
 		expect(field).toEqual({ kind: "blob" });
-		expect(diagnostics.length).toBeGreaterThan(0);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain("two or more table-shaped variants");
+	});
+
+	// A TypeScript enum's type is the union of its members' literal types.
+	test("a TypeScript enum walks as a literal union of its values", () => {
+		const { field, diagnostics } = walkDeclaration(
+			`enum Suit { Clubs, Hearts } enum Color { Red = "red", Green = "green" } interface T { suit: Suit; color: Color; }`,
+			"T",
+		);
+		expect(diagnostics).toEqual([]);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{ name: "color", field: { kind: "literal", values: ["green", "red"] } },
+				{ name: "suit", field: { kind: "literal", values: [0, 1] } },
+			],
+		});
 	});
 
 	// Regression test for a second bug this task's advisor review caught,
@@ -339,6 +356,19 @@ describe("TypeWalker classification with fixture packages", () => {
 		expect(field).toEqual({
 			kind: "object",
 			fields: [{ name: "u", field: { kind: "blob" } }],
+		});
+	});
+
+	test("an optional width brand is an optional of that width", () => {
+		const { field, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge"; interface T { a?: DataType.u8; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toEqual([]);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [{ name: "a", field: { kind: "optional", inner: { kind: "num", width: "u8" }, packed: false } }],
 		});
 	});
 });
@@ -642,9 +672,47 @@ describe("TypeWalker Record keys", () => {
 			],
 		});
 	});
+
+	test("a Record keyed by number walks as a dict with an f64 key", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { r: Record<number, string>; }", "T");
+		expect(diagnostics).toEqual([]);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{
+					name: "r",
+					field: {
+						kind: "dict",
+						key: { kind: "num", width: "f64" },
+						value: { kind: "str" },
+						source: "record",
+					},
+				},
+			],
+		});
+	});
 });
 
 describe("TypeWalker Map and Set by declaration", () => {
+	test.each([{}, { roblox: true }])("the built-in ReadonlyMap and ReadonlySet walk as a dict (%o)", (options) => {
+		const { field, diagnostics } = walkDeclaration(
+			"interface T { m: ReadonlyMap<string, number>; s: ReadonlySet<string>; }",
+			"T",
+			options,
+		);
+		expect(diagnostics).toEqual([]);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{
+					name: "m",
+					field: { kind: "dict", key: { kind: "str" }, value: { kind: "num", width: "f64" }, source: "map" },
+				},
+				{ name: "s", field: { kind: "dict", key: { kind: "str" }, value: undefined, source: "set" } },
+			],
+		});
+	});
+
 	test.each([
 		["Map", {}],
 		["ReadonlyMap", {}],
@@ -673,7 +741,19 @@ describe("TypeWalker bare EnumItem", () => {
 		expect(field.kind).toBe("object");
 		if (field.kind !== "object") throw new Error("unreachable");
 		expect(field.fields.find((entry) => entry.name === "any")?.field).toEqual({ kind: "blob" });
-		expect(diagnostics.length).toBeGreaterThan(0);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain('a bare "EnumItem" field isn\'t supported');
+		expect(diagnostics[0].node.getText()).toBe("any: EnumItem;");
+	});
+
+	// The rejected constituent walks to a `blob`, which the union's own checks
+	// would report again as an opaque variant.
+	test("a union with a bare EnumItem reports the EnumItem once, and nothing about the union", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { v: EnumItem | string; }", "T", { roblox: true });
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain('a bare "EnumItem" field');
+		if (field.kind !== "object") throw new Error("expected an object");
+		expect(field.fields[0].field).toEqual({ kind: "blob" });
 	});
 });
 
@@ -692,13 +772,30 @@ describe("TypeWalker blob classification", () => {
 		});
 	});
 
+	/** Asserts one diagnostic, with `message` in its text, at the declaration `declaration`. */
+	function expectOneDiagnostic(
+		diagnostics: ReadonlyArray<{ message: string; node: { getText(): string } }>,
+		message: string,
+		declaration: string,
+	): void {
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain(message);
+		expect(diagnostics[0].node.getText()).toBe(declaration);
+	}
+
 	test("a function-typed field is rejected with a diagnostic instead of a silent blob", () => {
 		const { field, diagnostics } = walkDeclaration("interface T { f: () => void; }", "T");
 		expect(field).toEqual({
 			kind: "object",
 			fields: [{ name: "f", field: { kind: "blob" } }],
 		});
-		expect(diagnostics.length).toBeGreaterThan(0);
+		expectOneDiagnostic(diagnostics, "a function type can't be encoded", "f: () => void;");
+	});
+
+	test("an empty interface other than defined classifies as a blob with no diagnostic", () => {
+		const { field, diagnostics } = walkDeclaration("interface Empty {} interface T { e: Empty; }", "T");
+		expect(diagnostics).toEqual([]);
+		expect(field).toEqual({ kind: "object", fields: [{ name: "e", field: { kind: "blob" } }] });
 	});
 
 	// Regression test for the `in` operator lookup:
@@ -714,7 +811,13 @@ describe("TypeWalker blob classification", () => {
 			kind: "object",
 			fields: [{ name: "toString", field: { kind: "blob" } }],
 		});
-		expect(diagnostics.length).toBeGreaterThan(0);
+		expectOneDiagnostic(diagnostics, "a function type can't be encoded", "toString(): string;");
+	});
+
+	test("a property named toString that is not a method walks as its own type", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { toString: string; }", "T");
+		expect(diagnostics).toEqual([]);
+		expect(field).toEqual({ kind: "object", fields: [{ name: "toString", field: { kind: "str" } }] });
 	});
 
 	test("a symbol-typed field is rejected with a diagnostic instead of walking Symbol's members", () => {
@@ -723,7 +826,7 @@ describe("TypeWalker blob classification", () => {
 			kind: "object",
 			fields: [{ name: "s", field: { kind: "blob" } }],
 		});
-		expect(diagnostics.length).toBeGreaterThan(0);
+		expectOneDiagnostic(diagnostics, `"symbol" can't be structurally encoded`, "s: symbol;");
 	});
 
 	test("a bigint-typed field is rejected with a diagnostic instead of a silent blob", () => {
@@ -732,7 +835,7 @@ describe("TypeWalker blob classification", () => {
 			kind: "object",
 			fields: [{ name: "b", field: { kind: "blob" } }],
 		});
-		expect(diagnostics.length).toBeGreaterThan(0);
+		expectOneDiagnostic(diagnostics, `"bigint" can't be structurally encoded`, "b: bigint;");
 	});
 
 	test("a null-typed field is rejected with a diagnostic instead of a silent blob", () => {
@@ -741,7 +844,7 @@ describe("TypeWalker blob classification", () => {
 			kind: "object",
 			fields: [{ name: "n", field: { kind: "blob" } }],
 		});
-		expect(diagnostics.length).toBeGreaterThan(0);
+		expectOneDiagnostic(diagnostics, `"null" can't be structurally encoded`, "n: null;");
 	});
 
 	test("a template literal type is rejected with a diagnostic instead of walking String's members", () => {
@@ -750,7 +853,11 @@ describe("TypeWalker blob classification", () => {
 			kind: "object",
 			fields: [{ name: "id", field: { kind: "blob" } }],
 		});
-		expect(diagnostics.length).toBeGreaterThan(0);
+		expectOneDiagnostic(
+			diagnostics,
+			"a template literal type can't be structurally encoded",
+			"id: `id-${number}`;",
+		);
 	});
 
 	test("a type with both declared properties and an index signature is rejected with a diagnostic", () => {
@@ -759,7 +866,11 @@ describe("TypeWalker blob classification", () => {
 			kind: "object",
 			fields: [{ name: "m", field: { kind: "blob" } }],
 		});
-		expect(diagnostics.length).toBeGreaterThan(0);
+		expectOneDiagnostic(
+			diagnostics,
+			"a type with both declared properties and an index signature isn't supported",
+			"m: { a: number; [k: string]: number };",
+		);
 	});
 });
 

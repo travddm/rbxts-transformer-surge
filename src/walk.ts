@@ -1042,7 +1042,13 @@ export class TypeWalker {
 			}
 		}
 
+		const reported = this.diagnostics.length;
 		const fields = constituents.map((t) => this.walk(t, node, packed));
+		// A rejected constituent has reported why and walked to a `blob`, which
+		// the checks below would report a second time as an opaque variant.
+		if (this.diagnostics.length > reported) {
+			return { kind: "blob" };
+		}
 
 		// Every constituent routed to the opaque passthrough channel (for
 		// example a union of `Instance` subclasses, now that they're
