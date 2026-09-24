@@ -150,10 +150,3 @@ export function fieldToTypeNode(ctx: EmitContext, field: Field): ts.TypeNode {
 			return kw(ctx.ts_.SyntaxKind.UnknownKeyword);
 	}
 }
-
-export function asMapOrSetTypeNode(ctx: EmitContext, field: Extract<Field, { kind: "dict" }>): ts.TypeNode {
-	const f = ctx.factory;
-	return field.value
-		? f.createTypeReferenceNode("Map", [fieldToTypeNode(ctx, field.key), fieldToTypeNode(ctx, field.value)])
-		: f.createTypeReferenceNode("Set", [fieldToTypeNode(ctx, field.key)]);
-}

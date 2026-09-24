@@ -24,7 +24,7 @@ import {
 	packedBits,
 	tagKeyOf,
 } from "./layout";
-import { asMapOrSetTypeNode, fieldToTypeNode, objectShapeTypeNode } from "./types";
+import { fieldToTypeNode, objectShapeTypeNode } from "./types";
 
 export function readField(ctx: EmitContext, field: Field, out: ts.Statement[]): ts.Expression {
 	switch (field.kind) {
@@ -623,56 +623,39 @@ function readDict(ctx: EmitContext, field: Extract<Field, { kind: "dict" }>, out
 	out.push(ctx.constStatement(count, ctx.readNumberAt(countWidth, buf, pos)));
 	checkEntryCount(ctx, count, field, out);
 	const result = ctx.fresh("result");
-	// Reconstructed as a `Record` regardless of `field.source`: that's the
-	// only one of the three TypeScript shapes whose plain `result[key] =`
-	// bracket-write actually type-checks (`Map`/`Set` require `.set()`/
-	// `.add()`, which the loop below doesn't use). Cast to the real shape
-	// only in the returned expression, once reconstruction is done.
-	const recordType = f.createTypeReferenceNode("Record", [
-		fieldToTypeNode(ctx, field.key),
-		isSet ? f.createKeywordTypeNode(ctx.ts_.SyntaxKind.BooleanKeyword) : fieldToTypeNode(ctx, field.value!),
-	]);
+	// Reconstructed as a `Map` or `Set` whatever `field.source` is, because
+	// neither constrains its key: a `Record` rejects a datatype, enum or object
+	// key, and a `Record` of a literal union rejects the empty table it would
+	// start from. roblox-ts compiles `new Map()` to `{}` and a `set` or `add`
+	// statement to one assignment, so the Luau is the same plain table. A
+	// `Record` is cast to at the end, once the entries are in.
+	const keyType = fieldToTypeNode(ctx, field.key);
 	out.push(
-		f.createVariableStatement(
-			undefined,
-			f.createVariableDeclarationList(
-				[f.createVariableDeclaration(result, undefined, recordType, f.createObjectLiteralExpression([]))],
-				ctx.ts_.NodeFlags.Const,
+		ctx.constStatement(
+			result,
+			f.createNewExpression(
+				f.createIdentifier(isSet ? "Set" : "Map"),
+				isSet ? [keyType] : [keyType, fieldToTypeNode(ctx, field.value!)],
+				[],
 			),
 		),
 	);
 	const i = ctx.fresh("_i");
 	const body: ts.Statement[] = [];
 	const keyExpr = readField(ctx, field.key, body);
-	if (isSet) {
-		body.push(
-			f.createExpressionStatement(
-				f.createBinaryExpression(
-					f.createElementAccessExpression(result, keyExpr),
-					ctx.ts_.SyntaxKind.EqualsToken,
-					f.createTrue(),
-				),
-			),
-		);
-	} else {
-		const valueExpr = readField(ctx, field.value!, body);
-		body.push(
-			f.createExpressionStatement(
-				f.createBinaryExpression(
-					f.createElementAccessExpression(result, keyExpr),
-					ctx.ts_.SyntaxKind.EqualsToken,
-					valueExpr,
-				),
-			),
-		);
-	}
+	const entry = isSet ? [keyExpr] : [keyExpr, readField(ctx, field.value!, body)];
+	body.push(
+		f.createExpressionStatement(
+			f.createCallExpression(f.createPropertyAccessExpression(result, isSet ? "add" : "set"), undefined, entry),
+		),
+	);
 	out.push(ctx.countedLoop(i, count, body));
-	if (field.source === "record") {
+	if (field.source !== "record") {
 		return result;
 	}
 	return f.createAsExpression(
 		f.createAsExpression(result, f.createKeywordTypeNode(ctx.ts_.SyntaxKind.UnknownKeyword)),
-		asMapOrSetTypeNode(ctx, field),
+		fieldToTypeNode(ctx, field),
 	);
 }
 

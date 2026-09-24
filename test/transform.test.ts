@@ -337,6 +337,27 @@ describe("transform generated code", () => {
 		expect(errors).toEqual([]);
 	});
 
+	// A dictionary is rebuilt as a `Map` or `Set`, which constrain no key, so
+	// every key the walk accepts must type-check, including those a `Record`
+	// rejects: a datatype, an enum item, an object, a literal or literal union.
+	test.each([
+		["a boolean", "Set<boolean>"],
+		["an enum item", "Map<Enum.SortOrder, number>"],
+		["one literal", 'Set<"a">'],
+		["a literal union", 'Set<"a" | "b">'],
+		["an object", "Map<{ a: number }, number>"],
+		["a Vector3", "Map<Vector3, number>"],
+		["a buffer", "Set<buffer>"],
+		["a branded number", "Record<DataType.u8, number>"],
+	])("the generated code for a dictionary keyed by %s passes the type check", (_name, dict) => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { DataType, Serializer, createBinarySerializer } from "@rbxts/surge";
+			interface T { d: ${dict}; }
+			export const s: Serializer<T> = createBinarySerializer<T>();`,
+		);
+		expect(errors).toEqual([]);
+	});
+
 	// Checks each row of `FIXED_DATATYPES` against `@rbxts/types`: the property
 	// paths, their types, and the constructor's arguments.
 	test.each(Object.keys(FIXED_DATATYPES))("the generated code for %s passes the type check", (name) => {

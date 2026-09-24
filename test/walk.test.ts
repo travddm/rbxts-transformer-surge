@@ -619,6 +619,34 @@ describe("TypeWalker type parameters", () => {
 	});
 });
 
+describe("TypeWalker Record keys", () => {
+	// An index signature's key type is the brand's bare intersection, with no
+	// alias left to recognize it by.
+	test("a Record keyed by a width brand walks as a dict with that key width", () => {
+		const { field, diagnostics } = walkDeclaration(
+			`import { DataType } from "@rbxts/surge";
+			export interface T { r: Record<DataType.u8, number>; }`,
+			"T",
+			{ surge: true },
+		);
+		expect(diagnostics).toEqual([]);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{
+					name: "r",
+					field: {
+						kind: "dict",
+						key: { kind: "num", width: "u8" },
+						value: { kind: "num", width: "f64" },
+						source: "record",
+					},
+				},
+			],
+		});
+	});
+});
+
 describe("TypeWalker Map and Set by declaration", () => {
 	test.each([
 		["Map", {}],

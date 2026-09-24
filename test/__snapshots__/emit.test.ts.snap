@@ -545,7 +545,7 @@ buffer.writeu32(__surge_scratch, pos2, count3);
 const pos10 = __surge_readCursor;
 __surge_readCursor = pos10 + 4;
 const count11 = buffer.readu32(__surge_input, pos10);
-const result12: Record<string, number> = {};
+const result12 = new Map<string, number>();
 for (const _i13 of $range(1, count11)) {
     const pos14 = __surge_readCursor;
     __surge_readCursor = pos14 + 4;
@@ -554,9 +554,9 @@ for (const _i13 of $range(1, count11)) {
     __surge_readCursor = pos16 + len15;
     const pos17 = __surge_readCursor;
     __surge_readCursor = pos17 + 8;
-    result12[buffer.readstring(__surge_input, pos16, len15)] = buffer.readf64(__surge_input, pos17);
+    result12.set(buffer.readstring(__surge_input, pos16, len15), buffer.readf64(__surge_input, pos17));
 }
-return result12 as unknown as Map<string, number>;"
+return result12;"
 `;
 
 exports[`Emitter per-kind write/read snapshots dict (set, no value) 1`] = `
@@ -593,16 +593,16 @@ buffer.writeu32(__surge_scratch, pos2, count3);
 const pos8 = __surge_readCursor;
 __surge_readCursor = pos8 + 4;
 const count9 = buffer.readu32(__surge_input, pos8);
-const result10: Record<string, boolean> = {};
+const result10 = new Set<string>();
 for (const _i11 of $range(1, count9)) {
     const pos12 = __surge_readCursor;
     __surge_readCursor = pos12 + 4;
     const len13 = buffer.readu32(__surge_input, pos12);
     const pos14 = __surge_readCursor;
     __surge_readCursor = pos14 + len13;
-    result10[buffer.readstring(__surge_input, pos14, len13)] = true;
+    result10.add(buffer.readstring(__surge_input, pos14, len13));
 }
-return result10 as unknown as Set<string>;"
+return result10;"
 `;
 
 exports[`Emitter per-kind write/read snapshots enum 1`] = `

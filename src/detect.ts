@@ -124,10 +124,42 @@ export function resolveFactoryName(
  */
 export function getDataTypeBrand(type: ts.Type): string | undefined {
 	const aliasSymbol = (type as ts.Type & { aliasSymbol?: ts.Symbol }).aliasSymbol;
-	if (!aliasSymbol || !isFromSurgePackage(aliasSymbol.declarations)) {
+	if (aliasSymbol && isFromSurgePackage(aliasSymbol.declarations)) {
+		return aliasSymbol.name;
+	}
+	return widthFromBrandProperty(type);
+}
+
+/** The number widths `DataType` brands, each `number & { _surge_<width>?: never }` in data-type.ts. */
+export const NUM_BRAND_WIDTHS: ReadonlySet<string> = new Set([
+	"f32",
+	"f64",
+	"u8",
+	"u16",
+	"u24",
+	"u32",
+	"i8",
+	"i16",
+	"i24",
+	"i32",
+]);
+
+/**
+ * A width brand that has lost its alias still carries its brand property. An
+ * index signature's key type is one: in `Record<DataType.u8, V>` the key is
+ * the bare intersection, with no `aliasSymbol` to find.
+ */
+function widthFromBrandProperty(type: ts.Type): string | undefined {
+	if (!type.isIntersection()) {
 		return undefined;
 	}
-	return aliasSymbol.name;
+	for (const width of NUM_BRAND_WIDTHS) {
+		const property = type.getProperty(`_surge_${width}`);
+		if (property && isFromSurgePackage(property.declarations)) {
+			return width;
+		}
+	}
+	return undefined;
 }
 
 /**
