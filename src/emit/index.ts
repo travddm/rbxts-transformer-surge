@@ -12,7 +12,7 @@ import { readField, readObjectInline } from "./read";
 import { fieldToTypeNode, objectShapeTypeNode } from "./types";
 import { writeField, writeObjectInline } from "./write";
 
-export { importAlias } from "./constants";
+export { ABI_MODULE, importAlias } from "./constants";
 
 /**
  * Turns a `Field` IR tree into `write`/`read` statements (Transformer 5.1

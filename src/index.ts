@@ -1,7 +1,7 @@
 import type ts from "typescript";
 
-import { type FactoryName, declaredResultCarriesBlobs, resolveFactoryName } from "./detect";
-import { Emitter, importAlias } from "./emit";
+import { type FactoryName, declaredSerializedCarriesBlobs, resolveFactoryName } from "./detect";
+import { ABI_MODULE, Emitter, importAlias } from "./emit";
 import { TypeWalker } from "./walk";
 
 /**
@@ -80,7 +80,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 			}
 
 			/**
-			 * The `checks` and `writeChecks` of the factory's options argument
+			 * The `readChecks` and `writeChecks` of the factory's options argument
 			 * (Transformer 3.3 in docs/specs/transformer.md in the surge repo), or
 			 * `undefined` when the call site cannot be read.
 			 *
@@ -94,8 +94,8 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 			function readOptions(
 				factoryName: FactoryName,
 				node: ts.CallExpression,
-			): { checks: boolean; writeChecks: boolean } | undefined {
-				const result = { checks: false, writeChecks: false };
+			): { readChecks: boolean; writeChecks: boolean } | undefined {
+				const result = { readChecks: false, writeChecks: false };
 				const [options, ...rest] = node.arguments;
 				if (options === undefined) {
 					return result;
@@ -111,30 +111,30 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					);
 					return undefined;
 				}
-				const accepted: ReadonlyArray<"checks" | "writeChecks"> =
+				const accepted: ReadonlyArray<"readChecks" | "writeChecks"> =
 					factoryName === "createSerializer"
 						? ["writeChecks"]
 						: factoryName === "createDeserializer"
-							? ["checks"]
-							: ["checks", "writeChecks"];
+							? ["readChecks"]
+							: ["readChecks", "writeChecks"];
 				const described = accepted.map((name) => `"${name}"`).join(" and ");
 				for (const property of options.properties) {
 					const name =
 						typescript.isPropertyAssignment(property) && typescript.isIdentifier(property.name)
 							? property.name.text
 							: undefined;
-					if (name !== "checks" && name !== "writeChecks") {
+					if (name !== "readChecks" && name !== "writeChecks") {
 						report(property, `${factoryName}()'s options take ${described}.`);
 						return undefined;
 					}
 					if (!accepted.includes(name)) {
 						report(
 							property,
-							name === "checks"
-								? `${factoryName}() has no read side, so it takes no "checks" -- that option ` +
-										`belongs on createDeserializer() or createBinarySerializer().`
+							name === "readChecks"
+								? `${factoryName}() has no read side, so it takes no "readChecks" -- that option ` +
+										`belongs on createDeserializer() or createCodec().`
 								: `${factoryName}() has no write side, so it takes no "writeChecks" -- that option ` +
-										`belongs on createSerializer() or createBinarySerializer().`,
+										`belongs on createSerializer() or createCodec().`,
 						);
 						return undefined;
 					}
@@ -190,7 +190,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				factoryName: FactoryName,
 				node: ts.CallExpression,
 				typeArgumentNode: ts.TypeNode,
-				options: { checks: boolean; writeChecks: boolean },
+				options: { readChecks: boolean; writeChecks: boolean },
 			): ts.Expression {
 				const f = ctx.factory;
 				const type = checker.getTypeFromTypeNode(typeArgumentNode);
@@ -245,13 +245,13 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 
 				const usesBlobs = emitter.usedImports.has("pushBlob") || emitter.usedImports.has("nextBlob");
 
-				// The package's `Serialized<T>` decides whether the result is the
-				// buffer alone or a table with a `blobs` array. It gives the array
-				// wherever it cannot tell, which costs an empty one; a blob it misses
-				// would be dropped by a caller that follows the type, so that is a
-				// diagnostic.
-				const resultCarriesBlobs = declaredResultCarriesBlobs(typescript, checker, node, factoryName);
-				if (needsWrite && usesBlobs && !resultCarriesBlobs) {
+				// The package's `Serialized<T>` decides whether `serialize` returns,
+				// and `deserialize` takes, the buffer alone or a table with a
+				// `blobs` array. It gives the array wherever it cannot tell, which
+				// costs an empty one; a blob it misses would be dropped by a caller
+				// that follows the type, so that is a diagnostic.
+				const serializedCarriesBlobs = declaredSerializedCarriesBlobs(typescript, checker, node, factoryName);
+				if (usesBlobs && !serializedCarriesBlobs) {
 					report(
 						node,
 						`"${checker.typeToString(type)}" holds a value that goes into "blobs", but the result type ` +
@@ -271,7 +271,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					writeBody.push(...writeStatements);
 					const bytes = emitter.finishWriteExpression();
 					let result: ts.Expression = bytes;
-					if (usesBlobs || resultCarriesBlobs) {
+					if (serializedCarriesBlobs) {
 						// A shape the declared result gives an array but that never fills
 						// one returns it empty. Asserted, because an empty array literal is
 						// `never[]`.
@@ -290,7 +290,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					// An arrow function, not `createFunctionExpression`: roblox-ts treats a
 					// function expression assigned as an object-literal property as a method
 					// and injects an implicit `self` parameter, which would silently break
-					// every call site that uses `Serializer<T>`'s declared arrow-typed
+					// every call site that uses `Codec<T>`'s declared arrow-typed
 					// `serialize`/`deserialize` properties (those get called with `.`, not `:`).
 					return f.createArrowFunction(
 						undefined,
@@ -303,30 +303,43 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				};
 
 				const buildDeserialize = (): ts.ArrowFunction => {
+					// `deserialize` takes what `serialize` returned. A shape that reads
+					// neither bytes nor blobs, such as one made only of literals, reads
+					// nothing of it; an underscore keeps the parameter from failing a
+					// consumer's `noUnusedParameters`.
+					const input = f.createIdentifier(emitter.usesReadBytes || usesBlobs ? "input" : "_input");
 					const inputParam = f.createParameterDeclaration(
 						undefined,
 						undefined,
-						"input",
+						input,
 						undefined,
-						f.createTypeReferenceNode("buffer"),
+						serializedCarriesBlobs
+							? f.createTypeLiteralNode([
+									f.createPropertySignature(
+										undefined,
+										"buffer",
+										undefined,
+										f.createTypeReferenceNode("buffer"),
+									),
+									f.createPropertySignature(
+										undefined,
+										"blobs",
+										undefined,
+										f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
+									),
+								])
+							: f.createTypeReferenceNode("buffer"),
 						undefined,
 					);
-					const inputBlobsParam = f.createParameterDeclaration(
-						undefined,
-						undefined,
-						// The parameter stays, because `Serializer<T>` declares it and a
-						// caller may pass one; an underscore keeps it from failing a
-						// consumer's `noUnusedParameters` when nothing reads it.
-						usesBlobs ? "inputBlobs" : "_inputBlobs",
-						f.createToken(typescript.SyntaxKind.QuestionToken),
-						f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
-						undefined,
-					);
-					const readBody: ts.Statement[] = [...emitter.beginReadStatements(f.createIdentifier("input"))];
+					const readBody: ts.Statement[] = [
+						...emitter.beginReadStatements(
+							serializedCarriesBlobs ? f.createPropertyAccessExpression(input, "buffer") : input,
+						),
+					];
 					if (usesBlobs) {
 						readBody.push(
 							f.createExpressionStatement(
-								surgeCall("beginReadBlobs", [f.createIdentifier("inputBlobs")]),
+								surgeCall("beginReadBlobs", [f.createPropertyAccessExpression(input, "blobs")]),
 							),
 						);
 					}
@@ -343,7 +356,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					return f.createArrowFunction(
 						undefined,
 						undefined,
-						[inputParam, inputBlobsParam],
+						[inputParam],
 						undefined,
 						f.createToken(typescript.SyntaxKind.EqualsGreaterThanToken),
 						f.createBlock(readBody, true),
@@ -412,7 +425,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 							),
 					),
 				),
-				f.createStringLiteral("@rbxts/surge"),
+				f.createStringLiteral(ABI_MODULE),
 			);
 			hoistLeadingComments(importDecl, visited.statements[0]);
 			return f.updateSourceFile(visited, [importDecl, ...visited.statements]);

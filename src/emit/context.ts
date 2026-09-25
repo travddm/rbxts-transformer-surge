@@ -64,14 +64,14 @@ export const BOTH_SIDES: EmitSides = { write: true, read: true };
 /** What a call site asks the emitter for, from its factory and its options. */
 export interface EmitOptions {
 	/**
-	 * Emit the read-side bounds checks of the `checks` factory option
+	 * Emit the read-side bounds checks of the `readChecks` factory option
 	 * (Transformer 5.10 in docs/specs/transformer.md in the surge repo).
 	 * Off, the read path is what it always was: no branch per read, and a
 	 * malformed payload is a raw Luau error or worse. Per call site, so one
 	 * place can hold a checked serializer for a remote boundary and an
 	 * unchecked one for its own storage.
 	 */
-	readonly checks?: boolean;
+	readonly readChecks?: boolean;
 	/**
 	 * Emit the write-side checks of the `writeChecks` factory option
 	 * (Transformer 5.14 in docs/specs/transformer.md in the surge repo): a
@@ -97,7 +97,7 @@ export abstract class EmitContext {
 	/**
 	 * Whether either side reserved any bytes at all. A shape whose fields are
 	 * all blobs reserves none, and declaring cursor state it never reads would
-	 * fail a consumer's `noUnusedLocals` -- the same reason `_inputBlobs`
+	 * fail a consumer's `noUnusedLocals` -- the same reason an unread `_input`
 	 * carries an underscore.
 	 */
 	public usesWriteBytes = false;
@@ -121,13 +121,13 @@ export abstract class EmitContext {
 		protected readonly helperFields: ReadonlyMap<string, Field>,
 		options: EmitOptions = {},
 	) {
-		this.checks = options.checks ?? false;
+		this.readChecks = options.readChecks ?? false;
 		this.writeChecks = options.writeChecks ?? false;
 		this.sides = options.sides ?? BOTH_SIDES;
 	}
 
 	/** See {@link EmitOptions}. */
-	public readonly checks: boolean;
+	public readonly readChecks: boolean;
 	public readonly writeChecks: boolean;
 	public readonly sides: EmitSides;
 
@@ -211,7 +211,7 @@ export abstract class EmitContext {
 			this.letStatement(READ_CURSOR, this.num(0)),
 		];
 		// One `buffer.len` per `deserialize()` rather than one per check.
-		if (this.checks) {
+		if (this.readChecks) {
 			decls.push(this.letStatement(READ_LENGTH, this.num(0)));
 		}
 		return decls;
@@ -228,7 +228,7 @@ export abstract class EmitContext {
 			return [];
 		}
 		const statements = [this.assign(READ_BUFFER, input), this.assign(READ_CURSOR, this.num(0))];
-		if (this.checks) {
+		if (this.readChecks) {
 			statements.push(
 				this.assign(READ_LENGTH, this.bufferCall("len", [this.factory.createIdentifier(READ_BUFFER)])),
 			);
@@ -465,7 +465,7 @@ export abstract class EmitContext {
 				this.constStatement(pos, f.createIdentifier(READ_CURSOR)),
 				this.assign(READ_CURSOR, f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, sizeExpr)),
 			];
-			if (this.checks) {
+			if (this.readChecks) {
 				statements.push(
 					this.throwIf(
 						f.createBinaryExpression(

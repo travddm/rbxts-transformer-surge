@@ -1,4 +1,4 @@
-// The signatures of the real `@rbxts/surge` runtime exports that generated
+// The signatures of the real `@rbxts/surge/out/abi`, the helpers generated
 // code calls, so a test can type-check transformed output the way roblox-ts
 // does. Declarations only: nothing here runs.
 //
@@ -14,5 +14,4 @@ export declare function beginReadBlobs(blobs: Array<defined> | undefined): void;
 export declare function nextBlob(): defined;
 export declare function writePackedCFrame(buf: buffer, pos: number, value: CFrame): number;
 export declare function readPackedCFrame(buf: buffer, pos: number): LuaTuple<[value: CFrame, size: number]>;
-export declare function packBit(buf: buffer, byteOffset: number, bitIndex: number, value: boolean): void;
 export declare function unpackBit(buf: buffer, byteOffset: number, bitIndex: number): boolean;

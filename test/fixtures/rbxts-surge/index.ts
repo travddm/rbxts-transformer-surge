@@ -1,15 +1,11 @@
 export { DataType } from "./data-type";
 export {
-	beginReadBlobs,
-	beginWriteBlobs,
-	finishWrite,
-	finishWriteBlobs,
-	grow,
-	nextBlob,
-	packBit,
-	pushBlob,
-	readPackedCFrame,
-	unpackBit,
-	writePackedCFrame,
-} from "./runtime";
-export { createBinarySerializer, createDeserializer, createSerializer, Serialized, Serializer } from "./serializer";
+	Codec,
+	CodecOptions,
+	createCodec,
+	createDeserializer,
+	createSerializer,
+	Deserializer,
+	Serialized,
+	Serializer,
+} from "./serializer";

@@ -1,6 +1,6 @@
 /**
  * The internal IR every `createSerializer`/`createDeserializer`/
- * `createBinarySerializer` call site is walked into (see section 4 of
+ * `createCodec` call site is walked into (see section 4 of
  * docs/specs/transformer.md in the surge repo), and the only input the emitter
  * (`emit/`) consumes. Producing this from a `ts.Type` is `walk.ts`'s job; turning it
  * into statements is the emitter's.

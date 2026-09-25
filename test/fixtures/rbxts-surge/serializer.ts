@@ -3,7 +3,7 @@
  * this directory for why this can't be a real cross-repo dependency). Only
  * the declarations `detect.ts`/`index.ts` need to identify are reproduced;
  * the bodies are never called. `Serialized<T>` and the types it is built from
- * are copied exactly, because `declaredResultCarriesBlobs` reads what it
+ * are copied exactly, because `declaredSerializedCarriesBlobs` reads what it
  * resolves to; update them alongside the real file.
  */
 type EncodedRobloxType =
@@ -72,30 +72,32 @@ type PartCarriesBlobs<T, Seen extends unknown[]> = T extends string | number | b
 
 export type Serialized<T> = MayCarryBlobs<T> extends true ? { buffer: buffer; blobs: Array<defined> } : buffer;
 
-export interface Serializer<in out T> {
-	serialize: (value: T) => Serialized<T>;
-	deserialize: (input: buffer, inputBlobs?: Array<defined>) => T;
+export type Serializer<in out T> = (value: T) => Serialized<T>;
+
+export type Deserializer<in out T> = (input: Serialized<T>) => T;
+
+export interface Codec<in out T> {
+	serialize: Serializer<T>;
+	deserialize: Deserializer<T>;
 }
 
 function notConfigured(): never {
-	throw "fixture @rbxts/surge: createSerializer/createDeserializer/createBinarySerializer have no real implementation.";
+	throw "fixture @rbxts/surge: createCodec/createSerializer/createDeserializer have no real implementation.";
 }
 
-export interface SerializerOptions {
-	readonly checks?: boolean;
+export interface CodecOptions {
+	readonly readChecks?: boolean;
 	readonly writeChecks?: boolean;
 }
 
-export function createSerializer<T>(options?: Pick<SerializerOptions, "writeChecks">): (value: T) => Serialized<T> {
+export function createCodec<T>(options?: CodecOptions): Codec<T> {
 	return notConfigured();
 }
 
-export function createDeserializer<T>(
-	options?: Pick<SerializerOptions, "checks">,
-): (input: buffer, inputBlobs?: Array<defined>) => T {
+export function createSerializer<T>(options?: Pick<CodecOptions, "writeChecks">): Serializer<T> {
 	return notConfigured();
 }
 
-export function createBinarySerializer<T>(options?: SerializerOptions): Serializer<T> {
+export function createDeserializer<T>(options?: Pick<CodecOptions, "readChecks">): Deserializer<T> {
 	return notConfigured();
 }

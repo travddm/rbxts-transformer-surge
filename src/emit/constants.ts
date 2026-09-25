@@ -39,6 +39,13 @@ export const LOCALS_PER_BLOCK = 32;
 // short of the block, which is one more than a run now needs.
 export const ALLOC_RUN_FIELDS = LOCALS_PER_BLOCK - 1;
 
+/**
+ * The module of `@rbxts/surge` that holds the helpers generated code calls
+ * (Runtime API 5.1 in docs/specs/runtime-api.md in the surge repo), apart from
+ * the API a consumer imports from the package itself.
+ */
+export const ABI_MODULE = "@rbxts/surge/out/abi";
+
 // The injected `@rbxts/surge` imports are aliased so that a user's own
 // `grow` (or any other export's name), at the top level or in a scope
 // enclosing the call site, can neither collide with nor shadow them.
@@ -78,7 +85,7 @@ export const QUANTIZED_ROTATION_SCALE = 32767 / Math.PI;
 /** The prefix every check's message carries, so one `pcall` can tell a rejection from a bug. */
 export const ERROR_PREFIX = "@rbxts/surge: ";
 /**
- * The largest count `checks` accepts for an element that consumes no bytes
+ * The largest count `readChecks` accepts for an element that consumes no bytes
  * (a literal constant, a blob, an object made only of those). Such an element
  * costs nothing, so the payload's own length cannot bound it and the count
  * needs a bound of its own. This is the largest count a `u24` prefix could

@@ -161,7 +161,7 @@ function readEnum(ctx: EmitContext, field: Extract<Field, { kind: "enum" }>, out
 	out.push(...statements);
 	const idx = ctx.fresh("idx");
 	out.push(ctx.constStatement(idx, ctx.bufferCall(bytes === 1 ? "readu8" : "readu16", [buf, pos])));
-	if (ctx.checks) {
+	if (ctx.readChecks) {
 		// Past the items, the lookup would return `undefined` where the type
 		// says an `EnumItem`, so the index is bounded like a count.
 		out.push(
@@ -208,7 +208,7 @@ function pushElement(ctx: EmitContext, result: ts.Identifier, element: ts.Expres
  * The count a variable-length read loops over: the literal the type
  * carries in the exact form, which writes no count, and otherwise a
  * local holding the count read back, bounded against what the rest of
- * the input could hold when `checks` is on.
+ * the input could hold when `readChecks` is on.
  */
 function readCount(
 	ctx: EmitContext,
@@ -252,7 +252,7 @@ function checkEntryCount(
 }
 
 function checkCountOfBytes(ctx: EmitContext, count: ts.Expression, min: number, out: ts.Statement[]): void {
-	if (!ctx.checks) {
+	if (!ctx.readChecks) {
 		return;
 	}
 	const f = ctx.factory;
@@ -426,7 +426,7 @@ function readCFrame(ctx: EmitContext, field: Extract<Field, { kind: "cframe" }>,
 function readPackedCFrame(ctx: EmitContext, out: ts.Statement[]): ts.Expression {
 	const f = ctx.factory;
 	ctx.usesReadBytes = true;
-	if (ctx.checks) {
+	if (ctx.readChecks) {
 		out.push(...packedCFrameChecks(ctx));
 	}
 	const value = ctx.fresh("val");
@@ -470,7 +470,7 @@ const PACKED_LAST_ALIGNED_ROTATION = 23;
 const PACKED_PART_BYTES = 12;
 
 /**
- * The bound on a packed `CFrame` under `checks`. Its size is in its own
+ * The bound on a packed `CFrame` under `readChecks`. Its size is in its own
  * header, so the header byte is bounded first, and then the bytes it says
  * follow, before the runtime reads any of them. A rotation code that names no
  * rotation is rejected here too: the runtime would otherwise raise an error

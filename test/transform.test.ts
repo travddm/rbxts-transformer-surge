@@ -43,9 +43,9 @@ function typeErrorsOfGeneratedCode(source: string): string[] {
 describe("transform (end-to-end)", () => {
 	test("a shape with no blob field pays nothing for the blob side channel", () => {
 		const { printed, cleanup } = runTransform(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			interface P { x: number; flag: boolean; }
-			const s = createBinarySerializer<P>();`,
+			const s = createCodec<P>();`,
 		);
 		try {
 			for (const name of ["beginWriteBlobs", "finishWriteBlobs", "beginReadBlobs"]) {
@@ -54,9 +54,8 @@ describe("transform (end-to-end)", () => {
 			// `Serialized<P>` is the buffer alone.
 			expect(printed).not.toContain("blobs:");
 			expect(printed).toContain("return __surge_finishWrite(__surge_scratch, __surge_cursor);");
-			// Nothing reads the parameter, so its name keeps a consumer's
-			// `noUnusedParameters` quiet.
-			expect(printed).toContain("_inputBlobs");
+			// `deserialize` takes the buffer `serialize` returns.
+			expect(printed).toContain("deserialize: (input: buffer) => {");
 		} finally {
 			cleanup();
 		}
@@ -67,14 +66,45 @@ describe("transform (end-to-end)", () => {
 		// passes through; the walk checks where it is declared, and encodes
 		// this one.
 		const { printed, diagnostics, cleanup } = runTransform(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			interface P { _nominal_P: "p"; x: number; }
-			const s = createBinarySerializer<P>();`,
+			const s = createCodec<P>();`,
 		);
 		try {
 			expect(diagnostics).toHaveLength(0);
 			expect(printed).not.toContain("pushBlob");
 			expect(printed).toContain("blobs: [] as Array<defined>");
+		} finally {
+			cleanup();
+		}
+	});
+
+	test.each(["createCodec", "createDeserializer"])(
+		"%s's deserialize takes the declared table even where it reads no blob",
+		(factory) => {
+			const { printed, diagnostics, cleanup } = runTransform(
+				`import { ${factory} } from "@rbxts/surge";
+			interface P { _nominal_P: "p"; x: number; }
+			const s = ${factory}<P>();`,
+			);
+			try {
+				expect(diagnostics).toHaveLength(0);
+				expect(printed).toContain("__surge_input = input.buffer;");
+				expect(printed).not.toContain("beginReadBlobs");
+			} finally {
+				cleanup();
+			}
+		},
+	);
+
+	test("a deserialize that reads nothing names its parameter for a consumer's noUnusedParameters", () => {
+		const { printed, cleanup } = runTransform(
+			`import { createCodec } from "@rbxts/surge";
+			interface P { kind: "only"; }
+			const s = createCodec<P>();`,
+		);
+		try {
+			expect(printed).toContain("deserialize: (_input: buffer) => {");
 		} finally {
 			cleanup();
 		}
@@ -130,9 +160,9 @@ describe("transform (end-to-end)", () => {
 		"the declared result has a blobs array exactly when the walk finds a blob: %s",
 		(_name, declaration, carries) => {
 			const { printed, diagnostics, cleanup } = runTransform(
-				`import { DataType, createBinarySerializer } from "@rbxts/surge";
+				`import { DataType, createCodec } from "@rbxts/surge";
 			${declaration}
-			const s = createBinarySerializer<P>();`,
+			const s = createCodec<P>();`,
 			);
 			try {
 				expect(diagnostics).toHaveLength(0);
@@ -149,9 +179,9 @@ describe("transform (end-to-end)", () => {
 		// `Serialized<P>` must declare the array, or the call site is a
 		// diagnostic.
 		const { printed, diagnostics, cleanup } = runTransform(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			interface P { v: Vector3 & { tag: 1 }; }
-			const s = createBinarySerializer<P>();`,
+			const s = createCodec<P>();`,
 		);
 		try {
 			expect(diagnostics).toHaveLength(0);
@@ -164,15 +194,17 @@ describe("transform (end-to-end)", () => {
 
 	test("a shape with a blob field still carries the side channel", () => {
 		const { printed, cleanup } = runTransform(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			interface P { x: number; part: Instance; }
-			const s = createBinarySerializer<P>();`,
+			const s = createCodec<P>();`,
 		);
 		try {
 			for (const name of ["beginWriteBlobs", "finishWriteBlobs", "beginReadBlobs", "pushBlob", "nextBlob"]) {
 				expect(printed).toContain(name);
 			}
-			expect(printed).not.toContain("_inputBlobs");
+			// `deserialize` takes the table `serialize` returns.
+			expect(printed).toContain("__surge_input = input.buffer;");
+			expect(printed).toContain("__surge_beginReadBlobs(input.blobs);");
 		} finally {
 			cleanup();
 		}
@@ -180,9 +212,9 @@ describe("transform (end-to-end)", () => {
 
 	test("a blob reachable only through a recursion helper still carries the side channel", () => {
 		const { printed, cleanup } = runTransform(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			interface Node { part: Instance; kids: Node[]; }
-			const s = createBinarySerializer<Node>();`,
+			const s = createCodec<Node>();`,
 		);
 		try {
 			expect(printed).toContain("beginWriteBlobs");
@@ -192,16 +224,16 @@ describe("transform (end-to-end)", () => {
 		}
 	});
 
-	test("createBinarySerializer<T>() becomes an IIFE and injects a sorted @rbxts/surge import", () => {
+	test("createCodec<T>() becomes an IIFE and injects a sorted @rbxts/surge import", () => {
 		const { printed, cleanup } = runTransform(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			interface P { x: number; }
-			const s = createBinarySerializer<P>();`,
+			const s = createCodec<P>();`,
 		);
 		try {
 			// No blob field, so nothing from the blob side channel is imported.
 			expect(printed).toContain(
-				'import { finishWrite as __surge_finishWrite, grow as __surge_grow } from "@rbxts/surge";',
+				'import { finishWrite as __surge_finishWrite, grow as __surge_grow } from "@rbxts/surge/out/abi";',
 			);
 			expect(printed).toContain("const s = function () {");
 			expect(printed).toContain("serialize:");
@@ -211,7 +243,7 @@ describe("transform (end-to-end)", () => {
 		}
 	});
 
-	test("createSerializer<T>() produces only the serialize function, not a Serializer object", () => {
+	test("createSerializer<T>() produces only the serialize function, not a Codec object", () => {
 		const { printed, cleanup } = runTransform(
 			`import { createSerializer } from "@rbxts/surge";
 			interface P { x: number; }
@@ -249,9 +281,9 @@ describe("transform (end-to-end)", () => {
 	// "Maximum call stack size exceeded" instead of producing a helper.
 	test("a recursive discriminated union compiles to helper declarations instead of crashing the transform", () => {
 		const { printed, cleanup } = runTransform(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			type Expr = { kind: "num"; v: number } | { kind: "add"; l: Expr; r: Expr };
-			const s = createBinarySerializer<Expr>();`,
+			const s = createCodec<Expr>();`,
 		);
 		try {
 			// Not a hardcoded counter suffix: `helperCounter` is a module-scoped
@@ -279,30 +311,30 @@ describe("transform (end-to-end)", () => {
 
 describe("transform diagnostics", () => {
 	test("a walk diagnostic surfaces as a ts.Diagnostic at the offending property, and the call is left untransformed", () => {
-		const source = `import { createBinarySerializer } from "@rbxts/surge";
+		const source = `import { createCodec } from "@rbxts/surge";
 			interface P { bad: symbol; }
-			const s = createBinarySerializer<P>();`;
+			const s = createCodec<P>();`;
 		const { printed, diagnostics, cleanup } = runTransform(source);
 		try {
 			expect(diagnostics).toHaveLength(1);
 			expect(diagnostics[0].category).toBe(ts.DiagnosticCategory.Error);
 			expect(diagnostics[0].start).toBe(source.indexOf("bad: symbol;"));
 			expect(diagnostics[0].length).toBe("bad: symbol;".length);
-			expect(printed).toContain("createBinarySerializer<P>()");
+			expect(printed).toContain("createCodec<P>()");
 		} finally {
 			cleanup();
 		}
 	});
 
 	test("a factory call without an explicit type argument reports a diagnostic instead of failing at runtime", () => {
-		const source = `import { createBinarySerializer, Serializer } from "@rbxts/surge";
+		const source = `import { Codec, createCodec } from "@rbxts/surge";
 			interface P { x: number; }
-			const s: Serializer<P> = createBinarySerializer();`;
+			const s: Codec<P> = createCodec();`;
 		const { diagnostics, cleanup } = runTransform(source);
 		try {
 			expect(diagnostics).toHaveLength(1);
 			expect(diagnostics[0].messageText).toContain("explicit type argument");
-			expect(diagnostics[0].start).toBe(source.indexOf("createBinarySerializer()"));
+			expect(diagnostics[0].start).toBe(source.indexOf("createCodec()"));
 		} finally {
 			cleanup();
 		}
@@ -316,8 +348,8 @@ describe("transform diagnostics", () => {
 		["a type parameter constrained to an object type", "<T extends { a: number }>", "T"],
 		["an object type with a type-parameter property", "<T>", "{ v: T }"],
 	])("a call site inside a generic function whose type argument is %s reports a diagnostic", (_name, params, arg) => {
-		const source = `import { createBinarySerializer } from "@rbxts/surge";
-			export function make${params}() { return createBinarySerializer<${arg}>(); }`;
+		const source = `import { createCodec } from "@rbxts/surge";
+			export function make${params}() { return createCodec<${arg}>(); }`;
 		const { printed, diagnostics, cleanup } = runTransform(source);
 		try {
 			expect(diagnostics).toHaveLength(1);
@@ -392,9 +424,9 @@ describe("transform generated code", () => {
 		["an optional property of type unknown", `interface T { anything?: unknown; list: unknown[]; }`],
 	])("the generated code for %s passes the type check", (_name, declarations) => {
 		const errors = typeErrorsOfGeneratedCode(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			${declarations}
-			export const s = createBinarySerializer<T>();`,
+			export const s = createCodec<T>();`,
 		);
 		expect(errors).toEqual([]);
 	});
@@ -406,15 +438,34 @@ describe("transform generated code", () => {
 		[
 			"a blob",
 			"interface T { part: Instance; }",
-			"const { buffer, blobs } = s.serialize(value); return s.deserialize(buffer, blobs);",
+			"const { buffer, blobs } = s.serialize(value); return s.deserialize({ buffer, blobs });",
 		],
 	])("a caller of a result with %s passes the type check", (_name, declarations, body) => {
 		const errors = typeErrorsOfGeneratedCode(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			${declarations}
-			const s = createBinarySerializer<T>();
+			const s = createCodec<T>();
 			export function send(value: T): T {
 				${body}
+			}`,
+		);
+		expect(errors).toEqual([]);
+	});
+
+	// `createDeserializer` has no `serialize` to read the declared shape from,
+	// so it is read from what its `deserialize` takes.
+	test.each([
+		["no blob", "interface T { v: number; }"],
+		["a blob", "interface T { part: Instance; }"],
+		["a declared array it never fills", `interface T { _nominal_T: "t"; v: number; }`],
+	])("separate factories for a result with %s pass the type check", (_name, declarations) => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { createDeserializer, createSerializer } from "@rbxts/surge";
+			${declarations}
+			const s = createSerializer<T>();
+			const d = createDeserializer<T>();
+			export function roundTrip(value: T): T {
+				return d(s(value));
 			}`,
 		);
 		expect(errors).toEqual([]);
@@ -427,9 +478,9 @@ describe("transform generated code", () => {
 		["a class", `class T { v = 1; next?: this; }`],
 	])("a polymorphic this in %s compiles to a recursion helper", (_name, declarations) => {
 		const { printed, diagnostics, cleanup } = runTransform(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			${declarations}
-			export const s = createBinarySerializer<T>();`,
+			export const s = createCodec<T>();`,
 		);
 		try {
 			expect(diagnostics).toHaveLength(0);
@@ -473,9 +524,9 @@ describe("transform generated code", () => {
 		["a branded number", "Record<DataType.u8, number>"],
 	])("the generated code for a dictionary keyed by %s passes the type check", (_name, dict) => {
 		const errors = typeErrorsOfGeneratedCode(
-			`import { DataType, Serializer, createBinarySerializer } from "@rbxts/surge";
+			`import { Codec, DataType, createCodec } from "@rbxts/surge";
 			interface T { d: ${dict}; }
-			export const s: Serializer<T> = createBinarySerializer<T>();`,
+			export const s: Codec<T> = createCodec<T>();`,
 		);
 		expect(errors).toEqual([]);
 	});
@@ -493,10 +544,10 @@ describe("transform generated code", () => {
 		["a blob", `interface T { part: Instance; }`],
 	])("a deserialize result with %s is assignable to its type argument", (_name, declarations) => {
 		const errors = typeErrorsOfGeneratedCode(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { Serialized, createCodec } from "@rbxts/surge";
 			${declarations}
-			const s = createBinarySerializer<T>();
-			export function read(input: buffer): T {
+			const s = createCodec<T>();
+			export function read(input: Serialized<T>): T {
 				return s.deserialize(input);
 			}`,
 		);
@@ -507,18 +558,18 @@ describe("transform generated code", () => {
 	// paths, their types, and the constructor's arguments.
 	test.each(Object.keys(FIXED_DATATYPES))("the generated code for %s passes the type check", (name) => {
 		const errors = typeErrorsOfGeneratedCode(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			interface T { alone: ${name}; member: ${name} | string; maybe?: ${name}; }
-			export const s = createBinarySerializer<T>();`,
+			export const s = createCodec<T>();`,
 		);
 		expect(errors).toEqual([]);
 	});
 
 	test("the generated code for the 24-bit widths passes the type check", () => {
 		const errors = typeErrorsOfGeneratedCode(
-			`import { DataType, createBinarySerializer } from "@rbxts/surge";
+			`import { DataType, createCodec } from "@rbxts/surge";
 			interface T { u: DataType.u24; i: DataType.i24; list: DataType.i24[]; }
-			export const s = createBinarySerializer<T>();`,
+			export const s = createCodec<T>();`,
 		);
 		expect(errors).toEqual([]);
 	});
@@ -526,7 +577,7 @@ describe("transform generated code", () => {
 	test("the generated code for ranges, quantized rotations and bit sets passes the type check", () => {
 		for (const options of ["", "{ writeChecks: true }"]) {
 			const errors = typeErrorsOfGeneratedCode(
-				`import { DataType, createBinarySerializer } from "@rbxts/surge";
+				`import { DataType, createCodec } from "@rbxts/surge";
 				interface T {
 					health: DataType.Range<number, 0, 100>;
 					offset: DataType.Range<number, -1000, 1000>;
@@ -537,7 +588,7 @@ describe("transform generated code", () => {
 					narrow?: DataType.Quantized<DataType.Transform<DataType.i16>>;
 					flags: DataType.Packed<{ tags: Set<"a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i">; modes?: ReadonlySet<1 | -2 | true>; each: Array<Set<"x">> }>;
 				}
-				export const s = createBinarySerializer<T>(${options});`,
+				export const s = createCodec<T>(${options});`,
 			);
 			expect(errors).toEqual([]);
 		}
@@ -545,26 +596,26 @@ describe("transform generated code", () => {
 
 	test("the generated code for packed optionals passes the type check", () => {
 		const errors = typeErrorsOfGeneratedCode(
-			`import { DataType, createBinarySerializer } from "@rbxts/surge";
+			`import { DataType, createCodec } from "@rbxts/surge";
 			interface Inner { count?: number; flag: boolean; label: string; maybeFlag?: boolean; anything?: unknown; }
 			interface T { packed: DataType.Packed<Inner>; placements: DataType.Packed<{ one: CFrame; maybe?: CFrame; list: CFrame[] }>; variants: DataType.Packed<{ kind: "a"; x?: string } | { kind: "b" }>; holder: DataType.Packed<{ shape: { id: 1; n: number } | { id: 2; flag: boolean }; three: { t: "x" } | { t: "y" } | { t: "z" } }>; }
-			export const s = createBinarySerializer<T>();`,
+			export const s = createCodec<T>();`,
 		);
 		expect(errors).toEqual([]);
 	});
 
 	test("the generated code for a buffer passes the type check", () => {
 		const errors = typeErrorsOfGeneratedCode(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			interface T { alone: buffer; member: buffer | string; maybe?: buffer; list: buffer[]; }
-			export const s = createBinarySerializer<T>();`,
+			export const s = createCodec<T>();`,
 		);
 		expect(errors).toEqual([]);
 	});
 
 	test("the generated code for a shape of every common kind passes the type check", () => {
 		const errors = typeErrorsOfGeneratedCode(
-			`import { DataType, createBinarySerializer } from "@rbxts/surge";
+			`import { DataType, createCodec } from "@rbxts/surge";
 			interface Everything {
 				n: number; w: DataType.u16; b: boolean; s: string; o?: string;
 				list: number[]; map: Map<string, number>; set: Set<string>; record: Record<string, boolean>;
@@ -574,7 +625,7 @@ describe("transform generated code", () => {
 				colors: ColorSequence; numbers: NumberSequence; part: Instance;
 				flags: DataType.Packed<{ p: boolean; q: boolean }>;
 			}
-			export const s = createBinarySerializer<Everything>();`,
+			export const s = createCodec<Everything>();`,
 		);
 		expect(errors).toEqual([]);
 	});
@@ -586,9 +637,9 @@ describe("transform generated code", () => {
 		// comments have to move with it.
 		const { printed, cleanup } = runTransform(
 			`//!optimize 2
-			import { createBinarySerializer } from "@rbxts/surge";
+			import { createCodec } from "@rbxts/surge";
 			interface P { x: number; }
-			const s = createBinarySerializer<P>();`,
+			const s = createCodec<P>();`,
 		);
 		try {
 			expect(printed.indexOf("//!optimize 2")).toBeLessThan(
@@ -605,8 +656,8 @@ describe("transform generated code", () => {
 		// comments are attached to is the one they have to be taken off.
 		const { printed, cleanup } = runTransform(
 			`//!optimize 2
-			const s = createBinarySerializer<P>();
-			import { createBinarySerializer } from "@rbxts/surge";
+			const s = createCodec<P>();
+			import { createCodec } from "@rbxts/surge";
 			interface P { x: number; }`,
 		);
 		try {
@@ -623,9 +674,9 @@ describe("transform generated code", () => {
 		const { printed, cleanup } = runTransform(
 			`//!native
 			// What this file is for.
-			import { createBinarySerializer } from "@rbxts/surge";
+			import { createCodec } from "@rbxts/surge";
 			interface P { x: number; }
-			const s = createBinarySerializer<P>();`,
+			const s = createCodec<P>();`,
 		);
 		try {
 			expect(printed.indexOf("//!native")).toBeLessThan(printed.indexOf("// What this file is for."));
@@ -638,12 +689,12 @@ describe("transform generated code", () => {
 	});
 });
 
-describe("transform checks option", () => {
-	test("checks: true emits the bounds checks, and the same shape without them does not", () => {
-		const source = `import { createBinarySerializer } from "@rbxts/surge";
+describe("transform readChecks option", () => {
+	test("readChecks: true emits the bounds checks, and the same shape without them does not", () => {
+		const source = `import { createCodec } from "@rbxts/surge";
 			interface P { x: number; list: Array<number>; }
-			const guarded = createBinarySerializer<P>({ checks: true });
-			const plain = createBinarySerializer<P>();`;
+			const guarded = createCodec<P>({ readChecks: true });
+			const plain = createCodec<P>();`;
 		const { printed, diagnostics, cleanup } = runTransform(source);
 		try {
 			expect(diagnostics).toHaveLength(0);
@@ -658,29 +709,29 @@ describe("transform checks option", () => {
 		}
 	});
 
-	test("generated code with checks still type-checks in a second program", () => {
+	test("generated code with readChecks still type-checks in a second program", () => {
 		expect(
 			typeErrorsOfGeneratedCode(
-				`import { createBinarySerializer } from "@rbxts/surge";
+				`import { createCodec } from "@rbxts/surge";
 				interface P { x: number; list: Array<string>; map: Map<string, number>; tag: "a" | "b"; }
-				const s = createBinarySerializer<P>({ checks: true });`,
+				const s = createCodec<P>({ readChecks: true });`,
 			),
 		).toEqual([]);
 	});
 
 	// The value decides what is emitted, so it cannot be one the game works out
 	// as it runs; defaulting it to false would leave the boundary unchecked.
-	test("a checks value that is not a literal reports a diagnostic", () => {
-		const source = `import { createBinarySerializer } from "@rbxts/surge";
+	test("a readChecks value that is not a literal reports a diagnostic", () => {
+		const source = `import { createCodec } from "@rbxts/surge";
 			interface P { x: number; }
 			declare const untrusted: boolean;
-			const s = createBinarySerializer<P>({ checks: untrusted });`;
+			const s = createCodec<P>({ readChecks: untrusted });`;
 		const { printed, diagnostics, cleanup } = runTransform(source);
 		try {
 			expect(diagnostics).toHaveLength(1);
 			expect(diagnostics[0].messageText).toContain('must be written as "true" or "false"');
 			expect(diagnostics[0].start).toBe(source.indexOf("untrusted }"));
-			expect(printed).toContain("createBinarySerializer<P>({ checks: untrusted })");
+			expect(printed).toContain("createCodec<P>({ readChecks: untrusted })");
 		} finally {
 			cleanup();
 		}
@@ -688,29 +739,29 @@ describe("transform checks option", () => {
 
 	test("an unknown option reports a diagnostic", () => {
 		const { diagnostics, cleanup } = runTransform(
-			`import { createBinarySerializer } from "@rbxts/surge";
+			`import { createCodec } from "@rbxts/surge";
 			interface P { x: number; }
-			const s = createBinarySerializer<P>({ checks: true, ...{} });`,
+			const s = createCodec<P>({ readChecks: true, ...{} });`,
 		);
 		try {
 			expect(diagnostics).toHaveLength(1);
-			expect(diagnostics[0].messageText).toContain('options take "checks" and "writeChecks"');
+			expect(diagnostics[0].messageText).toContain('options take "readChecks" and "writeChecks"');
 		} finally {
 			cleanup();
 		}
 	});
 
 	// There is no read path to check, so accepting it would say otherwise.
-	test("checks on createSerializer reports a diagnostic", () => {
+	test("readChecks on createSerializer reports a diagnostic", () => {
 		const { diagnostics, cleanup } = runTransform(
 			`import { createSerializer } from "@rbxts/surge";
 			interface P { x: number; }
-			const s = createSerializer<P>({ checks: true });`,
+			const s = createSerializer<P>({ readChecks: true });`,
 		);
 		try {
 			expect(diagnostics).toHaveLength(1);
 			expect(diagnostics[0].messageText).toContain(
-				'createSerializer() has no read side, so it takes no "checks"',
+				'createSerializer() has no read side, so it takes no "readChecks"',
 			);
 		} finally {
 			cleanup();
@@ -720,10 +771,10 @@ describe("transform checks option", () => {
 
 describe("transform writeChecks option", () => {
 	test("writeChecks: true emits the write-side checks, and the same shape without them does not", () => {
-		const source = `import { DataType, createBinarySerializer } from "@rbxts/surge";
+		const source = `import { DataType, createCodec } from "@rbxts/surge";
 			interface P { name: DataType.Length<string, DataType.u8>; code: DataType.Length<string, 4>; }
-			const guarded = createBinarySerializer<P>({ writeChecks: true });
-			const plain = createBinarySerializer<P>();`;
+			const guarded = createCodec<P>({ writeChecks: true });
+			const plain = createCodec<P>();`;
 		const { printed, diagnostics, cleanup } = runTransform(source);
 		try {
 			expect(diagnostics).toHaveLength(0);

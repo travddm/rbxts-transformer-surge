@@ -35,12 +35,12 @@ describe("resolveFactoryName", () => {
 
 	test("follows a re-export/alias through to the real declaration", () => {
 		const { checker, sourceFile, cleanup } = createFixtureProgram(
-			`import { createBinarySerializer as make } from "@rbxts/surge"; make<number>();`,
+			`import { createCodec as make } from "@rbxts/surge"; make<number>();`,
 			{ surge: true },
 		);
 		try {
 			const call = findCall(sourceFile, "make");
-			expect(resolveFactoryName(ts, checker, call.expression)).toBe("createBinarySerializer");
+			expect(resolveFactoryName(ts, checker, call.expression)).toBe("createCodec");
 		} finally {
 			cleanup();
 		}

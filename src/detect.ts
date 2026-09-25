@@ -3,8 +3,8 @@ import * as path from "path";
 
 import type ts from "typescript";
 
-const FACTORY_NAMES = new Set(["createSerializer", "createDeserializer", "createBinarySerializer"]);
-export type FactoryName = "createSerializer" | "createDeserializer" | "createBinarySerializer";
+const FACTORY_NAMES = new Set(["createCodec", "createSerializer", "createDeserializer"]);
+export type FactoryName = "createCodec" | "createSerializer" | "createDeserializer";
 
 const packageNameCache = new Map<string, string | undefined>();
 
@@ -116,27 +116,31 @@ export function resolveFactoryName(
 }
 
 /**
- * Whether the result `@rbxts/surge` declares for this call site's `serialize`
- * is a table with a `blobs` array rather than the buffer alone: its
- * `Serialized<T>` resolved for the call's type argument (Runtime API 3.6 in
- * docs/specs/runtime-api.md in the surge repo). The package's type decides the
- * shape, because the caller's code is checked against it. A result with no
- * `blobs` property, such as a `buffer`, has no array.
+ * Whether the `Serialized<T>` `@rbxts/surge` declares for this call site is
+ * a table with a `blobs` array rather than the buffer alone, resolved for the
+ * call's type argument (Runtime API 3.6 in docs/specs/runtime-api.md in the
+ * surge repo). It is read from what `serialize` returns, or, for
+ * `createDeserializer`, from what `deserialize` takes. The package's type
+ * decides the shape, because the caller's code is checked against it. A type
+ * with no `blobs` property, such as a `buffer`, has no array.
  */
-export function declaredResultCarriesBlobs(
+export function declaredSerializedCarriesBlobs(
 	typescript: typeof ts,
 	checker: ts.TypeChecker,
 	node: ts.CallExpression,
 	factoryName: FactoryName,
 ): boolean {
-	if (factoryName === "createDeserializer") {
-		return false;
-	}
 	const returned = checker.getTypeAtLocation(node);
-	const serializeSymbol = factoryName === "createSerializer" ? undefined : returned.getProperty("serialize");
-	const serialize = serializeSymbol ? checker.getTypeOfSymbolAtLocation(serializeSymbol, node) : returned;
-	const result = serialize.getCallSignatures()[0]?.getReturnType();
-	const blobs = result?.getProperty("blobs");
+	let serialized: ts.Type | undefined;
+	if (factoryName === "createDeserializer") {
+		const input = returned.getCallSignatures()[0]?.getParameters()[0];
+		serialized = input && checker.getTypeOfSymbolAtLocation(input, node);
+	} else {
+		const serializeSymbol = factoryName === "createCodec" ? returned.getProperty("serialize") : undefined;
+		const serialize = serializeSymbol ? checker.getTypeOfSymbolAtLocation(serializeSymbol, node) : returned;
+		serialized = serialize.getCallSignatures()[0]?.getReturnType();
+	}
+	const blobs = serialized?.getProperty("blobs");
 	if (!blobs) {
 		return false;
 	}

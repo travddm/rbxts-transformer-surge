@@ -25,7 +25,7 @@ export interface FixtureOptions {
 	 * real `@rbxts/surge`, which lives in a separate repository -- see
 	 * Package boundaries in surge's docs/coding-standards.md) to the program under the
 	 * `@rbxts/surge` package name, so `DataType.*`, `Packed<T>`, and the
-	 * `createSerializer`/`createDeserializer`/`createBinarySerializer`
+	 * `createCodec`/`createSerializer`/`createDeserializer`
 	 * factories can appear in fixture source and be resolved by
 	 * `detect.ts`'s package-identity check.
 	 */
@@ -56,7 +56,9 @@ export function createFixtureProgram(source: string, options: FixtureOptions = {
 		module: ts.ModuleKind.CommonJS,
 		moduleResolution: ts.ModuleResolutionKind.Node10,
 		baseUrl: FIXTURES_DIR,
-		paths: options.surge ? { "@rbxts/surge": ["rbxts-surge/index"] } : undefined,
+		paths: options.surge
+			? { "@rbxts/surge": ["rbxts-surge/index"], "@rbxts/surge/*": ["rbxts-surge/*"] }
+			: undefined,
 	};
 	if (options.roblox || options.surge) {
 		compilerOptions.noLib = true;

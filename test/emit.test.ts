@@ -800,7 +800,7 @@ describe("Emitter write-side checks", () => {
 			const output = emitSnapshot(field, new Map(), options);
 			return output.slice(output.indexOf("// read")).replace(/([a-z])[0-9]+/g, "$1");
 		};
-		expect(read({ checks: true, writeChecks: true })).toBe(read({ checks: true }));
+		expect(read({ readChecks: true, writeChecks: true })).toBe(read({ readChecks: true }));
 	});
 });
 
@@ -835,9 +835,9 @@ describe("Emitter bit sets", () => {
 });
 
 describe("Emitter read-side checks", () => {
-	/** The read half of `field` emitted with `checks: true`. */
+	/** The read half of `field` emitted with `readChecks: true`. */
 	function checkedRead(field: Field): string {
-		const output = emitSnapshot(field, new Map(), { checks: true });
+		const output = emitSnapshot(field, new Map(), { readChecks: true });
 		return output.slice(output.indexOf("// read"));
 	}
 
@@ -848,7 +848,7 @@ describe("Emitter read-side checks", () => {
 	});
 
 	// The default is what the read path has always been: no branch per read.
-	test("checks off emits no branch and no message", () => {
+	test("readChecks off emits no branch and no message", () => {
 		for (const field of [
 			{ kind: "num", width: "u32" } as Field,
 			{ kind: "array", element: { kind: "num", width: "u8" } } as Field,
@@ -934,7 +934,7 @@ describe("Emitter read-side checks", () => {
 	});
 
 	test("the input length is read once per deserialize", () => {
-		const emitter = new Emitter(ts, ts.factory, new Map(), { checks: true });
+		const emitter = new Emitter(ts, ts.factory, new Map(), { readChecks: true });
 		emitter.beginFunction();
 		emitter.readField({ kind: "num", width: "u8" }, []);
 		expect(printNodes(emitter.readStateDecls())).toContain("__surge_inputLength");
