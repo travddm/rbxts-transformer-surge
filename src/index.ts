@@ -238,8 +238,15 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 
 				const readStatements: ts.Statement[] = [];
 				let resultExpr: ts.Expression | undefined;
+				// Under `readChecks`, the two locals that hold the input's parts once
+				// its shape is checked. Declared ahead of the body, so they count
+				// against its locals (Transformer 5.8).
+				let checkedInput: { table: ts.Identifier; buffer: ts.Identifier } | undefined;
 				if (needsRead) {
 					emitter.beginFunction();
+					if (options.readChecks) {
+						checkedInput = { table: emitter.fresh("inputTable"), buffer: emitter.fresh("inputBuffer") };
+					}
 					resultExpr = emitter.readField(rootField, readStatements);
 				}
 
@@ -251,7 +258,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				// costs an empty one; a blob it misses would be dropped by a caller
 				// that follows the type, so that is a diagnostic.
 				const serializedCarriesBlobs = declaredSerializedCarriesBlobs(typescript, checker, node, factoryName);
-				if (usesBlobs && !serializedCarriesBlobs) {
+				if (usesBlobs && serializedCarriesBlobs === false) {
 					report(
 						node,
 						`"${checker.typeToString(type)}" holds a value that goes into "blobs", but the result type ` +
@@ -303,6 +310,9 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				};
 
 				const buildDeserialize = (): ts.ArrowFunction => {
+					if (checkedInput) {
+						return buildCheckedDeserialize(checkedInput);
+					}
 					// `deserialize` takes what `serialize` returned. A shape that reads
 					// neither bytes nor blobs, such as one made only of literals, reads
 					// nothing of it; an underscore keeps the parameter from failing a
@@ -357,6 +367,114 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 						undefined,
 						undefined,
 						[inputParam],
+						undefined,
+						f.createToken(typescript.SyntaxKind.EqualsGreaterThanToken),
+						f.createBlock(readBody, true),
+					);
+				};
+
+				/**
+				 * Under `readChecks`, `deserialize` takes `unknown`, so a caller can
+				 * pass what a remote delivered without checking it first (Runtime API
+				 * 3.14). It accepts either form `serialize` returns, whichever one
+				 * `Serialized<T>` is: the call site's declared type cannot say which
+				 * at a `createDeserializer`, and a table's `buffer` reads as the
+				 * buffer alone would. A buffer given for a shape that reads a blob
+				 * raises at that blob (Runtime API 4.6).
+				 */
+				const buildCheckedDeserialize = (locals: {
+					table: ts.Identifier;
+					buffer: ts.Identifier;
+				}): ts.ArrowFunction => {
+					const input = f.createIdentifier("input");
+					const typeIs = (value: ts.Expression, tag: string) =>
+						emitter.callLocal("typeIs", [value, f.createStringLiteral(tag)]);
+					const tablePresent = f.createBinaryExpression(
+						locals.table,
+						typescript.SyntaxKind.ExclamationEqualsEqualsToken,
+						f.createIdentifier("undefined"),
+					);
+					const unknownProperty = (name: string) =>
+						f.createPropertySignature(
+							undefined,
+							name,
+							f.createToken(typescript.SyntaxKind.QuestionToken),
+							f.createKeywordTypeNode(typescript.SyntaxKind.UnknownKeyword),
+						);
+					const readBody: ts.Statement[] = [
+						emitter.constStatement(
+							locals.table,
+							f.createConditionalExpression(
+								typeIs(input, "table"),
+								f.createToken(typescript.SyntaxKind.QuestionToken),
+								f.createAsExpression(
+									input,
+									f.createTypeLiteralNode([unknownProperty("buffer"), unknownProperty("blobs")]),
+								),
+								f.createToken(typescript.SyntaxKind.ColonToken),
+								f.createIdentifier("undefined"),
+							),
+						),
+						emitter.constStatement(
+							locals.buffer,
+							f.createConditionalExpression(
+								tablePresent,
+								f.createToken(typescript.SyntaxKind.QuestionToken),
+								f.createPropertyAccessExpression(locals.table, "buffer"),
+								f.createToken(typescript.SyntaxKind.ColonToken),
+								input,
+							),
+						),
+						emitter.throwIf(
+							f.createLogicalOr(
+								f.createLogicalNot(typeIs(locals.buffer, "buffer")),
+								f.createParenthesizedExpression(
+									f.createLogicalAnd(
+										tablePresent,
+										f.createLogicalNot(
+											typeIs(f.createPropertyAccessExpression(locals.table, "blobs"), "table"),
+										),
+									),
+								),
+							),
+							"deserialize was given neither a buffer nor a table of a buffer and a blobs array",
+						),
+						...emitter.beginReadStatements(locals.buffer),
+					];
+					if (usesBlobs) {
+						readBody.push(
+							f.createExpressionStatement(
+								surgeCall("beginReadBlobs", [
+									f.createAsExpression(
+										f.createPropertyAccessChain(
+											locals.table,
+											f.createToken(typescript.SyntaxKind.QuestionDotToken),
+											"blobs",
+										),
+										f.createUnionTypeNode([
+											f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
+											f.createKeywordTypeNode(typescript.SyntaxKind.UndefinedKeyword),
+										]),
+									),
+								]),
+							),
+						);
+					}
+					readBody.push(...readStatements);
+					readBody.push(f.createReturnStatement(f.createAsExpression(resultExpr!, typeArgumentNode)));
+					return f.createArrowFunction(
+						undefined,
+						undefined,
+						[
+							f.createParameterDeclaration(
+								undefined,
+								undefined,
+								input,
+								undefined,
+								f.createKeywordTypeNode(typescript.SyntaxKind.UnknownKeyword),
+								undefined,
+							),
+						],
 						undefined,
 						f.createToken(typescript.SyntaxKind.EqualsGreaterThanToken),
 						f.createBlock(readBody, true),

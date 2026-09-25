@@ -74,11 +74,11 @@ export type Serialized<T> = MayCarryBlobs<T> extends true ? { buffer: buffer; bl
 
 export type Serializer<in out T> = (value: T) => Serialized<T>;
 
-export type Deserializer<in out T> = (input: Serialized<T>) => T;
+export type Deserializer<in out T, in Input = Serialized<T>> = (input: Input) => T;
 
-export interface Codec<in out T> {
+export interface Codec<in out T, in Input = Serialized<T>> {
 	serialize: Serializer<T>;
-	deserialize: Deserializer<T>;
+	deserialize: Deserializer<T, Input>;
 }
 
 function notConfigured(): never {
@@ -90,7 +90,9 @@ export interface CodecOptions {
 	readonly writeChecks?: boolean;
 }
 
-export function createCodec<T>(options?: CodecOptions): Codec<T> {
+export function createCodec<T>(options: CodecOptions & { readonly readChecks: true }): Codec<T, unknown>;
+export function createCodec<T>(options?: CodecOptions): Codec<T>;
+export function createCodec<T>(options?: CodecOptions): Codec<T, unknown> {
 	return notConfigured();
 }
 
@@ -98,6 +100,8 @@ export function createSerializer<T>(options?: Pick<CodecOptions, "writeChecks">)
 	return notConfigured();
 }
 
-export function createDeserializer<T>(options?: Pick<CodecOptions, "readChecks">): Deserializer<T> {
+export function createDeserializer<T>(options: { readonly readChecks: true }): Deserializer<T, unknown>;
+export function createDeserializer<T>(options?: Pick<CodecOptions, "readChecks">): Deserializer<T>;
+export function createDeserializer<T>(options?: Pick<CodecOptions, "readChecks">): Deserializer<T, unknown> {
 	return notConfigured();
 }

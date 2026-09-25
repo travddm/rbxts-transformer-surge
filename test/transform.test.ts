@@ -719,6 +719,55 @@ describe("transform readChecks option", () => {
 		).toEqual([]);
 	});
 
+	test("readChecks makes deserialize take unknown and check what it was given", () => {
+		const source = `import { createCodec } from "@rbxts/surge";
+			interface P { x: number; }
+			const guarded = createCodec<P>({ readChecks: true });
+			const plain = createCodec<P>();`;
+		const { printed, diagnostics, cleanup } = runTransform(source);
+		try {
+			expect(diagnostics).toHaveLength(0);
+			const [guardedHalf, plainHalf] = printed.split("const plain =");
+			expect(guardedHalf).toContain("deserialize: (input: unknown) => {");
+			expect(guardedHalf).toContain("@rbxts/surge: deserialize was given neither a buffer nor a table");
+			expect(plainHalf).toContain("deserialize: (input: buffer) => {");
+		} finally {
+			cleanup();
+		}
+	});
+
+	// `createDeserializer`'s declared input is `unknown` under `readChecks`, so
+	// it cannot say whether `Serialized<T>` has `blobs`; a blob in the walk is
+	// then no diagnostic.
+	test.each([
+		["no blob", "interface T { v: number; }"],
+		["a blob", "interface T { v: number; part?: Instance; }"],
+		["nothing to read", `interface T { kind: "only"; }`],
+	])("a caller passing unknown to a readChecks deserialize of %s passes the type check", (_name, declarations) => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { createCodec, createDeserializer } from "@rbxts/surge";
+			${declarations}
+			const codec = createCodec<T>({ readChecks: true });
+			const read = createDeserializer<T>({ readChecks: true });
+			export function receive(input: unknown): T {
+				return codec.deserialize(codec.serialize(read(input)));
+			}`,
+		);
+		expect(errors).toEqual([]);
+	});
+
+	test("without readChecks, deserialize does not take unknown", () => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { createCodec } from "@rbxts/surge";
+			interface T { v: number; }
+			const codec = createCodec<T>();
+			export function receive(input: unknown): T {
+				return codec.deserialize(input);
+			}`,
+		);
+		expect(errors).toHaveLength(1);
+	});
+
 	// The value decides what is emitted, so it cannot be one the game works out
 	// as it runs; defaulting it to false would leave the boundary unchecked.
 	test("a readChecks value that is not a literal reports a diagnostic", () => {
