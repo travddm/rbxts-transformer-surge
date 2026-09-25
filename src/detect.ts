@@ -117,12 +117,11 @@ export function resolveFactoryName(
 
 /**
  * Whether the result `@rbxts/surge` declares for this call site's `serialize`
- * has a `blobs` array: its `Serialized<T>` resolved for the call's type
- * argument (Runtime API 3.6 in docs/specs/runtime-api.md in the surge repo).
- * The package's type decides the shape, because the caller's code is checked
- * against it. A `blobs` declared `undefined`, or not declared, is no array. A
- * package whose result always declares one, as before `Serialized<T>`, gets
- * one on every call site.
+ * is a table with a `blobs` array rather than the buffer alone: its
+ * `Serialized<T>` resolved for the call's type argument (Runtime API 3.6 in
+ * docs/specs/runtime-api.md in the surge repo). The package's type decides the
+ * shape, because the caller's code is checked against it. A result with no
+ * `blobs` property, such as a `buffer`, has no array.
  */
 export function declaredResultCarriesBlobs(
 	typescript: typeof ts,

@@ -70,8 +70,7 @@ type PartCarriesBlobs<T, Seen extends unknown[]> = T extends string | number | b
 									: false
 							: true;
 
-export type Serialized<T> =
-	MayCarryBlobs<T> extends true ? { buffer: buffer; blobs: Array<defined> } : { buffer: buffer; blobs?: undefined };
+export type Serialized<T> = MayCarryBlobs<T> extends true ? { buffer: buffer; blobs: Array<defined> } : buffer;
 
 export interface Serializer<in out T> {
 	serialize: (value: T) => Serialized<T>;

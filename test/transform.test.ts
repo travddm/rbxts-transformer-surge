@@ -51,8 +51,9 @@ describe("transform (end-to-end)", () => {
 			for (const name of ["beginWriteBlobs", "finishWriteBlobs", "beginReadBlobs"]) {
 				expect(printed).not.toContain(name);
 			}
-			// `Serialized<P>` declares no array, so the result has none.
+			// `Serialized<P>` is the buffer alone.
 			expect(printed).not.toContain("blobs:");
+			expect(printed).toContain("return __surge_finishWrite(__surge_scratch, __surge_cursor);");
 			// Nothing reads the parameter, so its name keeps a consumer's
 			// `noUnusedParameters` quiet.
 			expect(printed).toContain("_inputBlobs");
@@ -399,18 +400,21 @@ describe("transform generated code", () => {
 	});
 
 	// Checked after the transform, a variable holds the generated code's own
-	// type, so its result must still have the `blobs` a caller reads.
+	// type, so its result must still be what `Serialized<T>` declares.
 	test.each([
-		["no blob", "interface T { v: number; }"],
-		["a blob", "interface T { part: Instance; }"],
-	])("a caller reading blobs off a result with %s passes the type check", (_name, declarations) => {
+		["no blob", "interface T { v: number; }", "return s.deserialize(s.serialize(value));"],
+		[
+			"a blob",
+			"interface T { part: Instance; }",
+			"const { buffer, blobs } = s.serialize(value); return s.deserialize(buffer, blobs);",
+		],
+	])("a caller of a result with %s passes the type check", (_name, declarations, body) => {
 		const errors = typeErrorsOfGeneratedCode(
 			`import { createBinarySerializer } from "@rbxts/surge";
 			${declarations}
 			const s = createBinarySerializer<T>();
 			export function send(value: T): T {
-				const { buffer, blobs } = s.serialize(value);
-				return s.deserialize(buffer, blobs);
+				${body}
 			}`,
 		);
 		expect(errors).toEqual([]);

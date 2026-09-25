@@ -245,16 +245,17 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 
 				const usesBlobs = emitter.usedImports.has("pushBlob") || emitter.usedImports.has("nextBlob");
 
-				// The package's `Serialized<T>` decides whether the result has a
-				// `blobs` array. It says so wherever it cannot tell, which costs an
-				// empty array; a blob it misses would be dropped by a caller that
-				// follows the type, so that is a diagnostic.
+				// The package's `Serialized<T>` decides whether the result is the
+				// buffer alone or a table with a `blobs` array. It gives the array
+				// wherever it cannot tell, which costs an empty one; a blob it misses
+				// would be dropped by a caller that follows the type, so that is a
+				// diagnostic.
 				const resultCarriesBlobs = declaredResultCarriesBlobs(typescript, checker, node, factoryName);
 				if (needsWrite && usesBlobs && !resultCarriesBlobs) {
 					report(
 						node,
 						`"${checker.typeToString(type)}" holds a value that goes into "blobs", but the result type ` +
-							`@rbxts/surge declares for it has no "blobs". The two disagree, which is a surge bug; ` +
+							`@rbxts/surge declares for it is the buffer alone. The two disagree, which is a surge bug; ` +
 							`please report it with this type.`,
 					);
 					return node;
@@ -268,50 +269,24 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 						writeBody.push(f.createExpressionStatement(surgeCall("beginWriteBlobs", [])));
 					}
 					writeBody.push(...writeStatements);
-					const resultProperties = [f.createPropertyAssignment("buffer", emitter.finishWriteExpression())];
-					if (usesBlobs) {
-						resultProperties.push(f.createPropertyAssignment("blobs", surgeCall("finishWriteBlobs", [])));
-					} else if (resultCarriesBlobs) {
-						// The declared result has an array that this shape never
-						// fills. Asserted, because an empty array literal is `never[]`.
-						resultProperties.push(
-							f.createPropertyAssignment(
-								"blobs",
-								f.createAsExpression(
+					const bytes = emitter.finishWriteExpression();
+					let result: ts.Expression = bytes;
+					if (usesBlobs || resultCarriesBlobs) {
+						// A shape the declared result gives an array but that never fills
+						// one returns it empty. Asserted, because an empty array literal is
+						// `never[]`.
+						const blobs = usesBlobs
+							? surgeCall("finishWriteBlobs", [])
+							: f.createAsExpression(
 									f.createArrayLiteralExpression([]),
 									f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
-								),
-							),
+								);
+						result = f.createObjectLiteralExpression(
+							[f.createPropertyAssignment("buffer", bytes), f.createPropertyAssignment("blobs", blobs)],
+							false,
 						);
 					}
-					const result = f.createObjectLiteralExpression(resultProperties, false);
-					writeBody.push(
-						f.createReturnStatement(
-							usesBlobs || resultCarriesBlobs
-								? result
-								: // roblox-ts type-checks the generated code again after the
-									// transform, where the literal alone types as `{ buffer: buffer }`
-									// and a caller's `result.blobs` does not exist. The assertion
-									// gives it the declared shape and emits nothing.
-									f.createAsExpression(
-										result,
-										f.createTypeLiteralNode([
-											f.createPropertySignature(
-												undefined,
-												"buffer",
-												undefined,
-												f.createTypeReferenceNode("buffer"),
-											),
-											f.createPropertySignature(
-												undefined,
-												"blobs",
-												f.createToken(typescript.SyntaxKind.QuestionToken),
-												f.createKeywordTypeNode(typescript.SyntaxKind.UndefinedKeyword),
-											),
-										]),
-									),
-						),
-					);
+					writeBody.push(f.createReturnStatement(result));
 					// An arrow function, not `createFunctionExpression`: roblox-ts treats a
 					// function expression assigned as an object-literal property as a method
 					// and injects an implicit `self` parameter, which would silently break
