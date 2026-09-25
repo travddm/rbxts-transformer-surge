@@ -737,9 +737,10 @@ describe("transform readChecks option", () => {
 		}
 	});
 
-	// The shape checked is the `Serialized<T>` the call site declares, read
-	// from `deserialize`'s first call signature, so it holds for a shape whose
-	// declared table the walk never fills as well.
+	// The shape checked is the `Serialized<T>` the call site declares: read from
+	// `serialize`'s result, or at a `createDeserializer` call site from
+	// `deserialize`'s first call signature. It holds for a shape whose declared
+	// table the walk never fills as well.
 	test.each([
 		["createCodec", "a blob", "interface P { x: number; part: Instance; }", true],
 		["createDeserializer", "a blob", "interface P { x: number; part: Instance; }", true],
@@ -763,9 +764,8 @@ describe("transform readChecks option", () => {
 		}
 	});
 
-	// `createDeserializer`'s declared input is `unknown` under `readChecks`, so
-	// it cannot say whether `Serialized<T>` has `blobs`; a blob in the walk is
-	// then no diagnostic.
+	// Under `readChecks`, `deserialize`'s second call signature takes `unknown`,
+	// so a caller can pass what a remote delivered without a cast.
 	test.each([
 		["no blob", "interface T { v: number; }"],
 		["a blob", "interface T { v: number; part?: Instance; }"],
