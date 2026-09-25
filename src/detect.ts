@@ -122,25 +122,21 @@ export function resolveFactoryName(
  * surge repo). It is read from what `serialize` returns, or, for
  * `createDeserializer`, from what `deserialize` takes. The package's type
  * decides the shape, because the caller's code is checked against it. A type
- * with no `blobs` property, such as a `buffer`, has no array.
- *
- * `undefined` where the declared type does not say: a `createDeserializer`
- * under `readChecks`, whose `deserialize` takes `unknown` (Runtime API 3.14).
+ * with no `blobs` property, such as a `buffer`, has no array. Under
+ * `readChecks`, `deserialize` also takes `unknown`, in a second call
+ * signature; the first still takes `Serialized<T>` (Runtime API 3.14).
  */
 export function declaredSerializedCarriesBlobs(
 	typescript: typeof ts,
 	checker: ts.TypeChecker,
 	node: ts.CallExpression,
 	factoryName: FactoryName,
-): boolean | undefined {
+): boolean {
 	const returned = checker.getTypeAtLocation(node);
 	let serialized: ts.Type | undefined;
 	if (factoryName === "createDeserializer") {
 		const input = returned.getCallSignatures()[0]?.getParameters()[0];
 		serialized = input && checker.getTypeOfSymbolAtLocation(input, node);
-		if (serialized && (serialized.flags & typescript.TypeFlags.Unknown) !== 0) {
-			return undefined;
-		}
 	} else {
 		const serializeSymbol = factoryName === "createCodec" ? returned.getProperty("serialize") : undefined;
 		const serialize = serializeSymbol ? checker.getTypeOfSymbolAtLocation(serializeSymbol, node) : returned;

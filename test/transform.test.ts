@@ -729,8 +729,35 @@ describe("transform readChecks option", () => {
 			expect(diagnostics).toHaveLength(0);
 			const [guardedHalf, plainHalf] = printed.split("const plain =");
 			expect(guardedHalf).toContain("deserialize: (input: unknown) => {");
-			expect(guardedHalf).toContain("@rbxts/surge: deserialize was given neither a buffer nor a table");
+			expect(guardedHalf).toContain('if (!typeIs(input, "buffer")) {');
+			expect(guardedHalf).toContain("@rbxts/surge: deserialize was given something other than a buffer");
 			expect(plainHalf).toContain("deserialize: (input: buffer) => {");
+		} finally {
+			cleanup();
+		}
+	});
+
+	// The shape checked is the `Serialized<T>` the call site declares, read
+	// from `deserialize`'s first call signature, so it holds for a shape whose
+	// declared table the walk never fills as well.
+	test.each([
+		["createCodec", "a blob", "interface P { x: number; part: Instance; }", true],
+		["createDeserializer", "a blob", "interface P { x: number; part: Instance; }", true],
+		["createDeserializer", "a declared table it never fills", `interface P { _nominal_P: "p"; x: number; }`, false],
+	])("a readChecks %s of %s requires the table", (factory, _name, declaration, readsBlobs) => {
+		const { printed, diagnostics, cleanup } = runTransform(
+			`import { ${factory} } from "@rbxts/surge";
+			${declaration}
+			const s = ${factory}<P>({ readChecks: true });`,
+		);
+		try {
+			expect(diagnostics).toHaveLength(0);
+			expect(printed).toContain('if (!typeIs(input, "table")) {');
+			expect(printed).toContain(
+				"deserialize was given something other than a table of a buffer and a blobs array",
+			);
+			expect(printed).not.toContain('if (!typeIs(input, "buffer")) {');
+			expect(printed.includes("__surge_beginReadBlobs(")).toBe(readsBlobs);
 		} finally {
 			cleanup();
 		}

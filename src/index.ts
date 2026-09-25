@@ -236,29 +236,30 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					emitter.writeField(rootField, f.createIdentifier("value"), writeStatements);
 				}
 
+				// The package's `Serialized<T>` decides whether `serialize` returns,
+				// and `deserialize` takes, the buffer alone or a table with a
+				// `blobs` array. It gives the array wherever it cannot tell, which
+				// costs an empty one; a blob it misses would be dropped by a caller
+				// that follows the type, so that is a diagnostic below.
+				const serializedCarriesBlobs = declaredSerializedCarriesBlobs(typescript, checker, node, factoryName);
+
 				const readStatements: ts.Statement[] = [];
 				let resultExpr: ts.Expression | undefined;
-				// Under `readChecks`, the two locals that hold the input's parts once
-				// its shape is checked. Declared ahead of the body, so they count
+				// Under `readChecks`, the two locals that hold a table input's parts
+				// once its shape is checked. Declared ahead of the body, so they count
 				// against its locals (Transformer 5.8).
-				let checkedInput: { table: ts.Identifier; buffer: ts.Identifier } | undefined;
+				let tableParts: { buffer: ts.Identifier; blobs: ts.Identifier } | undefined;
 				if (needsRead) {
 					emitter.beginFunction();
-					if (options.readChecks) {
-						checkedInput = { table: emitter.fresh("inputTable"), buffer: emitter.fresh("inputBuffer") };
+					if (options.readChecks && serializedCarriesBlobs) {
+						tableParts = { buffer: emitter.fresh("inputBuffer"), blobs: emitter.fresh("inputBlobs") };
 					}
 					resultExpr = emitter.readField(rootField, readStatements);
 				}
 
 				const usesBlobs = emitter.usedImports.has("pushBlob") || emitter.usedImports.has("nextBlob");
 
-				// The package's `Serialized<T>` decides whether `serialize` returns,
-				// and `deserialize` takes, the buffer alone or a table with a
-				// `blobs` array. It gives the array wherever it cannot tell, which
-				// costs an empty one; a blob it misses would be dropped by a caller
-				// that follows the type, so that is a diagnostic.
-				const serializedCarriesBlobs = declaredSerializedCarriesBlobs(typescript, checker, node, factoryName);
-				if (usesBlobs && serializedCarriesBlobs === false) {
+				if (usesBlobs && !serializedCarriesBlobs) {
 					report(
 						node,
 						`"${checker.typeToString(type)}" holds a value that goes into "blobs", but the result type ` +
@@ -310,8 +311,8 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				};
 
 				const buildDeserialize = (): ts.ArrowFunction => {
-					if (checkedInput) {
-						return buildCheckedDeserialize(checkedInput);
+					if (options.readChecks) {
+						return buildCheckedDeserialize();
 					}
 					// `deserialize` takes what `serialize` returned. A shape that reads
 					// neither bytes nor blobs, such as one made only of literals, reads
@@ -376,88 +377,67 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				/**
 				 * Under `readChecks`, `deserialize` takes `unknown`, so a caller can
 				 * pass what a remote delivered without checking it first (Runtime API
-				 * 3.14). It accepts either form `serialize` returns, whichever one
-				 * `Serialized<T>` is: the call site's declared type cannot say which
-				 * at a `createDeserializer`, and a table's `buffer` reads as the
-				 * buffer alone would. A buffer given for a shape that reads a blob
-				 * raises at that blob (Runtime API 4.6).
+				 * 3.14). Before the body runs, it rejects anything that is not the
+				 * `Serialized<T>` the call site declares: a buffer, or a table whose
+				 * `buffer` is a buffer and whose `blobs` is a table (Runtime API 4.11).
 				 */
-				const buildCheckedDeserialize = (locals: {
-					table: ts.Identifier;
-					buffer: ts.Identifier;
-				}): ts.ArrowFunction => {
+				const buildCheckedDeserialize = (): ts.ArrowFunction => {
 					const input = f.createIdentifier("input");
-					const typeIs = (value: ts.Expression, tag: string) =>
-						emitter.callLocal("typeIs", [value, f.createStringLiteral(tag)]);
-					const tablePresent = f.createBinaryExpression(
-						locals.table,
-						typescript.SyntaxKind.ExclamationEqualsEqualsToken,
-						f.createIdentifier("undefined"),
-					);
-					const unknownProperty = (name: string) =>
-						f.createPropertySignature(
-							undefined,
-							name,
-							f.createToken(typescript.SyntaxKind.QuestionToken),
-							f.createKeywordTypeNode(typescript.SyntaxKind.UnknownKeyword),
-						);
-					const readBody: ts.Statement[] = [
-						emitter.constStatement(
-							locals.table,
-							f.createConditionalExpression(
-								typeIs(input, "table"),
-								f.createToken(typescript.SyntaxKind.QuestionToken),
-								f.createAsExpression(
-									input,
-									f.createTypeLiteralNode([unknownProperty("buffer"), unknownProperty("blobs")]),
-								),
-								f.createToken(typescript.SyntaxKind.ColonToken),
-								f.createIdentifier("undefined"),
-							),
-						),
-						emitter.constStatement(
-							locals.buffer,
-							f.createConditionalExpression(
-								tablePresent,
-								f.createToken(typescript.SyntaxKind.QuestionToken),
-								f.createPropertyAccessExpression(locals.table, "buffer"),
-								f.createToken(typescript.SyntaxKind.ColonToken),
-								input,
-							),
-						),
-						emitter.throwIf(
-							f.createLogicalOr(
-								f.createLogicalNot(typeIs(locals.buffer, "buffer")),
-								f.createParenthesizedExpression(
-									f.createLogicalAnd(
-										tablePresent,
-										f.createLogicalNot(
-											typeIs(f.createPropertyAccessExpression(locals.table, "blobs"), "table"),
+					const isNot = (value: ts.Expression, tag: string) =>
+						f.createLogicalNot(emitter.callLocal("typeIs", [value, f.createStringLiteral(tag)]));
+					const readBody: ts.Statement[] = [];
+					if (tableParts) {
+						const message =
+							"deserialize was given something other than a table of a buffer and a blobs array";
+						const part = (local: ts.Identifier, name: string) =>
+							emitter.constStatement(
+								local,
+								f.createPropertyAccessExpression(
+									f.createParenthesizedExpression(
+										f.createAsExpression(
+											input,
+											f.createTypeLiteralNode([
+												f.createPropertySignature(
+													undefined,
+													name,
+													f.createToken(typescript.SyntaxKind.QuestionToken),
+													f.createKeywordTypeNode(typescript.SyntaxKind.UnknownKeyword),
+												),
+											]),
 										),
 									),
+									name,
 								),
-							),
-							"deserialize was given neither a buffer nor a table of a buffer and a blobs array",
-						),
-						...emitter.beginReadStatements(locals.buffer),
-					];
-					if (usesBlobs) {
+							);
 						readBody.push(
-							f.createExpressionStatement(
-								surgeCall("beginReadBlobs", [
-									f.createAsExpression(
-										f.createPropertyAccessChain(
-											locals.table,
-											f.createToken(typescript.SyntaxKind.QuestionDotToken),
-											"blobs",
-										),
-										f.createUnionTypeNode([
-											f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
-											f.createKeywordTypeNode(typescript.SyntaxKind.UndefinedKeyword),
-										]),
-									),
-								]),
+							emitter.throwIf(isNot(input, "table"), message),
+							part(tableParts.buffer, "buffer"),
+							part(tableParts.blobs, "blobs"),
+							emitter.throwIf(
+								f.createLogicalOr(isNot(tableParts.buffer, "buffer"), isNot(tableParts.blobs, "table")),
+								message,
 							),
+							...emitter.beginReadStatements(tableParts.buffer),
+						);
+						if (usesBlobs) {
+							readBody.push(
+								f.createExpressionStatement(
+									surgeCall("beginReadBlobs", [
+										f.createAsExpression(
+											tableParts.blobs,
+											f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
+										),
+									]),
+								),
+							);
+						}
+					} else {
+						readBody.push(
+							emitter.throwIf(
+								isNot(input, "buffer"),
+								"deserialize was given something other than a buffer",
+							),
+							...emitter.beginReadStatements(input),
 						);
 					}
 					readBody.push(...readStatements);
