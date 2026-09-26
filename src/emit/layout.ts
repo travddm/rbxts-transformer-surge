@@ -154,7 +154,6 @@ export function minBytes(field: Field): number {
 	}
 }
 
-/** `pos`, or `pos + offset` past the first component of a fixed-size value. */
 /**
  * The bytes a field always reserves, in one piece, from one
  * `alloc`/`readAlloc` at the start of its emission -- or `undefined`
