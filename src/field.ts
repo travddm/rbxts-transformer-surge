@@ -8,8 +8,9 @@
  * A new kind needs a case in each switch over `kind` in the emitter:
  * `writeField` in emit/write.ts and `readField` in emit/read.ts, which mirror
  * each other; `minBytes` and `fixedBytes` in emit/layout.ts; `fieldToTypeNode`
- * in emit/types.ts; and `guardFor` in emit/write.ts if it can be a
- * `guardedUnion` variant. Its bytes are a statement in the surge repo's
+ * in emit/types.ts; `guardFor` in emit/write.ts if it can be a
+ * `guardedUnion` variant; and `measure` in emit/size.ts if a value of it can
+ * be sized without a loop. Its bytes are a statement in the surge repo's
  * docs/specs/wire-format.md and a fact in tests/src/tests/bytes.spec.ts there.
  */
 export type NumWidth = "f32" | "f64" | "u8" | "u16" | "u24" | "u32" | "i8" | "i16" | "i24" | "i32";

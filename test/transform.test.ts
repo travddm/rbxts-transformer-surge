@@ -51,9 +51,10 @@ describe("transform (end-to-end)", () => {
 			for (const name of ["beginWriteBlobs", "finishWriteBlobs", "beginReadBlobs"]) {
 				expect(printed).not.toContain(name);
 			}
-			// `Serialized<P>` is the buffer alone.
+			// `Serialized<P>` is the buffer alone, and `P` is sized exactly, so
+			// that buffer is the one `serialize` wrote into.
 			expect(printed).not.toContain("blobs:");
-			expect(printed).toContain("return __surge_finishWrite(__surge_scratch, __surge_cursor);");
+			expect(printed).toContain("return __surge_scratch;");
 			// `deserialize` takes the buffer `serialize` returns.
 			expect(printed).toContain("deserialize: (input: buffer) => {");
 		} finally {
@@ -227,11 +228,13 @@ describe("transform (end-to-end)", () => {
 	test("createCodec<T>() becomes an IIFE and injects a sorted @rbxts/surge import", () => {
 		const { printed, cleanup } = runTransform(
 			`import { createCodec } from "@rbxts/surge";
-			interface P { x: number; }
+			interface P { tags: string[]; }
 			const s = createCodec<P>();`,
 		);
 		try {
-			// No blob field, so nothing from the blob side channel is imported.
+			// No blob field, so nothing from the blob side channel is imported. An
+			// array of strings keeps the scratch buffer (Transformer 5.20), which
+			// imports both of its helpers.
 			expect(printed).toContain(
 				'import { finishWrite as __surge_finishWrite, grow as __surge_grow } from "@rbxts/surge/out/abi";',
 			);
@@ -261,7 +264,7 @@ describe("transform (end-to-end)", () => {
 	test("multiple call sites in one file share a single injected import statement", () => {
 		const { printed, cleanup } = runTransform(
 			`import { createSerializer, createDeserializer } from "@rbxts/surge";
-			interface P { x: number; }
+			interface P { tags: string[]; }
 			const s = createSerializer<P>();
 			const d = createDeserializer<P>();`,
 		);
@@ -366,7 +369,7 @@ describe("transform injected imports", () => {
 	test("a user declaration named after a @rbxts/surge export is neither redeclared nor called by the generated code", () => {
 		const { printed, cleanup } = runTransform(
 			`import { createSerializer } from "@rbxts/surge";
-			interface P { x: number; }
+			interface P { tags: string[]; }
 			function grow(): void {}
 			const s = createSerializer<P>();`,
 		);
@@ -619,6 +622,32 @@ describe("transform generated code", () => {
 		}
 	});
 
+	test("the generated code of a shape written exactly passes the type check", () => {
+		// Every kind the size is read from: counted and exact strings, buffers
+		// and arrays, a tuple with a string and a rest, optionals, keys that are
+		// not identifiers, a packed region with optionals in it, and a blob.
+		const source = (options: string) => `import { DataType, createCodec } from "@rbxts/surge";
+			interface T {
+				name: string; nick?: string; code: DataType.Length<string, 4>;
+				bytes: buffer; maybeBytes?: buffer;
+				list: DataType.u16[]; triple: DataType.Length<DataType.u8[], 3>;
+				pair: [DataType.u8, string, ...DataType.i16[]];
+				inner?: { label: string; at: Vector3 }; "odd-key"?: string; 0: string;
+				flags: DataType.Packed<{ on: boolean; count?: DataType.u8; text?: string }>;
+				anything: unknown;
+			}
+			export const s = createCodec<T>(${options});`;
+		const { printed, cleanup } = runTransform(source(""));
+		try {
+			expect(printed).toContain("const __surge_scratch = buffer.create(");
+		} finally {
+			cleanup();
+		}
+		for (const options of ["", "{ writeChecks: true }", "{ readChecks: true }"]) {
+			expect(typeErrorsOfGeneratedCode(source(options))).toEqual([]);
+		}
+	});
+
 	test("the generated code for a buffer passes the type check", () => {
 		const errors = typeErrorsOfGeneratedCode(
 			`import { createCodec } from "@rbxts/surge";
@@ -653,7 +682,7 @@ describe("transform generated code", () => {
 		const { printed, cleanup } = runTransform(
 			`//!optimize 2
 			import { createCodec } from "@rbxts/surge";
-			interface P { x: number; }
+			interface P { tags: string[]; }
 			const s = createCodec<P>();`,
 		);
 		try {
@@ -673,7 +702,7 @@ describe("transform generated code", () => {
 			`//!optimize 2
 			const s = createCodec<P>();
 			import { createCodec } from "@rbxts/surge";
-			interface P { x: number; }`,
+			interface P { tags: string[]; }`,
 		);
 		try {
 			expect(printed.indexOf("//!optimize 2")).toBeLessThan(
@@ -690,7 +719,7 @@ describe("transform generated code", () => {
 			`//!native
 			// What this file is for.
 			import { createCodec } from "@rbxts/surge";
-			interface P { x: number; }
+			interface P { tags: string[]; }
 			const s = createCodec<P>();`,
 		);
 		try {

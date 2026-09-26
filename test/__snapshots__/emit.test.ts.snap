@@ -155,6 +155,69 @@ for (const _i10 of $range(1, count8)) {
 return result9;"
 `;
 
+exports[`Emitter exact sizing a shape of fixed size is created at that size, with no capacity check and no copy 1`] = `
+"const __surge_scratch = buffer.create(16);
+let __surge_cursor = 0;
+const pos1 = __surge_cursor;
+__surge_cursor = pos1 + 16;
+buffer.writeu32(__surge_scratch, pos1, value.id);
+const pos2 = pos1 + 4;
+buffer.writef32(__surge_scratch, pos2, value.at.X);
+buffer.writef32(__surge_scratch, pos2 + 4, value.at.Y);
+buffer.writef32(__surge_scratch, pos2 + 8, value.at.Z);
+return __surge_scratch;"
+`;
+
+exports[`Emitter exact sizing a size is its lengths and counts, read from the value, and one constant 1`] = `
+"const __surge_scratch = buffer.create(value.list.size() * 2 + value.name.size() + (value.nick !== undefined ? value.nick!.size() + 4 : 0) + (value.pair.size() - 1) + 12);
+let __surge_cursor = 0;
+const arr1 = value.list;
+const pos2 = __surge_cursor;
+__surge_cursor = pos2 + 4;
+buffer.writeu32(__surge_scratch, pos2, arr1.size());
+const pos4 = __surge_cursor;
+__surge_cursor = pos4 + arr1.size() * 2;
+let element5 = pos4;
+for (const item3 of arr1) {
+    buffer.writeu16(__surge_scratch, element5, item3);
+    element5 += 2;
+}
+const s6 = value.name;
+const len7 = s6.size();
+const pos8 = __surge_cursor;
+__surge_cursor = pos8 + (len7 + 4);
+buffer.writeu32(__surge_scratch, pos8, len7);
+buffer.writestring(__surge_scratch, pos8 + 4, s6);
+const opt9 = value.nick;
+const pos10 = __surge_cursor;
+__surge_cursor = pos10 + 1;
+buffer.writeu8(__surge_scratch, pos10, opt9 !== undefined ? 1 : 0);
+if (opt9 !== undefined) {
+    const s11 = opt9;
+    const len12 = s11.size();
+    const pos13 = __surge_cursor;
+    __surge_cursor = pos13 + (len12 + 4);
+    buffer.writeu32(__surge_scratch, pos13, len12);
+    buffer.writestring(__surge_scratch, pos13 + 4, s11);
+}
+const tup14 = value.pair;
+const pos15 = __surge_cursor;
+__surge_cursor = pos15 + 1;
+buffer.writeu8(__surge_scratch, pos15, tup14[0]);
+const pos16 = __surge_cursor;
+__surge_cursor = pos16 + 1;
+buffer.writeu8(__surge_scratch, pos16, tup14.size() - 1);
+for (let i17 = 1; i17 < tup14.size(); i17++) {
+    const pos18 = __surge_cursor;
+    __surge_cursor = pos18 + 1;
+    buffer.writeu8(__surge_scratch, pos18, tup14[i17] as unknown as number);
+}
+const pos19 = __surge_cursor;
+__surge_cursor = pos19 + 1;
+buffer.writeu8(__surge_scratch, pos19, value.tag);
+return __surge_scratch;"
+`;
+
 exports[`Emitter packed boolean padding packed booleans write one computed byte per group instead of per-bit packBit calls 1`] = `
 "// write
 const pos1 = __surge_cursor;

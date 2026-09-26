@@ -233,6 +233,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				const writeStatements: ts.Statement[] = [];
 				if (needsWrite) {
 					emitter.beginFunction();
+					emitter.sizeExactly(rootField, f.createIdentifier("value"));
 					emitter.writeField(rootField, f.createIdentifier("value"), writeStatements);
 				}
 

@@ -1,14 +1,16 @@
 /**
  * The emitter's entry point. The rest of `src/emit/` is internal to it:
  * `context.ts` holds the state and the plumbing, `layout.ts` answers what a
- * `Field` costs, `types.ts` builds the types the generated code declares, and
- * `write.ts`/`read.ts` hold one function per `Field` kind for their side.
+ * `Field` costs, `size.ts` what a value of it writes, `types.ts` builds the
+ * types the generated code declares, and `write.ts`/`read.ts` hold one
+ * function per `Field` kind for their side.
  */
 import type ts from "typescript";
 
 import type { Field } from "../field";
 import { EmitContext } from "./context";
 import { readField, readObjectInline } from "./read";
+import { exactSize } from "./size";
 import { fieldToTypeNode, objectShapeTypeNode } from "./types";
 import { writeField, writeObjectInline } from "./write";
 
@@ -27,6 +29,18 @@ export { ABI_MODULE, importAlias } from "./constants";
 export class Emitter extends EmitContext {
 	public writeField(field: Field, value: ts.Expression, out: ts.Statement[]): void {
 		writeField(this, field, value, out);
+	}
+
+	/**
+	 * Has `serialize` write exactly (Transformer 5.20 in
+	 * docs/specs/transformer.md in the surge repo) when `exactSize` can size
+	 * `field`, and leaves it on the scratch buffer otherwise.
+	 */
+	public sizeExactly(field: Field, value: ts.Expression): void {
+		const size = exactSize(this, field, value);
+		if (size !== undefined) {
+			this.writeExactly(size);
+		}
 	}
 
 	public readField(field: Field, out: ts.Statement[]): ts.Expression {

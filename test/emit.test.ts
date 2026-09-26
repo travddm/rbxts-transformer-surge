@@ -701,6 +701,94 @@ describe("Emitter counted bytes", () => {
 	});
 });
 
+describe("Emitter exact sizing", () => {
+	/** The body of `serialize` for `field`, as the transform assembles it: opening, writes, and the value returned. */
+	function serializeBody(field: Field, options: EmitOptions = {}): string {
+		const emitter = new Emitter(ts, ts.factory, new Map(), options);
+		const value = ts.factory.createIdentifier("value");
+		const body: ts.Statement[] = [];
+		emitter.beginFunction();
+		emitter.sizeExactly(field, value);
+		emitter.writeField(field, value, body);
+		return printNodes([
+			...emitter.beginWriteStatements(),
+			...body,
+			ts.factory.createReturnStatement(emitter.finishWriteExpression()),
+			...emitter.writeStateDecls(),
+		]);
+	}
+
+	const u8: Field = { kind: "num", width: "u8" };
+
+	test("a shape of fixed size is created at that size, with no capacity check and no copy", () => {
+		const output = serializeBody({
+			kind: "object",
+			fields: [
+				{ name: "id", field: { kind: "num", width: "u32" } },
+				{ name: "at", field: { kind: "vector3" } },
+			],
+		});
+		expect(output).toMatchSnapshot();
+		expect(output).toContain("const __surge_scratch = buffer.create(16);");
+		expect(output).toContain("let __surge_cursor = 0;");
+		expect(output).not.toContain("__surge_capacity");
+		expect(output).not.toContain("__surge_grow");
+		expect(output).toMatch(/return __surge_scratch;$/m);
+	});
+
+	test("a size is its lengths and counts, read from the value, and one constant", () => {
+		const output = serializeBody({
+			kind: "object",
+			fields: [
+				{ name: "list", field: { kind: "array", element: { kind: "num", width: "u16" } } },
+				{ name: "name", field: { kind: "str" } },
+				{ name: "nick", field: { kind: "optional", inner: { kind: "str" }, packed: false } },
+				{ name: "pair", field: { kind: "tuple", fixed: [u8], rest: u8, length: "u8" } },
+				{ name: "tag", field: u8 },
+			],
+		});
+		expect(output).toMatchSnapshot();
+		// 4 (list count) + 4 (name count) + 1 (nick flag) + 1 + 1 (pair) + 1 (tag).
+		expect(output).toContain(
+			"buffer.create(value.list.size() * 2 + value.name.size() + (value.nick !== undefined ? value.nick!.size() + 4 : 0) + (value.pair.size() - 1) + 12)",
+		);
+	});
+
+	test("a packed region counts as its bytes, and a packed optional adds no flag byte", () => {
+		const output = serializeBody({
+			kind: "object",
+			fields: [
+				{ name: "a", field: { kind: "bool", packed: true } },
+				{ name: "n", field: { kind: "optional", inner: { kind: "num", width: "i16" }, packed: true } },
+			],
+		});
+		expect(output).toContain("buffer.create((value.n !== undefined ? 2 : 0) + 1)");
+	});
+
+	test.each([
+		["an array of strings", { kind: "array", element: { kind: "str" } } as Field],
+		["a dict", { kind: "dict", key: u8, value: undefined, source: "set" } as Field],
+		[
+			"a tagged union",
+			{
+				kind: "taggedUnion",
+				tagKey: "kind",
+				variants: [
+					{ tagValue: "a", fields: [] },
+					{ tagValue: "b", fields: [{ name: "n", field: u8 }] },
+				],
+			} as Field,
+		],
+		["a packed CFrame", { kind: "cframe", packed: true } as Field],
+	])("%s keeps the scratch buffer", (_label, field) => {
+		const output = serializeBody(field);
+		expect(output).not.toContain("const __surge_scratch");
+		expect(output).toContain("let __surge_scratch = buffer.create(64);");
+		expect(output).toContain("__surge_capacity");
+		expect(output).toContain("__surge_finishWrite(");
+	});
+});
+
 // Luau allows 200 registers per function; 100 `const [buf, pos]` pairs in one
 // scope exceed it (see Transformer 5.8 in docs/specs/transformer.md in the surge repo).
 describe("Emitter local-register ceiling", () => {

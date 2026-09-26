@@ -103,6 +103,12 @@ export abstract class EmitContext {
 	 */
 	public usesWriteBytes = false;
 	public usesReadBytes = false;
+	/**
+	 * The size `serialize` creates its result at, for a shape `exactSize`
+	 * could size (Transformer 5.20 in docs/specs/transformer.md in the surge
+	 * repo), or `undefined` for one that writes into the scratch buffer.
+	 */
+	private writeSize: ts.Expression | undefined;
 	protected readonly generatedHelpers = new Set<string>();
 	protected readonly helperDecls: ts.Statement[] = [];
 	private readonly enumTables = new Map<string, { itemsName: string; indexName: string }>();
@@ -185,14 +191,27 @@ export abstract class EmitContext {
 	}
 
 	/**
+	 * Has the `serialize` about to be emitted create its result at `size`
+	 * and write into it (Transformer 5.20 in docs/specs/transformer.md in the
+	 * surge repo): its buffer and its cursor are locals of `serialize`,
+	 * which count toward its budget, and no reservation checks the capacity.
+	 * Called after {@link beginFunction} and before the body is emitted.
+	 */
+	public writeExactly(size: ts.Expression): void {
+		this.writeSize = size;
+		this.liveLocals += 2;
+	}
+
+	/**
 	 * The scratch buffer, its capacity and the write cursor, for the head of
 	 * the closure the serializer is emitted into. One buffer per serializer,
 	 * not one per place: two serializers can then be in flight at once, which a
 	 * single module-scoped buffer never allowed -- unless either carries a blob
 	 * field, because the blob side channel is still module state in the package.
+	 * A `serialize` that writes exactly declares its own instead.
 	 */
 	public writeStateDecls(): ts.Statement[] {
-		if (!this.usesWriteBytes) {
+		if (!this.usesWriteBytes || this.writeSize !== undefined) {
 			return [];
 		}
 		return [
@@ -218,9 +237,25 @@ export abstract class EmitContext {
 		return decls;
 	}
 
-	/** Opens a `serialize()`: everything written last call is forgotten by moving one number. */
+	/**
+	 * Opens a `serialize()`: everything written last call is forgotten by
+	 * moving one number, or, writing exactly, the result is created at its
+	 * size and the cursor starts at its head.
+	 */
 	public beginWriteStatements(): ts.Statement[] {
-		return this.usesWriteBytes ? [this.assign(CURSOR, this.num(0))] : [];
+		if (!this.usesWriteBytes) {
+			return [];
+		}
+		if (this.writeSize !== undefined) {
+			return [
+				this.constStatement(
+					this.factory.createIdentifier(SCRATCH),
+					this.bufferCall("create", [this.writeSize]),
+				),
+				this.letStatement(CURSOR, this.num(0)),
+			];
+		}
+		return [this.assign(CURSOR, this.num(0))];
 	}
 
 	/** Opens a `deserialize()`, taking the buffer the caller passed. */
@@ -240,12 +275,16 @@ export abstract class EmitContext {
 	/**
 	 * Closes a `serialize()`. A shape that reserved nothing -- every field a
 	 * blob -- has no scratch buffer to copy out of, and an empty result is what
-	 * the copy would have produced.
+	 * the copy would have produced. One that writes exactly returns the buffer
+	 * it wrote into.
 	 */
 	public finishWriteExpression(): ts.Expression {
-		return this.usesWriteBytes
-			? this.call("finishWrite", [this.factory.createIdentifier(SCRATCH), this.factory.createIdentifier(CURSOR)])
-			: this.bufferCall("create", [this.num(0)]);
+		if (!this.usesWriteBytes) {
+			return this.bufferCall("create", [this.num(0)]);
+		}
+		return this.writeSize !== undefined
+			? this.factory.createIdentifier(SCRATCH)
+			: this.call("finishWrite", [this.factory.createIdentifier(SCRATCH), this.factory.createIdentifier(CURSOR)]);
 	}
 
 	public letStatement(name: string, initializer: ts.Expression): ts.Statement {
@@ -533,12 +572,19 @@ export abstract class EmitContext {
 			return { buf: f.createIdentifier(READ_BUFFER), pos, statements };
 		}
 		this.usesWriteBytes = true;
+		const take = [
+			this.constStatement(pos, f.createIdentifier(CURSOR)),
+			this.assign(CURSOR, f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, sizeExpr)),
+		];
+		// The buffer was created at the size of everything this call writes.
+		if (this.writeSize !== undefined) {
+			return { buf: f.createIdentifier(SCRATCH), pos, statements: take };
+		}
 		return {
 			buf: f.createIdentifier(SCRATCH),
 			pos,
 			statements: [
-				this.constStatement(pos, f.createIdentifier(CURSOR)),
-				this.assign(CURSOR, f.createBinaryExpression(pos, this.ts_.SyntaxKind.PlusToken, sizeExpr)),
+				...take,
 				f.createIfStatement(
 					f.createBinaryExpression(
 						f.createIdentifier(CURSOR),
