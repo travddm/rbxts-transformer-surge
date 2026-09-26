@@ -371,10 +371,10 @@ export abstract class EmitContext {
 	/**
 	 * A write loop over `value[from]` up to but not including `value[to]`, for
 	 * a body that indexes the value rather than iterating it. A C-style `for`
-	 * and not `countedLoop`'s `$range`, because roblox-ts applies its own
-	 * 0-to-1 index shift to `value[i]` and a `$range` index is already 1-based.
-	 * The exact form's bound is a numeric literal, which roblox-ts can prove is
-	 * an integer, so this still lowers to a numeric `for`.
+	 * counts from 0 as TypeScript's `value[i]` does, where a body in
+	 * `countedLoop`'s `$range` subtracts 1 from its index. The exact form's
+	 * bound is a numeric literal, which roblox-ts can prove is an integer, so
+	 * this still lowers to a numeric `for`.
 	 */
 	public indexedLoop(index: ts.Identifier, from: number, to: ts.Expression, body: ts.Statement[]): ts.Statement {
 		const f = this.factory;
@@ -390,8 +390,7 @@ export abstract class EmitContext {
 	}
 
 	/**
-	 * A read loop that runs `count` times, over a body that never reads the
-	 * index.
+	 * A read loop whose `index` runs from 1 to `count`.
 	 *
 	 * `$range` is roblox-ts's numeric-for macro: `for (const i of $range(1,
 	 * count))` lowers to `for i = 1, count do`. A plain
@@ -400,7 +399,7 @@ export abstract class EmitContext {
 	 * (`transformForStatement.js`'s `isProbablyInteger`), and a
 	 * `buffer.readu32` result is just `number`, so it lowers to a `while`
 	 * loop with a `_shouldIncrement` flag that every element read pays for.
-	 * The index name starts with `_` because the body never uses it, and
+	 * A body that never reads the index names it with a leading `_`, because
 	 * TypeScript reports an unused `for`-`of` variable under `noUnusedLocals`
 	 * unless it does: the generated file is type-checked in the consumer's
 	 * own project, under the consumer's own options.

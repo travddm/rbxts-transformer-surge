@@ -140,16 +140,19 @@ for (const item3 of arr1) {
 const pos7 = __surge_readCursor;
 __surge_readCursor = pos7 + 4;
 const count8 = buffer.readu32(__surge_input, pos7);
-const result9 = [];
+const result9 = new Array<{
+    a: number;
+    b: number;
+}>(count8);
 const pos11 = __surge_readCursor;
 __surge_readCursor = pos11 + count8 * 3;
 let element12 = pos11;
-for (const _i10 of $range(1, count8)) {
+for (const i10 of $range(1, count8)) {
     const pos13 = element12 + 1;
-    result9.push({
+    result9[i10 - 1] = {
         a: buffer.readu8(__surge_input, element12),
         b: buffer.readu16(__surge_input, pos13)
-    });
+    };
     element12 += 3;
 }
 return result9;"
@@ -379,12 +382,12 @@ for (const item3 of arr1) {
 const pos6 = __surge_readCursor;
 __surge_readCursor = pos6 + 4;
 const count7 = buffer.readu32(__surge_input, pos6);
-const result8 = [];
+const result8 = new Array<number>(count7);
 const pos10 = __surge_readCursor;
 __surge_readCursor = pos10 + count7 * 8;
 let element11 = pos10;
-for (const _i9 of $range(1, count7)) {
-    result8.push(buffer.readf64(__surge_input, element11));
+for (const i9 of $range(1, count7)) {
+    result8[i9 - 1] = buffer.readf64(__surge_input, element11);
     element11 += 8;
 }
 return result8;"
@@ -556,14 +559,14 @@ for (const kp3 of keypoints1) {
 const pos6 = __surge_readCursor;
 __surge_readCursor = pos6 + 1;
 const count7 = buffer.readu8(__surge_input, pos6);
-const keypoints8 = [];
-for (const _i9 of $range(1, count7)) {
+const keypoints8 = new Array<ColorSequenceKeypoint>(count7);
+for (const i9 of $range(1, count7)) {
     const pos10 = __surge_readCursor;
     __surge_readCursor = pos10 + 4;
     const time11 = buffer.readf32(__surge_input, pos10);
     const pos12 = __surge_readCursor;
     __surge_readCursor = pos12 + 3;
-    keypoints8.push(new ColorSequenceKeypoint(time11, new Color3(buffer.readu8(__surge_input, pos12) / 255, buffer.readu8(__surge_input, pos12 + 1) / 255, buffer.readu8(__surge_input, pos12 + 2) / 255)));
+    keypoints8[i9 - 1] = new ColorSequenceKeypoint(time11, new Color3(buffer.readu8(__surge_input, pos12) / 255, buffer.readu8(__surge_input, pos12 + 1) / 255, buffer.readu8(__surge_input, pos12 + 2) / 255));
 }
 return new ColorSequence(keypoints8);"
 `;
@@ -956,14 +959,14 @@ for (const kp3 of keypoints1) {
 const pos6 = __surge_readCursor;
 __surge_readCursor = pos6 + 1;
 const count7 = buffer.readu8(__surge_input, pos6);
-const keypoints8 = [];
-for (const _i9 of $range(1, count7)) {
+const keypoints8 = new Array<NumberSequenceKeypoint>(count7);
+for (const i9 of $range(1, count7)) {
     const pos10 = __surge_readCursor;
     __surge_readCursor = pos10 + 4;
     const time11 = buffer.readf32(__surge_input, pos10);
     const pos12 = __surge_readCursor;
     __surge_readCursor = pos12 + 8;
-    keypoints8.push(new NumberSequenceKeypoint(time11, buffer.readf32(__surge_input, pos12), buffer.readf32(__surge_input, pos12 + 4)));
+    keypoints8[i9 - 1] = new NumberSequenceKeypoint(time11, buffer.readf32(__surge_input, pos12), buffer.readf32(__surge_input, pos12 + 4));
 }
 return new NumberSequence(keypoints8);"
 `;
@@ -1185,18 +1188,18 @@ for (let i6 = 1; i6 < tup1.size(); i6++) {
 }
 
 // read
-const tup8 = [];
+const tup8 = new Array<unknown>(1);
 const pos9 = __surge_readCursor;
 const len10 = buffer.readu32(__surge_input, pos9);
 __surge_readCursor = pos9 + 4 + len10;
-tup8.push(buffer.readstring(__surge_input, pos9 + 4, len10));
+tup8[0] = buffer.readstring(__surge_input, pos9 + 4, len10);
 const pos11 = __surge_readCursor;
 __surge_readCursor = pos11 + 4;
 const count12 = buffer.readu32(__surge_input, pos11);
-for (const _i13 of $range(1, count12)) {
+for (const i13 of $range(1, count12)) {
     const pos14 = __surge_readCursor;
     __surge_readCursor = pos14 + 8;
-    tup8.push(buffer.readf64(__surge_input, pos14));
+    tup8[i13] = buffer.readf64(__surge_input, pos14);
 }
 return tup8 as unknown as [
     string,
@@ -1309,12 +1312,12 @@ function surge_Tree_1_read(): surge_Tree_1_Type {
     const pos6 = __surge_readCursor;
     __surge_readCursor = pos6 + 4;
     const count7 = buffer.readu32(__surge_input, pos6);
-    const result8 = [];
+    const result8 = new Array<number>(count7);
     const pos10 = __surge_readCursor;
     __surge_readCursor = pos10 + count7 * 8;
     let element11 = pos10;
-    for (const _i9 of $range(1, count7)) {
-        result8.push(buffer.readf64(__surge_input, element11));
+    for (const i9 of $range(1, count7)) {
+        result8[i9 - 1] = buffer.readf64(__surge_input, element11);
         element11 += 8;
     }
     return {
@@ -1334,15 +1337,15 @@ const count7 = buffer.readu32(__surge_input, pos6);
 if (count7 * 8 > __surge_inputLength - __surge_readCursor) {
     throw "@rbxts/surge: deserialize found a count larger than the input buffer can hold";
 }
-const result8 = [];
+const result8 = new Array<number>(count7);
 const pos10 = __surge_readCursor;
 __surge_readCursor = pos10 + count7 * 8;
 if (__surge_readCursor > __surge_inputLength) {
     throw "@rbxts/surge: deserialize read past the end of the input buffer";
 }
 let element11 = pos10;
-for (const _i9 of $range(1, count7)) {
-    result8.push(buffer.readf64(__surge_input, element11));
+for (const i9 of $range(1, count7)) {
+    result8[i9 - 1] = buffer.readf64(__surge_input, element11);
     element11 += 8;
 }
 return result8;"

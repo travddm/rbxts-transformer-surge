@@ -626,8 +626,8 @@ describe("Emitter element reservations", () => {
 		});
 		expect(output).toMatchSnapshot();
 		expect(output).toContain("arr1.size() * 3;");
-		// The read waits for the push, so the element moves on after it.
-		expect(loopBody(output, "read")).toMatch(/push\([^]*\);\s+element\d+ \+= 3;\s+\}\s+return /);
+		// The read waits for the store, so the element moves on after it.
+		expect(loopBody(output, "read")).toMatch(/\] = \{[^]*\};\s+element\d+ \+= 3;\s+\}\s+return /);
 	});
 
 	test("the exact form reserves a constant, and a variable-size element still reserves in the loop", () => {
@@ -698,6 +698,46 @@ describe("Emitter counted bytes", () => {
 		expect(countBound).toBeGreaterThan(-1);
 		expect(countBound).toBeLessThan(countRead);
 		expect(bytesBound).toBeGreaterThan(countRead);
+	});
+});
+
+describe("Emitter read tables", () => {
+	const u8: Field = { kind: "num", width: "u8" };
+
+	function readSection(output: string): string {
+		return output.split("// read\n")[1].split("\n\n// ")[0];
+	}
+
+	test("an array's table is created at its count, and each element is stored at its index", () => {
+		const read = readSection(emitSnapshot({ kind: "array", element: { kind: "str" } }));
+		expect(read).toMatch(/const result\d+ = new Array<string>\(count\d+\);/);
+		// roblox-ts adds 1 to the index and folds it into the `- 1`.
+		expect(read).toMatch(/for \(const (i\d+) of \$range\(1, count\d+\)\) \{[^]*result\d+\[\1 - 1\] = /);
+		expect(read).not.toContain("push(");
+	});
+
+	test("the exact form creates its table at the literal count", () => {
+		const read = readSection(emitSnapshot({ kind: "array", element: u8, length: 3 }));
+		expect(read).toMatch(/const result\d+ = new Array<number>\(3\);/);
+	});
+
+	test.each([
+		[0, "i\\d+ - 1"],
+		[1, "i\\d+"],
+		[3, "i\\d+ \\+ 2"],
+	])("a tuple's rest after %i fixed elements is stored past them", (fixedCount, index) => {
+		const fixed = Array.from({ length: fixedCount }, () => u8);
+		const read = readSection(emitSnapshot({ kind: "tuple", fixed, rest: u8 }));
+		expect(read).toMatch(new RegExp(`tup\\d+\\[${index}\\] = `));
+	});
+
+	test("a tuple's fixed elements are stored at their indexes, an absent one included", () => {
+		const optional: Field = { kind: "optional", inner: { kind: "str" }, packed: false };
+		const read = readSection(emitSnapshot({ kind: "tuple", fixed: [u8, optional, u8], rest: undefined }));
+		expect(read).toMatch(/const tup\d+ = new Array<unknown>\(3\);/);
+		for (const k of [0, 1, 2]) {
+			expect(read).toMatch(new RegExp(`tup\\d+\\[${k}\\] = `));
+		}
 	});
 });
 

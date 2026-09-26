@@ -178,20 +178,62 @@ function readRecursiveRef(
 	return ctx.bindSideEffect(ctx.callLocal(`${field.helperName}_read`, []), out);
 }
 
-/** Declares `const <base> = []` and returns its identifier, for a read that fills an array element by element. */
-function arrayLocal(ctx: EmitContext, base: string, out: ts.Statement[]): ts.Identifier {
+/**
+ * Declares `const <base> = new Array<element>(size)`, which roblox-ts compiles
+ * to `table.create(size)`, and returns its identifier, for a read that stores
+ * each element at its index.
+ */
+function arrayLocal(
+	ctx: EmitContext,
+	base: string,
+	element: ts.TypeNode,
+	size: ts.Expression | undefined,
+	out: ts.Statement[],
+): ts.Identifier {
+	const f = ctx.factory;
 	const result = ctx.fresh(base);
-	out.push(ctx.constStatement(result, ctx.factory.createArrayLiteralExpression([])));
+	out.push(
+		ctx.constStatement(
+			result,
+			f.createNewExpression(f.createIdentifier("Array"), [element], size === undefined ? [] : [size]),
+		),
+	);
 	return result;
 }
 
-/** Appends `result.push(<element>)` to `body`. */
-function pushElement(ctx: EmitContext, result: ts.Identifier, element: ts.Expression, body: ts.Statement[]): void {
+/**
+ * Appends `result[index] = <element>` to `body`, with `index` counted from 0
+ * as TypeScript counts it. A store rather than a `push`, which roblox-ts
+ * compiles to `table.insert`: an absent element keeps its index instead of
+ * letting the next element take it, and a table `arrayLocal` created at its
+ * final size is filled without growing.
+ */
+function storeElement(
+	ctx: EmitContext,
+	result: ts.Identifier,
+	index: ts.Expression,
+	element: ts.Expression,
+	body: ts.Statement[],
+): void {
 	const f = ctx.factory;
-	body.push(
-		f.createExpressionStatement(
-			f.createCallExpression(f.createPropertyAccessExpression(result, "push"), undefined, [element]),
-		),
+	body.push(f.createExpressionStatement(f.createAssignment(f.createElementAccessExpression(result, index), element)));
+}
+
+/**
+ * The index, counted from 0, of the element a `countedLoop` reads at `i`,
+ * after `before` elements stored ahead of the loop. roblox-ts adds 1 to an
+ * array index and folds it into a literal it is added to or subtracted from,
+ * so `i - 1` compiles to `result[i]`, and `i + 1` to `result[i + 2]`.
+ */
+function loopIndex(ctx: EmitContext, i: ts.Identifier, before: number): ts.Expression {
+	const shift = before - 1;
+	if (shift === 0) {
+		return i;
+	}
+	return ctx.factory.createBinaryExpression(
+		i,
+		shift < 0 ? ctx.ts_.SyntaxKind.MinusToken : ctx.ts_.SyntaxKind.PlusToken,
+		ctx.num(Math.abs(shift)),
 	);
 }
 
@@ -224,8 +266,8 @@ function readCount(
  * Rejects a count the rest of the payload cannot hold. An element with a
  * minimum size gives a bound in bytes; one that costs nothing (a constant, a
  * blob) has no such bound, so the count itself is capped -- that case is the
- * denial of service, where a short payload declares billions of elements and
- * the loop runs every one.
+ * denial of service, where a short payload declares billions of elements, and
+ * the read creates a table of that size and loops over every one.
  */
 function checkCount(ctx: EmitContext, count: ts.Expression, element: Field, out: ts.Statement[]): void {
 	checkCountOfBytes(ctx, count, minBytes(element), out);
@@ -275,15 +317,16 @@ function checkCountOfBytes(ctx: EmitContext, count: ts.Expression, min: number, 
 
 function readArray(ctx: EmitContext, field: Extract<Field, { kind: "array" }>, out: ts.Statement[]): ts.Expression {
 	const count = readCount(ctx, field.length, field.element, out);
-	const result = arrayLocal(ctx, "result", out);
-	const i = ctx.fresh("_i");
+	const result = arrayLocal(ctx, "result", fieldToTypeNode(ctx, field.element), count, out);
+	const i = ctx.fresh("i");
+	const index = loopIndex(ctx, i, 0);
 	const body: ts.Statement[] = [];
 	const bytes = elementBytes(field.element);
 	if (bytes === undefined) {
-		pushElement(ctx, result, readField(ctx, field.element, body), body);
+		storeElement(ctx, result, index, readField(ctx, field.element, body), body);
 	} else {
 		// One reservation for every element, as the write side makes. The
-		// element's reads may wait for the push, so the position moves on
+		// element's reads may wait for the store, so the position moves on
 		// only after it.
 		const start = ctx.reserveElements("readAlloc", bytes, exactCount(field.length) ?? count, out);
 		let element!: ts.Expression;
@@ -295,7 +338,7 @@ function readArray(ctx: EmitContext, field: Extract<Field, { kind: "array" }>, o
 			},
 			start,
 		);
-		pushElement(ctx, result, element, body);
+		storeElement(ctx, result, index, element, body);
 		body.push(ctx.nextElement(start, bytes));
 	}
 	out.push(ctx.countedLoop(i, count, body));
@@ -303,22 +346,32 @@ function readArray(ctx: EmitContext, field: Extract<Field, { kind: "array" }>, o
 }
 
 function readTuple(ctx: EmitContext, field: Extract<Field, { kind: "tuple" }>, out: ts.Statement[]): ts.Expression {
-	const result = arrayLocal(ctx, "tup", out);
+	// Sized for the fixed elements alone: the rest's count follows them in
+	// the bytes, and the table has to exist before they are stored.
+	const fixedCount = field.fixed.length;
+	const result = arrayLocal(
+		ctx,
+		"tup",
+		ctx.factory.createKeywordTypeNode(ctx.ts_.SyntaxKind.UnknownKeyword),
+		fixedCount === 0 ? undefined : ctx.num(fixedCount),
+		out,
+	);
 	ctx.pushScoped(
-		field.fixed.map((elementField) =>
-			ctx.measure((itemOut) => pushElement(ctx, result, readField(ctx, elementField, itemOut), itemOut)),
+		field.fixed.map((elementField, k) =>
+			ctx.measure((itemOut) =>
+				storeElement(ctx, result, ctx.num(k), readField(ctx, elementField, itemOut), itemOut),
+			),
 		),
 		out,
 	);
 	if (field.rest) {
 		const count = readCount(ctx, field.length, field.rest, out);
-		const i = ctx.fresh("_i");
+		const i = ctx.fresh("i");
 		const body: ts.Statement[] = [];
-		pushElement(ctx, result, readField(ctx, field.rest, body), body);
+		storeElement(ctx, result, loopIndex(ctx, i, fixedCount), readField(ctx, field.rest, body), body);
 		out.push(ctx.countedLoop(i, count, body));
 	}
-	// `result` is inferred as an array of the union of what was pushed,
-	// which is not assignable to a tuple type.
+	// An array of `unknown` is not assignable to a tuple type.
 	return ctx.castTo(result, fieldToTypeNode(ctx, field));
 }
 
@@ -551,17 +604,8 @@ function readSequence(ctx: EmitContext, kind: "ColorSequence" | "NumberSequence"
 	out.push(...statements);
 	const count = ctx.fresh("count");
 	out.push(ctx.constStatement(count, ctx.bufferCall("readu8", [buf, pos])));
-	const keypoints = ctx.fresh("keypoints");
-	out.push(
-		f.createVariableStatement(
-			undefined,
-			f.createVariableDeclarationList(
-				[f.createVariableDeclaration(keypoints, undefined, undefined, f.createArrayLiteralExpression([]))],
-				ctx.ts_.NodeFlags.Const,
-			),
-		),
-	);
-	const i = ctx.fresh("_i");
+	const keypoints = arrayLocal(ctx, "keypoints", f.createTypeReferenceNode(`${kind}Keypoint`), count, out);
+	const i = ctx.fresh("i");
 	const body: ts.Statement[] = [];
 	const { buf: tbuf, pos: tpos, statements: tstmt } = ctx.destructureAlloc("readAlloc", 4);
 	body.push(...tstmt);
@@ -577,11 +621,7 @@ function readSequence(ctx: EmitContext, kind: "ColorSequence" | "NumberSequence"
 		keypointArgs.push(ctx.bufferCall("readf32", [vbuf, ctx.offsetFrom(vpos, 4)]));
 	}
 	const keypoint = f.createNewExpression(f.createIdentifier(`${kind}Keypoint`), undefined, keypointArgs);
-	body.push(
-		f.createExpressionStatement(
-			f.createCallExpression(f.createPropertyAccessExpression(keypoints, "push"), undefined, [keypoint]),
-		),
-	);
+	storeElement(ctx, keypoints, loopIndex(ctx, i, 0), keypoint, body);
 	out.push(ctx.countedLoop(i, count, body));
 	return f.createNewExpression(f.createIdentifier(kind), undefined, [keypoints]);
 }
