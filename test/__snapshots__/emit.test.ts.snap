@@ -1306,6 +1306,40 @@ if (__surge_readCursor > __surge_inputLength) {
 return buffer.readu32(__surge_input, pos2);"
 `;
 
+exports[`Emitter shared reservations a nested object of fixed-size properties joins the run around it 1`] = `
+"// write
+const pos1 = __surge_cursor;
+__surge_cursor = pos1 + 8;
+if (__surge_cursor > __surge_capacity) {
+    __surge_scratch = __surge_grow(__surge_scratch, pos1, __surge_cursor);
+    __surge_capacity = buffer.len(__surge_scratch);
+}
+buffer.writeu32(__surge_scratch, pos1, value.id);
+const pos2 = pos1 + 4;
+buffer.writei16(__surge_scratch, pos2, value.at.x);
+const pos3 = pos1 + 6;
+buffer.writeu8(__surge_scratch, pos3, value.at.inner.y);
+const pos4 = pos1 + 7;
+buffer.writeu8(__surge_scratch, pos4, value.tag);
+
+// read
+const pos5 = __surge_readCursor;
+__surge_readCursor = pos5 + 8;
+const pos6 = pos5 + 4;
+const pos7 = pos5 + 6;
+const pos8 = pos5 + 7;
+return {
+    id: buffer.readu32(__surge_input, pos5),
+    at: {
+        x: buffer.readi16(__surge_input, pos6),
+        inner: {
+            y: buffer.readu8(__surge_input, pos7)
+        }
+    },
+    tag: buffer.readu8(__surge_input, pos8)
+};"
+`;
+
 exports[`Emitter shared reservations consecutive fixed-size fields share one alloc, at their own offsets 1`] = `
 "// write
 const pos1 = __surge_cursor;

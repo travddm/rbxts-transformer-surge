@@ -162,7 +162,10 @@ export function minBytes(field: Field): number {
  * (`str`, `buffer`), a reservation around a branch or a loop
  * (`optional`, `array`, `dict`, the sequences, both unions), one made
  * inside a runtime function (a packed `cframe`) or a generated helper
- * (`object`, `recursiveRef`), or a side-table entry (`blob`).
+ * (an `object` with a `helperName`, `recursiveRef`), or a side-table
+ * entry (`blob`). An inline `object` with no packed region, whose
+ * properties are all fixed-size, is the sum of them: inside a run, each
+ * takes its bytes from the run in turn.
  *
  * Only the fields this admits may share a reservation with their
  * neighbours, because `alloc` order is byte order: anything that
@@ -196,26 +199,57 @@ export function fixedBytes(field: Field): number | undefined {
 			return field.values.length <= 256 ? 1 : 2;
 		case "literalConst":
 			return 0;
+		case "object": {
+			if (field.helperName !== undefined || packedBits(field.fields).length > 0) {
+				return undefined;
+			}
+			let total = 0;
+			for (const entry of field.fields) {
+				const bytes = fixedBytes(entry.field);
+				if (bytes === undefined) {
+					return undefined;
+				}
+				total += bytes;
+			}
+			return total;
+		}
 		default:
 			return undefined;
 	}
 }
 
 /**
+ * How many fields `field` adds to an alloc run: one, or for a nested
+ * object the fields it holds at any depth, since each of those takes a
+ * position of its own from the run.
+ */
+export function runFields(field: Field): number {
+	return field.kind === "object" ? field.fields.reduce((total, entry) => total + runFields(entry.field), 0) : 1;
+}
+
+/**
  * Splits `entries` into the groups one reservation can cover: a maximal
  * run of neighbours `shareable` accepts, or a single entry it does not.
  * A run of one is returned as a group of one, so the caller emits it the
- * way it always did. Runs stop at `ALLOC_RUN_FIELDS` so that one always
- * fits in a block.
+ * way it always did. A run holds at most `ALLOC_RUN_FIELDS` fields, counted
+ * by `runFields` through `fieldOf`, so that it always fits in a block.
  */
-export function allocRuns<T>(entries: ReadonlyArray<T>, shareable: (entry: T) => boolean): Array<Array<T>> {
+export function allocRuns<T>(
+	entries: ReadonlyArray<T>,
+	shareable: (entry: T) => boolean,
+	fieldOf: (entry: T) => Field,
+): Array<Array<T>> {
 	const groups: Array<Array<T>> = [];
+	let lastFields = 0;
 	for (const entry of entries) {
 		const last = groups[groups.length - 1];
-		if (last !== undefined && last.length < ALLOC_RUN_FIELDS && shareable(entry) && shareable(last[0])) {
+		const fields = runFields(fieldOf(entry));
+		if (last !== undefined && lastFields + fields <= ALLOC_RUN_FIELDS && shareable(entry) && shareable(last[0])) {
 			last.push(entry);
+			lastFields += fields;
 		} else {
 			groups.push([entry]);
+			lastFields = fields;
 		}
 	}
 	return groups;

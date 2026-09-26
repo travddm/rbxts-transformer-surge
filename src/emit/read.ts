@@ -761,6 +761,25 @@ function readOptional(
 	return result;
 }
 
+/**
+ * An object read as one table constructor. A tagged union variant's tag comes
+ * first, matching the variant order in `fieldToTypeNode`.
+ */
+function objectLiteral(
+	ctx: EmitContext,
+	props: ReadonlyArray<{ readonly entry: ObjectFieldEntry; readonly expr: ts.Expression }>,
+	tag: { readonly key: FieldKey; readonly value: string | number | boolean } | undefined,
+): ts.Expression {
+	const f = ctx.factory;
+	const properties: ts.ObjectLiteralElementLike[] = tag
+		? [f.createPropertyAssignment(ctx.propertyName(tag.key), ctx.literalValueExpr(tag.value))]
+		: [];
+	for (const { entry, expr } of props) {
+		properties.push(f.createPropertyAssignment(ctx.propertyName(entry), expr));
+	}
+	return f.createObjectLiteralExpression(properties, true);
+}
+
 export function readObjectInline(
 	ctx: EmitContext,
 	fields: ReadonlyArray<ObjectFieldEntry>,
@@ -772,6 +791,16 @@ export function readObjectInline(
 	tag?: { readonly key: FieldKey; readonly value: string | number | boolean },
 ): ts.Expression {
 	const f = ctx.factory;
+	// `fixedBytes` admitted this object into the enclosing run, so it has no
+	// packed region and each property reads the run's next bytes. The reads
+	// are at positions the run declared, so they may wait for the literal.
+	if (ctx.inAllocRun()) {
+		return objectLiteral(
+			ctx,
+			fields.map((entry) => ({ entry, expr: readField(ctx, entry.field, out) })),
+			tag,
+		);
+	}
 	// The packed region is read first and outside the scoped items: every
 	// item that follows, in any block, can need one of its bits.
 	const bits = packedBits(fields);
@@ -794,7 +823,7 @@ export function readObjectInline(
 	// cannot share a reservation; the others may, on the same terms as
 	// the write side.
 	const shareable = (entry: ObjectFieldEntry) => !bitExprs.has(entry) && fixedBytes(entry.field) !== undefined;
-	for (const group of allocRuns(fields, shareable)) {
+	for (const group of allocRuns(fields, shareable, (entry) => entry.field)) {
 		if (group.length > 1) {
 			const total = group.reduce((sum, entry) => sum + fixedBytes(entry.field)!, 0);
 			const props: Array<{ entry: ObjectFieldEntry; expr: ts.Expression }> = [];
@@ -835,16 +864,11 @@ export function readObjectInline(
 	}
 	if (!ctx.needsBlocks()) {
 		ctx.pushScoped(items, out);
-		// The tag first, matching the variant order in `fieldToTypeNode`.
-		const properties: ts.ObjectLiteralElementLike[] = tag
-			? [f.createPropertyAssignment(ctx.propertyName(tag.key), ctx.literalValueExpr(tag.value))]
-			: [];
-		for (const item of items) {
-			for (const { entry, expr } of item.props) {
-				properties.push(f.createPropertyAssignment(ctx.propertyName(entry), expr));
-			}
-		}
-		return f.createObjectLiteralExpression(properties, true);
+		return objectLiteral(
+			ctx,
+			items.flatMap((item) => item.props),
+			tag,
+		);
 	}
 	// A block's locals end with the block, so an object literal after the
 	// blocks can't refer to them: each block assigns its own fields into

@@ -604,6 +604,21 @@ describe("transform generated code", () => {
 		expect(errors).toEqual([]);
 	});
 
+	test("the generated code for runs through nested objects, past the local budget, passes the type check", () => {
+		// Enough nested fields for the object to be emitted in blocks, where a
+		// run's position declared in one block would be out of scope in another.
+		for (const options of ["", "{ readChecks: true }"]) {
+			const errors = typeErrorsOfGeneratedCode(
+				`import { DataType, createCodec } from "@rbxts/surge";
+				type Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+				interface Cell { x: number; y: DataType.u8; at: { z: DataType.i16 } }
+				type T = { [K in \`c\${Digit}\${Digit}\`]: Cell };
+				export const s = createCodec<T>(${options});`,
+			);
+			expect(errors).toEqual([]);
+		}
+	});
+
 	test("the generated code for a buffer passes the type check", () => {
 		const errors = typeErrorsOfGeneratedCode(
 			`import { createCodec } from "@rbxts/surge";

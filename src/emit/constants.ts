@@ -33,10 +33,11 @@ export const WIDTH_BYTES: Record<NumWidth, number> = {
 export const LOCALS_BUDGET = 120;
 export const LOCALS_PER_BLOCK = 32;
 // A run of K fields declares K locals: the position the reservation took, then
-// one more for each field after the first. `pushScoped` cannot split a run,
-// because every field after the first reads the reservation's locals, so a run
-// has to fit in the block `pushScoped` would give it. The bound is one field
-// short of the block, which is one more than a run now needs.
+// one more for each field after the first. A nested object in a run counts as
+// the fields it holds (`runFields` in layout.ts). `pushScoped` cannot split a
+// run, because every field after the first reads the reservation's locals, so
+// a run has to fit in the block `pushScoped` would give it. The bound is one
+// field short of the block, which is one more than a run now needs.
 export const ALLOC_RUN_FIELDS = LOCALS_PER_BLOCK - 1;
 
 /**

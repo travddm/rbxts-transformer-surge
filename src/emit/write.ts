@@ -904,6 +904,14 @@ export function writeObjectInline(
 	value: ts.Expression,
 	out: ts.Statement[],
 ): void {
+	// `fixedBytes` admitted this object into the enclosing run, so it has no
+	// packed region and each property takes the run's next bytes.
+	if (ctx.inAllocRun()) {
+		for (const entry of fields) {
+			writeField(ctx, entry.field, ctx.propertyAccess(value, entry), out);
+		}
+		return;
+	}
 	// The packed region comes first: the read side needs an optional's
 	// presence bit before it reaches that optional's value.
 	const bits = packedBits(fields);
@@ -917,7 +925,7 @@ export function writeObjectInline(
 	const written = fields.filter((entry) => !isAllPackedBits(entry.field));
 	const shareable = (entry: ObjectFieldEntry) =>
 		!bits.some((bit) => bit.entry === entry) && fixedBytes(entry.field) !== undefined;
-	for (const group of allocRuns(written, shareable)) {
+	for (const group of allocRuns(written, shareable, (entry) => entry.field)) {
 		if (group.length > 1) {
 			const total = group.reduce((sum, entry) => sum + fixedBytes(entry.field)!, 0);
 			items.push(

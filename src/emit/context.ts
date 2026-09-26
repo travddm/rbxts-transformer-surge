@@ -641,17 +641,31 @@ export abstract class EmitContext {
 	 * side disagrees with.
 	 */
 	public withAllocRun(fnName: "alloc" | "readAlloc", total: number, body: () => void): void {
-		const saved = this.run;
+		// A nested object in a run takes its bytes from the run field by
+		// field; a run of its own would reserve apart from the enclosing one.
+		if (this.run !== undefined) {
+			throw new Error("surge: an alloc run opened inside another");
+		}
 		const run: AllocRun = { fnName, total, used: 0 };
 		this.run = run;
 		try {
 			body();
 		} finally {
-			this.run = saved;
+			this.run = undefined;
 		}
 		if (run.used !== total) {
 			throw new Error(`surge: an alloc run reserved ${total} bytes and used ${run.used}`);
 		}
+	}
+
+	/**
+	 * Whether a run is open, so that the field being emitted takes its bytes
+	 * from it. A nested object then emits its properties in order, with no
+	 * run and no block of its own: a position declared inside a block would
+	 * be out of scope for the run's later fields.
+	 */
+	public inAllocRun(): boolean {
+		return this.run !== undefined;
 	}
 
 	/** The position `offset` bytes into `slot`, as one addition and not two. */

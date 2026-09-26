@@ -504,6 +504,93 @@ describe("Emitter shared reservations", () => {
 		expect(reservations(output, "write")).toEqual([1, 5]);
 		expect(reservations(output, "read")).toEqual([1, 5]);
 	});
+
+	const u8: Field = { kind: "num", width: "u8" };
+	const u8Fields = (count: number) => Array.from({ length: count }, (_, i) => ({ name: `f${i}`, field: u8 }));
+
+	test("a nested object of fixed-size properties joins the run around it", () => {
+		const output = emitSnapshot({
+			kind: "object",
+			fields: [
+				{ name: "id", field: { kind: "num", width: "u32" } },
+				{
+					name: "at",
+					field: {
+						kind: "object",
+						fields: [
+							{ name: "x", field: { kind: "num", width: "i16" } },
+							{ name: "inner", field: { kind: "object", fields: [{ name: "y", field: u8 }] } },
+						],
+					},
+				},
+				{ name: "tag", field: u8 },
+			],
+		});
+		expect(output).toMatchSnapshot();
+		// 4 + (2 + 1) + 1, reserved once on each side.
+		expect(reservations(output, "write")).toEqual([8]);
+		expect(reservations(output, "read")).toEqual([8]);
+		expect(output).toContain("value.at.inner.y");
+		expect(output).toMatch(/at: \{\s+x: buffer\.readi16\(__surge_input, pos\d+\),\s+inner: \{\s+y: /);
+	});
+
+	test("a nested object with a variable-size property or a packed region ends the run", () => {
+		const withString = emitSnapshot({
+			kind: "object",
+			fields: [
+				{ name: "a", field: u8 },
+				{ name: "inner", field: { kind: "object", fields: [{ name: "s", field: { kind: "str" } }] } },
+				{ name: "b", field: u8 },
+			],
+		});
+		// The 4 is the string's length prefix.
+		expect(reservations(withString, "write")).toEqual([1, 4, 1]);
+		expect(reservations(withString, "read")).toEqual([1, 4, 1]);
+		const withPackedRegion = emitSnapshot({
+			kind: "object",
+			fields: [
+				{ name: "a", field: u8 },
+				{
+					name: "inner",
+					field: {
+						kind: "object",
+						fields: [
+							{ name: "on", field: { kind: "bool", packed: true } },
+							{ name: "n", field: u8 },
+						],
+					},
+				},
+				{ name: "b", field: u8 },
+			],
+		});
+		// The nested object's packed region, then its own field.
+		expect(reservations(withPackedRegion, "write")).toEqual([1, 1, 1, 1]);
+		expect(reservations(withPackedRegion, "read")).toEqual([1, 1, 1, 1]);
+	});
+
+	test("a nested object counts as the fields it holds toward the bound on a run", () => {
+		const nested = (count: number): Field => ({ kind: "object", fields: u8Fields(count) });
+		// 1 + 30 is the bound, so the two share one reservation.
+		const atBound = emitSnapshot({
+			kind: "object",
+			fields: [
+				{ name: "head", field: u8 },
+				{ name: "inner", field: nested(30) },
+			],
+		});
+		expect(reservations(atBound, "write")).toEqual([31]);
+		expect(reservations(atBound, "read")).toEqual([31]);
+		// 1 + 31 is past it, so the nested object reserves on its own.
+		const pastBound = emitSnapshot({
+			kind: "object",
+			fields: [
+				{ name: "head", field: u8 },
+				{ name: "inner", field: nested(31) },
+			],
+		});
+		expect(reservations(pastBound, "write")).toEqual([1, 31]);
+		expect(reservations(pastBound, "read")).toEqual([1, 31]);
+	});
 });
 
 // Luau allows 200 registers per function; 100 `const [buf, pos]` pairs in one
@@ -554,6 +641,27 @@ describe("Emitter local-register ceiling", () => {
 		expect(output.match(/buffer\.writef64/g)).toHaveLength(150);
 		expect(output.match(/buffer\.readf64/g)).toHaveLength(150);
 		expect(output).toMatch(/result\d+\.f149 = buffer\.readf64\(/);
+	});
+
+	test("a run through nested objects stays inside one block", () => {
+		// 50 nested objects of three f64 each: runs of ten, 30 positions each.
+		const output = emitSnapshot({
+			kind: "object",
+			fields: Array.from({ length: 50 }, (_, i) => ({
+				name: `c${i}`,
+				field: {
+					kind: "object",
+					fields: ["x", "y", "z"].map((name) => ({ name, field: { kind: "num", width: "f64" } as Field })),
+				} as Field,
+			})),
+		});
+		expect(output).toMatch(/^\{$/m);
+		expect(maxLocalsInOneScope(output)).toBeLessThanOrEqual(40);
+		expect(reservations(output, "write")).toEqual([240, 240, 240, 240, 240]);
+		expect(reservations(output, "read")).toEqual([240, 240, 240, 240, 240]);
+		expect(output.match(/buffer\.writef64/g)).toHaveLength(150);
+		expect(output.match(/buffer\.readf64/g)).toHaveLength(150);
+		expect(output).toMatch(/result\d+\.c49 = \{/);
 	});
 
 	test("a 150-element tuple is split into blocks the same way", () => {
