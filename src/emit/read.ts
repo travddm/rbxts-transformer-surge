@@ -287,7 +287,26 @@ function readArray(ctx: EmitContext, field: Extract<Field, { kind: "array" }>, o
 	const result = arrayLocal(ctx, "result", out);
 	const i = ctx.fresh("_i");
 	const body: ts.Statement[] = [];
-	pushElement(ctx, result, readField(ctx, field.element, body), body);
+	const bytes = fixedBytes(field.element);
+	if (bytes === undefined || bytes === 0) {
+		pushElement(ctx, result, readField(ctx, field.element, body), body);
+	} else {
+		// One reservation for every element, as the write side makes. The
+		// element's reads may wait for the push, so the position moves on
+		// only after it.
+		const start = ctx.reserveElements("readAlloc", bytes, exactCount(field.length) ?? count, out);
+		let element!: ts.Expression;
+		ctx.withAllocRun(
+			"readAlloc",
+			bytes,
+			() => {
+				element = readField(ctx, field.element, body);
+			},
+			start,
+		);
+		pushElement(ctx, result, element, body);
+		body.push(ctx.nextElement(start, bytes));
+	}
 	out.push(ctx.countedLoop(i, count, body));
 	return result;
 }

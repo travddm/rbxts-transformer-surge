@@ -422,6 +422,9 @@ export abstract class EmitContext {
 			}
 			const offset = run.used;
 			run.used += size;
+			if (offset === 0 && run.pos !== undefined) {
+				return { buf: run.buf!, pos: run.pos, statements: [] };
+			}
 			if (offset === 0) {
 				const first = this.rawDestructureAlloc(fnName, run.total);
 				run.buf = first.buf;
@@ -639,14 +642,22 @@ export abstract class EmitContext {
 	 * that reserves more than the run has left, or leaves bytes unused, is
 	 * an emitter bug and throws rather than compiling to a buffer the read
 	 * side disagrees with.
+	 *
+	 * With `start`, the bytes are already reserved and begin at `start`, so
+	 * the run reserves nothing itself: this is one element of
+	 * {@link reserveElements}.
 	 */
-	public withAllocRun(fnName: "alloc" | "readAlloc", total: number, body: () => void): void {
+	public withAllocRun(fnName: "alloc" | "readAlloc", total: number, body: () => void, start?: ts.Identifier): void {
 		// A nested object in a run takes its bytes from the run field by
 		// field; a run of its own would reserve apart from the enclosing one.
 		if (this.run !== undefined) {
 			throw new Error("surge: an alloc run opened inside another");
 		}
 		const run: AllocRun = { fnName, total, used: 0 };
+		if (start !== undefined) {
+			run.buf = this.factory.createIdentifier(fnName === "alloc" ? SCRATCH : READ_BUFFER);
+			run.pos = start;
+		}
 		this.run = run;
 		try {
 			body();
@@ -656,6 +667,43 @@ export abstract class EmitContext {
 		if (run.used !== total) {
 			throw new Error(`surge: an alloc run reserved ${total} bytes and used ${run.used}`);
 		}
+	}
+
+	/**
+	 * Reserves `count` elements of `elementBytes` each, ahead of the loop over
+	 * them, and declares the position of the first as a `let`. Each element is
+	 * then a run from that position ({@link withAllocRun} with `start`),
+	 * followed by {@link nextElement}, so the loop reserves nothing and checks
+	 * no capacity.
+	 */
+	public reserveElements(
+		fnName: "alloc" | "readAlloc",
+		elementBytes: number,
+		count: number | ts.Expression,
+		out: ts.Statement[],
+	): ts.Identifier {
+		const size =
+			typeof count === "number"
+				? count * elementBytes
+				: elementBytes === 1
+					? count
+					: this.factory.createBinaryExpression(
+							count,
+							this.ts_.SyntaxKind.AsteriskToken,
+							this.num(elementBytes),
+						);
+		const { pos, statements } = this.destructureAlloc(fnName, size);
+		out.push(...statements);
+		const element = this.fresh("element");
+		out.push(this.letStatement(element.text, pos));
+		return element;
+	}
+
+	/** Moves an element position from {@link reserveElements} on to the next element. */
+	public nextElement(element: ts.Identifier, elementBytes: number): ts.Statement {
+		return this.factory.createExpressionStatement(
+			this.factory.createBinaryExpression(element, this.ts_.SyntaxKind.PlusEqualsToken, this.num(elementBytes)),
+		);
 	}
 
 	/**

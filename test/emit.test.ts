@@ -593,6 +593,61 @@ describe("Emitter shared reservations", () => {
 	});
 });
 
+describe("Emitter element reservations", () => {
+	/** The statements of the first loop body in `section`, which is `// write` or `// read`. */
+	function loopBody(output: string, section: "write" | "read"): string {
+		const text = output.split(`// ${section}\n`)[1].split("\n\n// ")[0];
+		return text.slice(text.indexOf("for ("));
+	}
+
+	test("an array of fixed-size elements reserves every element once, ahead of its loop", () => {
+		const output = emitSnapshot({ kind: "array", element: { kind: "num", width: "u16" } });
+		expect(output).toContain("__surge_cursor = pos4 + arr1.size() * 2;");
+		expect(output).toMatch(/__surge_readCursor = pos\d+ \+ count\d+ \* 2;/);
+		for (const section of ["write", "read"] as const) {
+			const body = loopBody(output, section);
+			expect(body).not.toContain("__surge_cursor");
+			expect(body).not.toContain("__surge_readCursor");
+			expect(body).toMatch(/element\d+ \+= 2;/);
+		}
+	});
+
+	test("an element of several fields reads and writes each at its offset from the element", () => {
+		const output = emitSnapshot({
+			kind: "array",
+			element: {
+				kind: "object",
+				fields: [
+					{ name: "a", field: { kind: "num", width: "u8" } },
+					{ name: "b", field: { kind: "num", width: "u16" } },
+				],
+			},
+		});
+		expect(output).toMatchSnapshot();
+		expect(output).toContain("arr1.size() * 3;");
+		// The read waits for the push, so the element moves on after it.
+		expect(loopBody(output, "read")).toMatch(/push\([^]*\);\s+element\d+ \+= 3;\s+\}\s+return /);
+	});
+
+	test("the exact form reserves a constant, and a variable-size element still reserves in the loop", () => {
+		const exact = emitSnapshot({ kind: "array", element: { kind: "num", width: "u8" }, length: 3 });
+		expect(reservations(exact, "write")).toEqual([3]);
+		expect(reservations(exact, "read")).toEqual([3]);
+		const strings = emitSnapshot({ kind: "array", element: { kind: "str" } });
+		expect(loopBody(strings, "write")).toContain("__surge_cursor");
+		expect(loopBody(strings, "read")).toContain("__surge_readCursor");
+	});
+
+	test("with readChecks, one bound covers every element", () => {
+		const output = emitSnapshot({ kind: "array", element: { kind: "num", width: "u16" } }, new Map(), {
+			readChecks: true,
+		});
+		expect(loopBody(output, "read")).not.toContain("__surge_inputLength");
+		// The count's own reservation, the count bound, and the elements' reservation.
+		expect(output.match(/__surge_inputLength/g)).toHaveLength(3);
+	});
+});
+
 // Luau allows 200 registers per function; 100 `const [buf, pos]` pairs in one
 // scope exceed it (see Transformer 5.8 in docs/specs/transformer.md in the surge repo).
 describe("Emitter local-register ceiling", () => {
@@ -710,7 +765,7 @@ describe("Emitter count widths", () => {
 	// writes the `num` kind uses, and the reservation is 3 bytes and not 4.
 	test("a u24 count reserves three bytes and splits into a u16 and a u8", () => {
 		const output = emitSnapshot({ kind: "array", element: { kind: "num", width: "u8" }, length: "u24" });
-		// The count is reserved first; the 1 after it is the element, inside the loop.
+		// The count is reserved first, then every element at once.
 		expect(reservations(output, "write")[0]).toBe(3);
 		expect(reservations(output, "read")[0]).toBe(3);
 		expect(output).toContain("buffer.writeu16");
@@ -720,11 +775,11 @@ describe("Emitter count widths", () => {
 	// The exact form's whole point: the count is in the type, so no bytes of
 	// the payload go to saying how many there are.
 	// `f32` elements, so that any unsigned read or write left in the output is
-	// a count and not an element.
+	// a count and not an element. An array reserves its three elements at once.
 	test.each([
 		["str", { kind: "str", length: 8 } as Field, 8],
 		["buffer", { kind: "buffer", length: 16 } as Field, 16],
-		["array", { kind: "array", element: { kind: "num", width: "f32" }, length: 3 } as Field, 4],
+		["array", { kind: "array", element: { kind: "num", width: "f32" }, length: 3 } as Field, 12],
 		["tuple rest", { kind: "tuple", fixed: [], rest: { kind: "num", width: "f32" }, length: 2 } as Field, 4],
 	])("an exact %s writes no count at all", (_label, field, firstReservation) => {
 		const output = emitSnapshot(field);

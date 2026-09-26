@@ -363,14 +363,14 @@ function writeArray(
 		checkExactLength(ctx, ctx.sizeOf(arr), exact, padsAsAbsent(field.element), out);
 		const i = ctx.fresh("i");
 		const body: ts.Statement[] = [];
-		writeField(ctx, field.element, f.createElementAccessExpression(arr, i), body);
+		writeElement(ctx, field.element, f.createElementAccessExpression(arr, i), exact, out, body);
 		out.push(ctx.indexedLoop(i, 0, ctx.num(exact), body));
 		return;
 	}
 	writeCount(ctx, field.length, ctx.sizeOf(arr), out);
 	const item = ctx.fresh("item");
 	const body: ts.Statement[] = [];
-	writeField(ctx, field.element, item, body);
+	writeElement(ctx, field.element, item, ctx.sizeOf(arr), out, body);
 	out.push(
 		f.createForOfStatement(
 			undefined,
@@ -379,6 +379,29 @@ function writeArray(
 			f.createBlock(body, true),
 		),
 	);
+}
+
+/**
+ * Writes one element of an array's loop into `body`. An element of a
+ * constant size takes its bytes from one reservation of all `count` of them,
+ * which `out` makes ahead of the loop.
+ */
+function writeElement(
+	ctx: EmitContext,
+	element: Field,
+	value: ts.Expression,
+	count: number | ts.Expression,
+	out: ts.Statement[],
+	body: ts.Statement[],
+): void {
+	const bytes = fixedBytes(element);
+	if (bytes === undefined || bytes === 0) {
+		writeField(ctx, element, value, body);
+		return;
+	}
+	const start = ctx.reserveElements("alloc", bytes, count, out);
+	ctx.withAllocRun("alloc", bytes, () => writeField(ctx, element, value, body), start);
+	body.push(ctx.nextElement(start, bytes));
 }
 
 function writeTuple(
