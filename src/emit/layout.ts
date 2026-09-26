@@ -228,6 +228,18 @@ export function runFields(field: Field): number {
 }
 
 /**
+ * The bytes each element of an array reserves when one reservation covers
+ * all of them, or `undefined`: an element without a constant size, one of
+ * zero bytes, or one with more fields than a run holds. Each element is a
+ * run, so the bound on a run applies to it, and an element past the bound
+ * reserves on its own, where its fields can be emitted in blocks.
+ */
+export function elementBytes(element: Field): number | undefined {
+	const bytes = fixedBytes(element);
+	return bytes === undefined || bytes === 0 || runFields(element) > ALLOC_RUN_FIELDS ? undefined : bytes;
+}
+
+/**
  * Splits `entries` into the groups one reservation can cover: a maximal
  * run of neighbours `shareable` accepts, or a single entry it does not.
  * A run of one is returned as a group of one, so the caller emits it the

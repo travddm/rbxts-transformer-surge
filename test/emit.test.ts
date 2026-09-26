@@ -638,6 +638,21 @@ describe("Emitter element reservations", () => {
 		expect(loopBody(strings, "read")).toContain("__surge_readCursor");
 	});
 
+	test("an element with more fields than a run holds reserves on its own", () => {
+		const nested = (count: number): Field => ({
+			kind: "object",
+			fields: Array.from({ length: count }, (_, i) => ({ name: `f${i}`, field: { kind: "num", width: "u8" } })),
+		});
+		// Two elements of 31 fields each: one reservation for both.
+		const atBound = emitSnapshot({ kind: "array", element: nested(31), length: 2 });
+		expect(reservations(atBound, "write")).toEqual([62]);
+		expect(reservations(atBound, "read")).toEqual([62]);
+		// 32 fields: the element's own runs, of 31 and then 1, inside the loop.
+		const pastBound = emitSnapshot({ kind: "array", element: nested(32), length: 2 });
+		expect(reservations(pastBound, "write")).toEqual([31, 1]);
+		expect(reservations(pastBound, "read")).toEqual([31, 1]);
+	});
+
 	test("with readChecks, one bound covers every element", () => {
 		const output = emitSnapshot({ kind: "array", element: { kind: "num", width: "u16" } }, new Map(), {
 			readChecks: true,

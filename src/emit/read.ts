@@ -20,6 +20,7 @@ import {
 	cframeBytes,
 	componentBytes,
 	componentsOf,
+	elementBytes,
 	exactCount,
 	fixedBytes,
 	lengthWidth,
@@ -287,8 +288,8 @@ function readArray(ctx: EmitContext, field: Extract<Field, { kind: "array" }>, o
 	const result = arrayLocal(ctx, "result", out);
 	const i = ctx.fresh("_i");
 	const body: ts.Statement[] = [];
-	const bytes = fixedBytes(field.element);
-	if (bytes === undefined || bytes === 0) {
+	const bytes = elementBytes(field.element);
+	if (bytes === undefined) {
 		pushElement(ctx, result, readField(ctx, field.element, body), body);
 	} else {
 		// One reservation for every element, as the write side makes. The

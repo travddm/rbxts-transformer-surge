@@ -18,6 +18,7 @@ import {
 	cframeBytes,
 	componentBytes,
 	componentsOf,
+	elementBytes,
 	exactCount,
 	fixedBytes,
 	isAllPackedBits,
@@ -382,9 +383,9 @@ function writeArray(
 }
 
 /**
- * Writes one element of an array's loop into `body`. An element of a
- * constant size takes its bytes from one reservation of all `count` of them,
- * which `out` makes ahead of the loop.
+ * Writes one element of an array's loop into `body`. An element that
+ * `elementBytes` admits takes its bytes from one reservation of all `count`
+ * of them, which `out` makes ahead of the loop.
  */
 function writeElement(
 	ctx: EmitContext,
@@ -394,8 +395,8 @@ function writeElement(
 	out: ts.Statement[],
 	body: ts.Statement[],
 ): void {
-	const bytes = fixedBytes(element);
-	if (bytes === undefined || bytes === 0) {
+	const bytes = elementBytes(element);
+	if (bytes === undefined) {
 		writeField(ctx, element, value, body);
 		return;
 	}
