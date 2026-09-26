@@ -54,12 +54,14 @@ export function importAlias(name: string): string {
 	return `__surge_${name}`;
 }
 
-// The cursor state, declared in the closure each serializer is emitted into
-// rather than owned by `@rbxts/surge`. A reservation is then a compare and two
-// moves here instead of a call into another module (Transformer 5.3 and 5.4
-// in docs/specs/transformer.md in the surge repo). What that was worth is in
-// docs/research/generated-code-against-hand-written.md there. They carry the import prefix for the same reason the
-// aliases do: nothing a user wrote can collide with them.
+// The cursor state, declared in the closure each serializer is emitted into,
+// or in a `serialize` that writes exactly (Transformer 5.20), rather than
+// owned by `@rbxts/surge`. A reservation is then a compare and two moves here
+// instead of a call into another module (Transformer 5.3 and 5.4 in
+// docs/specs/transformer.md in the surge repo). What that was worth is in
+// docs/research/generated-code-against-hand-written.md there. They carry the
+// import prefix for the same reason the aliases do: nothing a user wrote can
+// collide with them.
 export const SCRATCH = importAlias("scratch");
 export const CAPACITY = importAlias("capacity");
 export const CURSOR = importAlias("cursor");

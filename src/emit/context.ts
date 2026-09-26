@@ -533,11 +533,13 @@ export abstract class EmitContext {
 	/**
 	 * The reservation itself, inline: take the cursor, advance it, and on the
 	 * write side compare against the capacity and grow on the branch that is
-	 * not taken. The cursor and the buffer are locals of the closure this code
-	 * is emitted into, not module state in `@rbxts/surge`, which is what makes
-	 * this four instructions instead of a call into another module. What
-	 * removing that call was worth is in
-	 * docs/research/generated-code-against-hand-written.md in the surge repo.
+	 * not taken, unless the `serialize` writes exactly (see
+	 * {@link writeExactly}). The cursor and the buffer are locals of the
+	 * closure this code is emitted into, or of that `serialize`, not module
+	 * state in `@rbxts/surge`, which is what makes this four instructions
+	 * instead of a call into another module. What removing that call was worth
+	 * is in docs/research/generated-code-against-hand-written.md in the surge
+	 * repo.
 	 *
 	 * `buf` is the state identifier itself rather than a fresh local, so every
 	 * `buffer.writeXX` reads whichever buffer is current -- which is what makes
