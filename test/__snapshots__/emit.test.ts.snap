@@ -195,20 +195,15 @@ if (opt2 !== undefined) {
     buffer.writeu8(__surge_scratch, pos3, opt2);
 }
 const s4 = value.label;
-const pos5 = __surge_cursor;
-__surge_cursor = pos5 + 4;
-if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos5, __surge_cursor);
-    __surge_capacity = buffer.len(__surge_scratch);
-}
-buffer.writeu32(__surge_scratch, pos5, s4.size());
+const len5 = s4.size();
 const pos6 = __surge_cursor;
-__surge_cursor = pos6 + s4.size();
+__surge_cursor = pos6 + (len5 + 4);
 if (__surge_cursor > __surge_capacity) {
     __surge_scratch = __surge_grow(__surge_scratch, pos6, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-buffer.writestring(__surge_scratch, pos6, s4);
+buffer.writeu32(__surge_scratch, pos6, len5);
+buffer.writestring(__surge_scratch, pos6 + 4, s4);
 
 // read
 const pos7 = __surge_readCursor;
@@ -220,14 +215,12 @@ if (__surge_unpackBit(__surge_input, pos7, 0)) {
     opt8 = buffer.readu8(__surge_input, pos9);
 }
 const pos10 = __surge_readCursor;
-__surge_readCursor = pos10 + 4;
 const len11 = buffer.readu32(__surge_input, pos10);
-const pos12 = __surge_readCursor;
-__surge_readCursor = pos12 + len11;
+__surge_readCursor = pos10 + 4 + len11;
 return {
     count: opt8,
     flag: __surge_unpackBit(__surge_input, pos7, 1),
-    label: buffer.readstring(__surge_input, pos12, len11),
+    label: buffer.readstring(__surge_input, pos10 + 4, len11),
     maybeFlag: __surge_unpackBit(__surge_input, pos7, 2) ? __surge_unpackBit(__surge_input, pos7, 3) : undefined
 };"
 `;
@@ -389,29 +382,21 @@ exports[`Emitter per-kind write/read snapshots buffer 1`] = `
 const src1 = value;
 const len2 = buffer.len(src1);
 const pos3 = __surge_cursor;
-__surge_cursor = pos3 + 4;
+__surge_cursor = pos3 + (len2 + 4);
 if (__surge_cursor > __surge_capacity) {
     __surge_scratch = __surge_grow(__surge_scratch, pos3, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
 buffer.writeu32(__surge_scratch, pos3, len2);
-const pos4 = __surge_cursor;
-__surge_cursor = pos4 + len2;
-if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos4, __surge_cursor);
-    __surge_capacity = buffer.len(__surge_scratch);
-}
-buffer.copy(__surge_scratch, pos4, src1, 0, len2);
+buffer.copy(__surge_scratch, pos3 + 4, src1, 0, len2);
 
 // read
-const pos5 = __surge_readCursor;
-__surge_readCursor = pos5 + 4;
-const len6 = buffer.readu32(__surge_input, pos5);
-const pos7 = __surge_readCursor;
-__surge_readCursor = pos7 + len6;
-const bytes8 = buffer.create(len6);
-buffer.copy(bytes8, 0, __surge_input, pos7, len6);
-return bytes8;"
+const pos4 = __surge_readCursor;
+const len5 = buffer.readu32(__surge_input, pos4);
+__surge_readCursor = pos4 + 4 + len5;
+const bytes6 = buffer.create(len5);
+buffer.copy(bytes6, 0, __surge_input, pos4 + 4, len5);
+return bytes6;"
 `;
 
 exports[`Emitter per-kind write/read snapshots cframe 1`] = `
@@ -654,20 +639,15 @@ if (__surge_cursor > __surge_capacity) {
 let count3 = 0;
 for (const [k4, v8] of dict1 as unknown as Map<string, number>) {
     const s5 = k4;
-    const pos6 = __surge_cursor;
-    __surge_cursor = pos6 + 4;
-    if (__surge_cursor > __surge_capacity) {
-        __surge_scratch = __surge_grow(__surge_scratch, pos6, __surge_cursor);
-        __surge_capacity = buffer.len(__surge_scratch);
-    }
-    buffer.writeu32(__surge_scratch, pos6, s5.size());
+    const len6 = s5.size();
     const pos7 = __surge_cursor;
-    __surge_cursor = pos7 + s5.size();
+    __surge_cursor = pos7 + (len6 + 4);
     if (__surge_cursor > __surge_capacity) {
         __surge_scratch = __surge_grow(__surge_scratch, pos7, __surge_cursor);
         __surge_capacity = buffer.len(__surge_scratch);
     }
-    buffer.writestring(__surge_scratch, pos7, s5);
+    buffer.writeu32(__surge_scratch, pos7, len6);
+    buffer.writestring(__surge_scratch, pos7 + 4, s5);
     const pos9 = __surge_cursor;
     __surge_cursor = pos9 + 8;
     if (__surge_cursor > __surge_capacity) {
@@ -686,13 +666,11 @@ const count11 = buffer.readu32(__surge_input, pos10);
 const result12 = new Map<string, number>();
 for (const _i13 of $range(1, count11)) {
     const pos14 = __surge_readCursor;
-    __surge_readCursor = pos14 + 4;
     const len15 = buffer.readu32(__surge_input, pos14);
+    __surge_readCursor = pos14 + 4 + len15;
     const pos16 = __surge_readCursor;
-    __surge_readCursor = pos16 + len15;
-    const pos17 = __surge_readCursor;
-    __surge_readCursor = pos17 + 8;
-    result12.set(buffer.readstring(__surge_input, pos16, len15), buffer.readf64(__surge_input, pos17));
+    __surge_readCursor = pos16 + 8;
+    result12.set(buffer.readstring(__surge_input, pos14 + 4, len15), buffer.readf64(__surge_input, pos16));
 }
 return result12;"
 `;
@@ -709,20 +687,15 @@ if (__surge_cursor > __surge_capacity) {
 let count3 = 0;
 for (const k4 of dict1 as unknown as Set<string>) {
     const s5 = k4;
-    const pos6 = __surge_cursor;
-    __surge_cursor = pos6 + 4;
-    if (__surge_cursor > __surge_capacity) {
-        __surge_scratch = __surge_grow(__surge_scratch, pos6, __surge_cursor);
-        __surge_capacity = buffer.len(__surge_scratch);
-    }
-    buffer.writeu32(__surge_scratch, pos6, s5.size());
+    const len6 = s5.size();
     const pos7 = __surge_cursor;
-    __surge_cursor = pos7 + s5.size();
+    __surge_cursor = pos7 + (len6 + 4);
     if (__surge_cursor > __surge_capacity) {
         __surge_scratch = __surge_grow(__surge_scratch, pos7, __surge_cursor);
         __surge_capacity = buffer.len(__surge_scratch);
     }
-    buffer.writestring(__surge_scratch, pos7, s5);
+    buffer.writeu32(__surge_scratch, pos7, len6);
+    buffer.writestring(__surge_scratch, pos7 + 4, s5);
     count3++;
 }
 buffer.writeu32(__surge_scratch, pos2, count3);
@@ -734,11 +707,9 @@ const count9 = buffer.readu32(__surge_input, pos8);
 const result10 = new Set<string>();
 for (const _i11 of $range(1, count9)) {
     const pos12 = __surge_readCursor;
-    __surge_readCursor = pos12 + 4;
     const len13 = buffer.readu32(__surge_input, pos12);
-    const pos14 = __surge_readCursor;
-    __surge_readCursor = pos14 + len13;
-    result10.add(buffer.readstring(__surge_input, pos14, len13));
+    __surge_readCursor = pos12 + 4 + len13;
+    result10.add(buffer.readstring(__surge_input, pos12 + 4, len13));
 }
 return result10;"
 `;
@@ -785,20 +756,15 @@ if (idx1 === 0) {
 }
 else if (idx1 === 1) {
     const s3 = value as unknown as string;
-    const pos4 = __surge_cursor;
-    __surge_cursor = pos4 + 4;
-    if (__surge_cursor > __surge_capacity) {
-        __surge_scratch = __surge_grow(__surge_scratch, pos4, __surge_cursor);
-        __surge_capacity = buffer.len(__surge_scratch);
-    }
-    buffer.writeu32(__surge_scratch, pos4, s3.size());
+    const len4 = s3.size();
     const pos5 = __surge_cursor;
-    __surge_cursor = pos5 + s3.size();
+    __surge_cursor = pos5 + (len4 + 4);
     if (__surge_cursor > __surge_capacity) {
         __surge_scratch = __surge_grow(__surge_scratch, pos5, __surge_cursor);
         __surge_capacity = buffer.len(__surge_scratch);
     }
-    buffer.writestring(__surge_scratch, pos5, s3);
+    buffer.writeu32(__surge_scratch, pos5, len4);
+    buffer.writestring(__surge_scratch, pos5 + 4, s3);
 }
 
 // read
@@ -808,11 +774,9 @@ const idx8 = buffer.readu8(__surge_input, pos7);
 let result9: number | string;
 if (idx8 === 1) {
     const pos11 = __surge_readCursor;
-    __surge_readCursor = pos11 + 4;
     const len12 = buffer.readu32(__surge_input, pos11);
-    const pos13 = __surge_readCursor;
-    __surge_readCursor = pos13 + len12;
-    result9 = buffer.readstring(__surge_input, pos13, len12);
+    __surge_readCursor = pos11 + 4 + len12;
+    result9 = buffer.readstring(__surge_input, pos11 + 4, len12);
 }
 else {
     const pos10 = __surge_readCursor;
@@ -951,32 +915,25 @@ if (__surge_cursor > __surge_capacity) {
 }
 buffer.writef64(__surge_scratch, pos1, value.a);
 const s2 = value.b;
-const pos3 = __surge_cursor;
-__surge_cursor = pos3 + 4;
-if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos3, __surge_cursor);
-    __surge_capacity = buffer.len(__surge_scratch);
-}
-buffer.writeu32(__surge_scratch, pos3, s2.size());
+const len3 = s2.size();
 const pos4 = __surge_cursor;
-__surge_cursor = pos4 + s2.size();
+__surge_cursor = pos4 + (len3 + 4);
 if (__surge_cursor > __surge_capacity) {
     __surge_scratch = __surge_grow(__surge_scratch, pos4, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-buffer.writestring(__surge_scratch, pos4, s2);
+buffer.writeu32(__surge_scratch, pos4, len3);
+buffer.writestring(__surge_scratch, pos4 + 4, s2);
 
 // read
 const pos5 = __surge_readCursor;
 __surge_readCursor = pos5 + 8;
 const pos6 = __surge_readCursor;
-__surge_readCursor = pos6 + 4;
 const len7 = buffer.readu32(__surge_input, pos6);
-const pos8 = __surge_readCursor;
-__surge_readCursor = pos8 + len7;
+__surge_readCursor = pos6 + 4 + len7;
 return {
     a: buffer.readf64(__surge_input, pos5),
-    b: buffer.readstring(__surge_input, pos8, len7)
+    b: buffer.readstring(__surge_input, pos6 + 4, len7)
 };"
 `;
 
@@ -1050,28 +1007,21 @@ function surge_Node_1_read(): surge_Node_1_Type {
 exports[`Emitter per-kind write/read snapshots str 1`] = `
 "// write
 const s1 = value;
-const pos2 = __surge_cursor;
-__surge_cursor = pos2 + 4;
-if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos2, __surge_cursor);
-    __surge_capacity = buffer.len(__surge_scratch);
-}
-buffer.writeu32(__surge_scratch, pos2, s1.size());
+const len2 = s1.size();
 const pos3 = __surge_cursor;
-__surge_cursor = pos3 + s1.size();
+__surge_cursor = pos3 + (len2 + 4);
 if (__surge_cursor > __surge_capacity) {
     __surge_scratch = __surge_grow(__surge_scratch, pos3, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-buffer.writestring(__surge_scratch, pos3, s1);
+buffer.writeu32(__surge_scratch, pos3, len2);
+buffer.writestring(__surge_scratch, pos3 + 4, s1);
 
 // read
 const pos4 = __surge_readCursor;
-__surge_readCursor = pos4 + 4;
 const len5 = buffer.readu32(__surge_input, pos4);
-const pos6 = __surge_readCursor;
-__surge_readCursor = pos6 + len5;
-return buffer.readstring(__surge_input, pos6, len5);"
+__surge_readCursor = pos4 + 4 + len5;
+return buffer.readstring(__surge_input, pos4 + 4, len5);"
 `;
 
 exports[`Emitter per-kind write/read snapshots taggedUnion 1`] = `
@@ -1099,20 +1049,15 @@ else if (idx1 === 1) {
     const s3 = (value as unknown as {
         y: string;
     }).y;
-    const pos4 = __surge_cursor;
-    __surge_cursor = pos4 + 4;
-    if (__surge_cursor > __surge_capacity) {
-        __surge_scratch = __surge_grow(__surge_scratch, pos4, __surge_cursor);
-        __surge_capacity = buffer.len(__surge_scratch);
-    }
-    buffer.writeu32(__surge_scratch, pos4, s3.size());
+    const len4 = s3.size();
     const pos5 = __surge_cursor;
-    __surge_cursor = pos5 + s3.size();
+    __surge_cursor = pos5 + (len4 + 4);
     if (__surge_cursor > __surge_capacity) {
         __surge_scratch = __surge_grow(__surge_scratch, pos5, __surge_cursor);
         __surge_capacity = buffer.len(__surge_scratch);
     }
-    buffer.writestring(__surge_scratch, pos5, s3);
+    buffer.writeu32(__surge_scratch, pos5, len4);
+    buffer.writestring(__surge_scratch, pos5 + 4, s3);
 }
 
 // read
@@ -1128,13 +1073,11 @@ let result9: {
 };
 if (idx8 === 1) {
     const pos11 = __surge_readCursor;
-    __surge_readCursor = pos11 + 4;
     const len12 = buffer.readu32(__surge_input, pos11);
-    const pos13 = __surge_readCursor;
-    __surge_readCursor = pos13 + len12;
+    __surge_readCursor = pos11 + 4 + len12;
     result9 = {
         kind: "b",
-        y: buffer.readstring(__surge_input, pos13, len12)
+        y: buffer.readstring(__surge_input, pos11 + 4, len12)
     };
 }
 else {
@@ -1152,20 +1095,15 @@ exports[`Emitter per-kind write/read snapshots tuple with a rest element 1`] = `
 "// write
 const tup1 = value;
 const s2 = tup1[0];
-const pos3 = __surge_cursor;
-__surge_cursor = pos3 + 4;
-if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos3, __surge_cursor);
-    __surge_capacity = buffer.len(__surge_scratch);
-}
-buffer.writeu32(__surge_scratch, pos3, s2.size());
+const len3 = s2.size();
 const pos4 = __surge_cursor;
-__surge_cursor = pos4 + s2.size();
+__surge_cursor = pos4 + (len3 + 4);
 if (__surge_cursor > __surge_capacity) {
     __surge_scratch = __surge_grow(__surge_scratch, pos4, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-buffer.writestring(__surge_scratch, pos4, s2);
+buffer.writeu32(__surge_scratch, pos4, len3);
+buffer.writestring(__surge_scratch, pos4 + 4, s2);
 const pos5 = __surge_cursor;
 __surge_cursor = pos5 + 4;
 if (__surge_cursor > __surge_capacity) {
@@ -1186,18 +1124,16 @@ for (let i6 = 1; i6 < tup1.size(); i6++) {
 // read
 const tup8 = [];
 const pos9 = __surge_readCursor;
-__surge_readCursor = pos9 + 4;
 const len10 = buffer.readu32(__surge_input, pos9);
+__surge_readCursor = pos9 + 4 + len10;
+tup8.push(buffer.readstring(__surge_input, pos9 + 4, len10));
 const pos11 = __surge_readCursor;
-__surge_readCursor = pos11 + len10;
-tup8.push(buffer.readstring(__surge_input, pos11, len10));
-const pos12 = __surge_readCursor;
-__surge_readCursor = pos12 + 4;
-const count13 = buffer.readu32(__surge_input, pos12);
-for (const _i14 of $range(1, count13)) {
-    const pos15 = __surge_readCursor;
-    __surge_readCursor = pos15 + 8;
-    tup8.push(buffer.readf64(__surge_input, pos15));
+__surge_readCursor = pos11 + 4;
+const count12 = buffer.readu32(__surge_input, pos11);
+for (const _i13 of $range(1, count12)) {
+    const pos14 = __surge_readCursor;
+    __surge_readCursor = pos14 + 8;
+    tup8.push(buffer.readf64(__surge_input, pos14));
 }
 return tup8 as unknown as [
     string,

@@ -1,6 +1,6 @@
 import type ts from "typescript";
 
-import type { Field, FieldKey, NumWidth } from "../field";
+import type { Field, FieldKey, LengthWidth, NumWidth } from "../field";
 import {
 	CAPACITY,
 	CURSOR,
@@ -12,6 +12,7 @@ import {
 	READ_CURSOR,
 	READ_LENGTH,
 	SCRATCH,
+	WIDTH_BYTES,
 	importAlias,
 } from "./constants";
 
@@ -439,6 +440,55 @@ export abstract class EmitContext {
 			};
 		}
 		return this.rawDestructureAlloc(fnName, size);
+	}
+
+	/**
+	 * Reads the count a `str` or a `buffer` writes ahead of its bytes, and
+	 * reserves the count and the bytes with one move of the read cursor. The
+	 * count is read before the cursor moves, so under `readChecks` it is
+	 * bounded first, and the bytes after the move. Returns the count and where
+	 * the bytes start.
+	 */
+	public readCountedBytes(width: LengthWidth, out: ts.Statement[]): { len: ts.Identifier; bytes: Slot } {
+		if (this.run !== undefined) {
+			throw new Error("surge: a field inside an alloc run reserved on its own");
+		}
+		this.usesReadBytes = true;
+		const f = this.factory;
+		const syntax = this.ts_.SyntaxKind;
+		const countBytes = WIDTH_BYTES[width];
+		const pos = this.fresh("pos");
+		out.push(this.constStatement(pos, f.createIdentifier(READ_CURSOR)));
+		if (this.readChecks) {
+			out.push(
+				this.throwIf(
+					f.createBinaryExpression(
+						this.offsetFrom(pos, countBytes),
+						syntax.GreaterThanToken,
+						f.createIdentifier(READ_LENGTH),
+					),
+					"deserialize read past the end of the input buffer",
+				),
+			);
+		}
+		const len = this.fresh("len");
+		out.push(this.constStatement(len, this.readNumberAt(width, f.createIdentifier(READ_BUFFER), pos)));
+		out.push(
+			this.assign(READ_CURSOR, f.createBinaryExpression(this.offsetFrom(pos, countBytes), syntax.PlusToken, len)),
+		);
+		if (this.readChecks) {
+			out.push(
+				this.throwIf(
+					f.createBinaryExpression(
+						f.createIdentifier(READ_CURSOR),
+						syntax.GreaterThanToken,
+						f.createIdentifier(READ_LENGTH),
+					),
+					"deserialize read past the end of the input buffer",
+				),
+			);
+		}
+		return { len, bytes: { buf: f.createIdentifier(READ_BUFFER), pos, offset: countBytes } };
 	}
 
 	/**

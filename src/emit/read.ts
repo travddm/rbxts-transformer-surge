@@ -106,14 +106,8 @@ function readStr(ctx: EmitContext, field: Extract<Field, { kind: "str" }>, out: 
 		out.push(...statements);
 		return ctx.bufferCall("readstring", [buf, pos, ctx.num(exact)]);
 	}
-	const width = lengthWidth(field.length);
-	const { buf: lbuf, pos: lpos, statements: lstmt } = ctx.destructureAlloc("readAlloc", WIDTH_BYTES[width]);
-	out.push(...lstmt);
-	const len = ctx.fresh("len");
-	out.push(ctx.constStatement(len, ctx.readNumberAt(width, lbuf, lpos)));
-	const { buf: sbuf, pos: spos, statements: sstmt } = ctx.destructureAlloc("readAlloc", len);
-	out.push(...sstmt);
-	return ctx.bufferCall("readstring", [sbuf, spos, len]);
+	const { len, bytes } = ctx.readCountedBytes(lengthWidth(field.length), out);
+	return ctx.bufferCall("readstring", [bytes.buf, ctx.at(bytes, 0), len]);
 }
 
 function readVector2(ctx: EmitContext, out: ts.Statement[]): ts.Expression {
@@ -134,17 +128,13 @@ function readBuffer(ctx: EmitContext, field: Extract<Field, { kind: "buffer" }>,
 		);
 		return exactResult;
 	}
-	const width = lengthWidth(field.length);
-	const { buf: lbuf, pos: lpos, statements: lstmt } = ctx.destructureAlloc("readAlloc", WIDTH_BYTES[width]);
-	out.push(...lstmt);
-	const len = ctx.fresh("len");
-	out.push(ctx.constStatement(len, ctx.readNumberAt(width, lbuf, lpos)));
-	const { buf, pos, statements } = ctx.destructureAlloc("readAlloc", len);
-	out.push(...statements);
+	const { len, bytes } = ctx.readCountedBytes(lengthWidth(field.length), out);
 	// A copy: the input buffer holds the whole payload, and the caller owns the result.
 	const result = ctx.fresh("bytes");
 	out.push(ctx.constStatement(result, ctx.bufferCall("create", [len])));
-	out.push(f.createExpressionStatement(ctx.bufferCall("copy", [result, ctx.num(0), buf, pos, len])));
+	out.push(
+		f.createExpressionStatement(ctx.bufferCall("copy", [result, ctx.num(0), bytes.buf, ctx.at(bytes, 0), len])),
+	);
 	return result;
 }
 

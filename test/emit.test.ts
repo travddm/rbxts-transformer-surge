@@ -278,10 +278,11 @@ describe("Emitter packed region", () => {
 		const [write, read] = output.split("// read");
 		expect(write.indexOf("__surge_cursor = pos")).toBeLessThan(write.indexOf("value.label"));
 		expect(read.indexOf("__surge_readCursor = pos")).toBeLessThan(read.indexOf("readstring"));
-		// One byte for the region and one for `count`, then the string's length
-		// prefix. No flag byte, and nothing of its own for `maybeFlag`.
-		expect(reservations(write, "write")).toEqual([1, 1, 4]);
-		expect(reservations(read, "read")).toEqual([1, 1, 4]);
+		// One byte for the region and one for `count`, then the string, whose
+		// size is known only at run time. No flag byte, and nothing of its own
+		// for `maybeFlag`.
+		expect(reservations(write, "write")).toEqual([1, 1]);
+		expect(reservations(read, "read")).toEqual([1, 1]);
 		expect(output).toMatchSnapshot();
 	});
 });
@@ -484,10 +485,10 @@ describe("Emitter shared reservations", () => {
 			],
 		});
 		// Reservation order is byte order, so the two fields after the string
-		// cannot join the two before it. The 4 between them is its length prefix;
-		// its own bytes are the variable reservation this does not count.
-		expect(reservations(output, "write")).toEqual([2, 4, 8]);
-		expect(reservations(output, "read")).toEqual([2, 4, 8]);
+		// cannot join the two before it. The string's count and bytes are one
+		// reservation whose size is known only at run time, which this does not count.
+		expect(reservations(output, "write")).toEqual([2, 8]);
+		expect(reservations(output, "read")).toEqual([2, 8]);
 	});
 
 	test("a field whose bytes the packed region holds does not join a run", () => {
@@ -543,9 +544,9 @@ describe("Emitter shared reservations", () => {
 				{ name: "b", field: u8 },
 			],
 		});
-		// The 4 is the string's length prefix.
-		expect(reservations(withString, "write")).toEqual([1, 4, 1]);
-		expect(reservations(withString, "read")).toEqual([1, 4, 1]);
+		// Between the two is the string's reservation, whose size is known only at run time.
+		expect(reservations(withString, "write")).toEqual([1, 1]);
+		expect(reservations(withString, "read")).toEqual([1, 1]);
 		const withPackedRegion = emitSnapshot({
 			kind: "object",
 			fields: [
@@ -660,6 +661,43 @@ describe("Emitter element reservations", () => {
 		expect(loopBody(output, "read")).not.toContain("__surge_inputLength");
 		// The count's own reservation, the count bound, and the elements' reservation.
 		expect(output.match(/__surge_inputLength/g)).toHaveLength(3);
+	});
+});
+
+describe("Emitter counted bytes", () => {
+	/** The lines of `output`'s `// write` or `// read` section that assign `cursor`. */
+	function cursorMoves(output: string, section: "write" | "read", cursor: string): string[] {
+		const text = output.split(`// ${section}\n`)[1].split("\n\n// ")[0];
+		return text.split("\n").filter((line) => line.trim().startsWith(`${cursor} = `));
+	}
+
+	test.each([
+		["str", { kind: "str" } as Field],
+		["buffer", { kind: "buffer" } as Field],
+	])("a %s reserves its count and its bytes at once", (_label, field) => {
+		const output = emitSnapshot(field);
+		expect(cursorMoves(output, "write", "__surge_cursor")).toEqual([
+			expect.stringMatching(/^__surge_cursor = pos\d+ \+ \(len\d+ \+ 4\);$/),
+		]);
+		expect(cursorMoves(output, "read", "__surge_readCursor")).toEqual([
+			expect.stringMatching(/^__surge_readCursor = pos\d+ \+ 4 \+ len\d+;$/),
+		]);
+	});
+
+	test("a string's length is taken once", () => {
+		const output = emitSnapshot({ kind: "str" }, new Map(), { writeChecks: true });
+		expect(output.match(/\.size\(\)/g)).toHaveLength(1);
+	});
+
+	test("with readChecks, the count is bounded before it is read and the bytes after", () => {
+		const output = emitSnapshot({ kind: "str" }, new Map(), { readChecks: true });
+		const read = output.split("// read\n")[1];
+		const countBound = read.search(/pos\d+ \+ 4 > __surge_inputLength/);
+		const countRead = read.indexOf("buffer.readu32");
+		const bytesBound = read.search(/__surge_readCursor > __surge_inputLength/);
+		expect(countBound).toBeGreaterThan(-1);
+		expect(countBound).toBeLessThan(countRead);
+		expect(bytesBound).toBeGreaterThan(countRead);
 	});
 });
 
@@ -824,11 +862,11 @@ describe("Emitter count widths", () => {
 	});
 
 	test("a u8 count reserves one byte", () => {
-		// A string's payload is reserved at a run-time length, so the count is
-		// the only constant reservation in this shape.
+		// The count and the string's bytes are one reservation, one byte longer
+		// than the string.
 		const output = emitSnapshot({ kind: "str", length: "u8" });
-		expect(reservations(output, "write")).toEqual([1]);
-		expect(reservations(output, "read")).toEqual([1]);
+		expect(output).toMatch(/__surge_cursor = pos\d+ \+ \(len\d+ \+ 1\);/);
+		expect(output).toMatch(/__surge_readCursor = pos\d+ \+ 1 \+ len\d+;/);
 	});
 });
 

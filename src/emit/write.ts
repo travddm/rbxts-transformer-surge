@@ -222,6 +222,28 @@ function writeCount(ctx: EmitContext, length: CountSpec | undefined, count: ts.E
 	out.push(...ctx.writeNumberAt(width, buf, pos, count));
 }
 
+/**
+ * Reserves the count a `str` or a `buffer` writes and the `len` bytes after
+ * it at once, writes the count, and returns where the bytes go.
+ */
+function writeCountedBytes(
+	ctx: EmitContext,
+	length: CountSpec | undefined,
+	len: ts.Identifier,
+	out: ts.Statement[],
+): Slot {
+	const width = lengthWidth(length);
+	checkCountFits(ctx, width, len, out);
+	const countBytes = WIDTH_BYTES[width];
+	const { buf, pos, statements } = ctx.destructureAlloc(
+		"alloc",
+		ctx.factory.createBinaryExpression(len, ctx.ts_.SyntaxKind.PlusToken, ctx.num(countBytes)),
+	);
+	out.push(...statements);
+	out.push(...ctx.writeNumberAt(width, buf, pos, len));
+	return { buf, pos, offset: countBytes };
+}
+
 function writeStr(
 	ctx: EmitContext,
 	field: Extract<Field, { kind: "str" }>,
@@ -242,10 +264,10 @@ function writeStr(
 		out.push(f.createExpressionStatement(ctx.bufferCall("writestring", [buf, pos, s, ctx.num(exact)])));
 		return;
 	}
-	writeCount(ctx, field.length, lenExpr, out);
-	const { buf, pos, statements } = ctx.destructureAlloc("alloc", lenExpr);
-	out.push(...statements);
-	out.push(f.createExpressionStatement(ctx.bufferCall("writestring", [buf, pos, s])));
+	const len = ctx.fresh("len");
+	out.push(ctx.constStatement(len, lenExpr));
+	const bytes = writeCountedBytes(ctx, field.length, len, out);
+	out.push(f.createExpressionStatement(ctx.bufferCall("writestring", [bytes.buf, ctx.at(bytes, 0), s])));
 }
 
 function writeBuffer(
@@ -269,10 +291,10 @@ function writeBuffer(
 	}
 	const len = ctx.fresh("len");
 	out.push(ctx.constStatement(len, ctx.bufferCall("len", [source])));
-	writeCount(ctx, field.length, len, out);
-	const { buf, pos, statements } = ctx.destructureAlloc("alloc", len);
-	out.push(...statements);
-	out.push(f.createExpressionStatement(ctx.bufferCall("copy", [buf, pos, source, ctx.num(0), len])));
+	const bytes = writeCountedBytes(ctx, field.length, len, out);
+	out.push(
+		f.createExpressionStatement(ctx.bufferCall("copy", [bytes.buf, ctx.at(bytes, 0), source, ctx.num(0), len])),
+	);
 }
 
 function writeVector3(
