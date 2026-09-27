@@ -37,9 +37,9 @@ export class Emitter extends EmitContext {
 	 * `field`, and leaves it on the scratch buffer otherwise.
 	 */
 	public sizeExactly(field: Field, value: ts.Expression): void {
-		const size = exactSize(this, field, value);
-		if (size !== undefined) {
-			this.writeExactly(size);
+		const exact = exactSize(this, field, value);
+		if (exact !== undefined) {
+			this.writeExactly(exact.size, exact.statements);
 		}
 	}
 

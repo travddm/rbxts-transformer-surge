@@ -26,7 +26,7 @@ import {
 	packedBits,
 	tagKeyOf,
 } from "./layout";
-import { fieldToTypeNode, objectShapeTypeNode } from "./types";
+import { asMapOrSet, fieldToTypeNode, objectShapeTypeNode } from "./types";
 
 export function writeField(ctx: EmitContext, field: Field, value: ts.Expression, out: ts.Statement[]): void {
 	switch (field.kind) {
@@ -836,34 +836,6 @@ function literalIndexExpr(
 		expr = f.createConditionalExpression(check, undefined, ctx.num(i), undefined, expr);
 	}
 	return expr;
-}
-
-/**
- * Casts to a real `Map<K,V>`/`Set<K>` type (never `any`: roblox-ts
- * outright refuses to compile a call/method on an `any`-typed value --
- * confirmed by hitting exactly that error -- so the placeholder has to be
- * a real, usable type). This is what lets the write loop below iterate a
- * plain `Record` with `for...of` destructuring even though TypeScript
- * itself has no iteration protocol for a bare indexed object: the cast
- * only affects what the *type checker* sees, and a `Record`'s runtime
- * representation is already an indistinguishable plain table (behavior 2 in
- * docs/research/compile-time-specialization.md in the surge repo), so the
- * cast is lossless either way.
- */
-function asMapOrSet(
-	ctx: EmitContext,
-	value: ts.Expression,
-	keyField: Field,
-	valueField: Field | undefined,
-): ts.Expression {
-	const f = ctx.factory;
-	const typeNode = valueField
-		? f.createTypeReferenceNode("Map", [fieldToTypeNode(ctx, keyField), fieldToTypeNode(ctx, valueField)])
-		: f.createTypeReferenceNode("Set", [fieldToTypeNode(ctx, keyField)]);
-	return f.createAsExpression(
-		f.createAsExpression(value, f.createKeywordTypeNode(ctx.ts_.SyntaxKind.UnknownKeyword)),
-		typeNode,
-	);
 }
 
 function writeDict(

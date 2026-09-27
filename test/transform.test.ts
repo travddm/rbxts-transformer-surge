@@ -228,13 +228,13 @@ describe("transform (end-to-end)", () => {
 	test("createCodec<T>() becomes an IIFE and injects a sorted @rbxts/surge import", () => {
 		const { printed, cleanup } = runTransform(
 			`import { createCodec } from "@rbxts/surge";
-			interface P { tags: string[]; }
+			interface P { tags: string[]; next?: P; }
 			const s = createCodec<P>();`,
 		);
 		try {
-			// No blob field, so nothing from the blob side channel is imported. An
-			// array of strings keeps the scratch buffer (Transformer 5.20), which
-			// imports both of its helpers.
+			// No blob field, so nothing from the blob side channel is imported. A
+			// recursive type, written through a helper, keeps the scratch buffer
+			// (Transformer 5.20), which imports both of its helpers.
 			expect(printed).toContain(
 				'import { finishWrite as __surge_finishWrite, grow as __surge_grow } from "@rbxts/surge/out/abi";',
 			);
@@ -264,7 +264,7 @@ describe("transform (end-to-end)", () => {
 	test("multiple call sites in one file share a single injected import statement", () => {
 		const { printed, cleanup } = runTransform(
 			`import { createSerializer, createDeserializer } from "@rbxts/surge";
-			interface P { tags: string[]; }
+			interface P { tags: string[]; next?: P; }
 			const s = createSerializer<P>();
 			const d = createDeserializer<P>();`,
 		);
@@ -369,7 +369,7 @@ describe("transform injected imports", () => {
 	test("a user declaration named after a @rbxts/surge export is neither redeclared nor called by the generated code", () => {
 		const { printed, cleanup } = runTransform(
 			`import { createSerializer } from "@rbxts/surge";
-			interface P { tags: string[]; }
+			interface P { tags: string[]; next?: P; }
 			function grow(): void {}
 			const s = createSerializer<P>();`,
 		);
@@ -636,6 +636,23 @@ describe("transform generated code", () => {
 		expect(errors).toEqual([]);
 	});
 
+	test("the generated code of a shape sized by loops passes the type check under a consumer's noUnusedLocals", () => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { DataType, createCodec } from "@rbxts/surge";
+			interface T {
+				names: string[]; grid: string[][]; maybe?: string[];
+				ids: Set<DataType.u8>; byName: Map<string, DataType.u8>; byId: Map<DataType.u8, string>;
+				counts: Map<DataType.u8, DataType.u8>; record: Record<string, DataType.u8>;
+				rows: { label: string; at: Vector3 }[];
+			}
+			export const s = createCodec<T>();`,
+			{ noUnusedLocals: true },
+		);
+		// The printed file no longer calls the `createCodec` it imports. What
+		// this checks is the code generated in place of the call.
+		expect(errors.filter((error) => !error.startsWith("'createCodec' is declared"))).toEqual([]);
+	});
+
 	test("the generated code of a shape written exactly passes the type check", () => {
 		// Every kind the size is read from: counted and exact strings, buffers
 		// and arrays, a tuple with a string and a rest, optionals, keys that are
@@ -696,7 +713,7 @@ describe("transform generated code", () => {
 		const { printed, cleanup } = runTransform(
 			`//!optimize 2
 			import { createCodec } from "@rbxts/surge";
-			interface P { tags: string[]; }
+			interface P { tags: string[]; next?: P; }
 			const s = createCodec<P>();`,
 		);
 		try {
@@ -716,7 +733,7 @@ describe("transform generated code", () => {
 			`//!optimize 2
 			const s = createCodec<P>();
 			import { createCodec } from "@rbxts/surge";
-			interface P { tags: string[]; }`,
+			interface P { tags: string[]; next?: P; }`,
 		);
 		try {
 			expect(printed.indexOf("//!optimize 2")).toBeLessThan(
@@ -733,7 +750,7 @@ describe("transform generated code", () => {
 			`//!native
 			// What this file is for.
 			import { createCodec } from "@rbxts/surge";
-			interface P { tags: string[]; }
+			interface P { tags: string[]; next?: P; }
 			const s = createCodec<P>();`,
 		);
 		try {

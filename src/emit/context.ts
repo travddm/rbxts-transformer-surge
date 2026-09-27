@@ -109,6 +109,7 @@ export abstract class EmitContext {
 	 * repo), or `undefined` for one that writes into the scratch buffer.
 	 */
 	private writeSize: ts.Expression | undefined;
+	private writeSizeStatements: ReadonlyArray<ts.Statement> = [];
 	protected readonly generatedHelpers = new Set<string>();
 	protected readonly helperDecls: ts.Statement[] = [];
 	private readonly enumTables = new Map<string, { itemsName: string; indexName: string }>();
@@ -137,6 +138,22 @@ export abstract class EmitContext {
 	public readonly readChecks: boolean;
 	public readonly writeChecks: boolean;
 	public readonly sides: EmitSides;
+
+	/**
+	 * Runs `attempt`, and gives back the names and locals it took when it
+	 * returns `undefined`, so an attempt that fails changes nothing emitted
+	 * after it.
+	 */
+	public tentatively<T>(attempt: () => T | undefined): T | undefined {
+		const tempCounter = this.tempCounter;
+		const liveLocals = this.liveLocals;
+		const result = attempt();
+		if (result === undefined) {
+			this.tempCounter = tempCounter;
+			this.liveLocals = liveLocals;
+		}
+		return result;
+	}
 
 	public fresh(base: string): ts.Identifier {
 		this.tempCounter += 1;
@@ -195,10 +212,12 @@ export abstract class EmitContext {
 	 * and write into it (Transformer 5.20 in docs/specs/transformer.md in the
 	 * surge repo): its buffer and its cursor are locals of `serialize`,
 	 * which count toward its budget, and no reservation checks the capacity.
+	 * `statements`, the loops that add up what `size` reads, run first.
 	 * Called after {@link beginFunction} and before the body is emitted.
 	 */
-	public writeExactly(size: ts.Expression): void {
+	public writeExactly(size: ts.Expression, statements: ReadonlyArray<ts.Statement>): void {
 		this.writeSize = size;
+		this.writeSizeStatements = statements;
 		this.liveLocals += 2;
 	}
 
@@ -248,6 +267,7 @@ export abstract class EmitContext {
 		}
 		if (this.writeSize !== undefined) {
 			return [
+				...this.writeSizeStatements,
 				this.constStatement(
 					this.factory.createIdentifier(SCRATCH),
 					this.bufferCall("create", [this.writeSize]),

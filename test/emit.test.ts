@@ -899,9 +899,51 @@ describe("Emitter exact sizing", () => {
 		expect(output).toContain("buffer.create((value.n !== undefined ? 2 : 0) + 1)");
 	});
 
+	test("an array whose elements vary in size is sized by a loop over them, ahead of the result", () => {
+		const output = serializeBody({ kind: "array", element: { kind: "str" } });
+		expect(output).toMatch(
+			/^let (size\d+) = 4;\nfor \(const (item\d+) of value\) \{\n\s+\1 \+= \2\.size\(\) \+ 4;\n\}\nconst __surge_scratch = buffer\.create\(\1\);/,
+		);
+		expect(output).not.toContain("__surge_capacity");
+	});
+
+	test("a loop inside a loop, and inside an optional, adds to the one size", () => {
+		const nested = serializeBody({
+			kind: "optional",
+			inner: { kind: "array", element: { kind: "array", element: { kind: "str" } } },
+			packed: false,
+		});
+		expect(nested.match(/let size\d+/g)).toHaveLength(1);
+		expect(nested).toMatch(
+			/if \(value !== undefined\) \{\s+for \(const (item\d+) of value!\) \{\s+for \(const item\d+ of \1\) \{/,
+		);
+	});
+
 	test.each([
-		["an array of strings", { kind: "array", element: { kind: "str" } } as Field],
-		["a dict", { kind: "dict", key: u8, value: undefined, source: "set" } as Field],
+		["a set", { kind: "dict", key: u8, value: undefined, source: "set" } as Field, /for \(const _k\d+ of value/],
+		[
+			"a map whose value's size is fixed",
+			{ kind: "dict", key: { kind: "str" }, value: u8, source: "map" } as Field,
+			/for \(const \[k\d+\] of value/,
+		],
+		[
+			"a map whose key's size is fixed",
+			{ kind: "dict", key: u8, value: { kind: "str" }, source: "map" } as Field,
+			/for \(const \[, v\d+\] of value/,
+		],
+		[
+			"a map of fixed sizes",
+			{ kind: "dict", key: u8, value: u8, source: "map" } as Field,
+			/for \(const \[_k\d+\] of value/,
+		],
+	])("%s is sized by a loop over its entries, binding only what the size reads", (_label, field, loop) => {
+		const output = serializeBody(field);
+		expect(output.split("const __surge_scratch")[0]).toMatch(loop);
+		expect(output).not.toContain("__surge_capacity");
+	});
+
+	test.each([
+		["an exact array of strings", { kind: "array", element: { kind: "str" }, length: 3 } as Field],
 		[
 			"a tagged union",
 			{
