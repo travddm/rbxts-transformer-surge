@@ -636,20 +636,18 @@ describe("transform generated code", () => {
 		expect(errors).toEqual([]);
 	});
 
-	test("the generated code of a shape sized by loops and unions passes the type check under a consumer's noUnusedLocals", () => {
-		const errors = typeErrorsOfGeneratedCode(
-			`import { DataType, createCodec } from "@rbxts/surge";
+	test("the generated code of a shape sized by loops over unions passes the type check under a consumer's noUnusedLocals", () => {
+		const source = `import { DataType, createCodec } from "@rbxts/surge";
 			interface T {
-				names: string[]; grid: string[][]; maybe?: string[];
-				ids: Set<DataType.u8>; byName: Map<string, DataType.u8>; byId: Map<DataType.u8, string>;
-				counts: Map<DataType.u8, DataType.u8>; record: Record<string, DataType.u8>;
-				rows: { label: string; at: Vector3 }[];
-				events: ({ kind: "a"; id: DataType.u8 } | { kind: "b"; text: string; names: string[] })[];
+				mixed: (string | number)[]; maybe?: (string | boolean)[];
+				events: ({ kind: "a"; id: DataType.u8 } | { kind: "b"; text: string; tags: (string | number)[] })[];
 				either: string | number;
 			}
-			export const s = createCodec<T>();`,
-			{ noUnusedLocals: true },
-		);
+			export const s = createCodec<T>();`;
+		const { printed, cleanup } = runTransform(source);
+		cleanup();
+		expect(printed).toMatch(/const __surge_scratch = buffer\.create\(size\d+\);/);
+		const errors = typeErrorsOfGeneratedCode(source, { noUnusedLocals: true });
 		// The printed file no longer calls the `createCodec` it imports. What
 		// this checks is the code generated in place of the call.
 		expect(errors.filter((error) => !error.startsWith("'createCodec' is declared"))).toEqual([]);

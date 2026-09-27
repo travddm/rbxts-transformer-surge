@@ -4,10 +4,10 @@
  * surge repo). Such a shape's `serialize` creates its result at this size and
  * writes into it, with no scratch buffer, no capacity check and no copy.
  *
- * The size is an expression over the value, and, for an array whose elements
- * vary in size or a `dict`, a loop over its elements that adds each one's
- * bytes to a local ahead of that expression. A union's size is its variants'
- * sizes, chosen by the tests its write makes. The size reads the value, and
+ * The size is an expression over the value, and, for an array of unions, a
+ * loop over its elements that adds each one's bytes to a local ahead of that
+ * expression. A union's size is its variants' sizes, chosen by the tests its
+ * write makes. The size reads the value, and
  * the writes read it again. Binding each string and array to a local first
  * would read it once, but every such local would stay live across the whole
  * function, against the budget of Transformer 5.8.
@@ -18,7 +18,7 @@ import type { CountSpec, Field, ObjectFieldEntry } from "../field";
 import { WIDTH_BYTES } from "./constants";
 import type { EmitContext } from "./context";
 import { exactCount, fixedBytes, isAllPackedBits, lengthWidth, packedBits, tagKeyOf } from "./layout";
-import { asMapOrSet, fieldToTypeNode, objectShapeTypeNode } from "./types";
+import { fieldToTypeNode, objectShapeTypeNode } from "./types";
 import { guardFor, literalCheck } from "./write";
 
 /** A constant number of bytes, plus terms read from the value, plus loops that add to the total. */
@@ -107,8 +107,6 @@ function measure(ctx: EmitContext, field: Field, value: ts.Expression, total: To
 			);
 			return add(size, elements(ctx, field.length, count, bytes));
 		}
-		case "dict":
-			return measureDict(ctx, field, value, total);
 		case "taggedUnion": {
 			const tag = ctx.propertyAccess(value, tagKeyOf(field));
 			return measureUnion(
@@ -180,9 +178,12 @@ function measureUnion(
 
 /**
  * An array's count, and its elements: their count times their size when
- * that size is the same for each, and otherwise a loop over them, as the
- * write's own. The exact form of an array whose elements vary is not sized,
- * since its write reads by index up to its length rather than iterating.
+ * that size is the same for each, and otherwise, for an element that is a
+ * union, a loop over them, as the write's own. A loop measured slower than
+ * the scratch buffer for an array of strings (docs/research/
+ * exact-sizing-with-loops.md in the surge repo), so an array of any other
+ * element that varies in size is not sized, and neither is the exact form,
+ * whose write reads by index up to its length rather than iterating.
  */
 function measureArray(
 	ctx: EmitContext,
@@ -194,7 +195,8 @@ function measureArray(
 	if (bytes !== undefined) {
 		return elements(ctx, field.length, ctx.sizeOf(value), bytes);
 	}
-	if (exactCount(field.length) !== undefined) {
+	const union = field.element.kind === "taggedUnion" || field.element.kind === "guardedUnion";
+	if (!union || exactCount(field.length) !== undefined) {
 		return undefined;
 	}
 	const item = ctx.fresh("item");
@@ -209,46 +211,6 @@ function measureArray(
 		constant: WIDTH_BYTES[lengthWidth(field.length)],
 		terms: [],
 		loops: [loopOver(ctx, total, item, value, element)],
-	};
-}
-
-/** A `dict`'s count, and a loop over its entries, as its write's own, adding each key's and value's bytes. */
-function measureDict(
-	ctx: EmitContext,
-	field: Extract<Field, { kind: "dict" }>,
-	value: ts.Expression,
-	total: Total,
-): Size | undefined {
-	const f = ctx.factory;
-	const k = ctx.fresh("k");
-	const key = measure(ctx, field.key, k, total);
-	if (key === undefined) {
-		return undefined;
-	}
-	const v = field.value === undefined ? undefined : ctx.fresh("v");
-	const entryValue = field.value === undefined ? EMPTY : measure(ctx, field.value, v!, total);
-	if (entryValue === undefined) {
-		return undefined;
-	}
-	// A key or a value whose size does not depend on it is not bound: an
-	// unused `for`-`of` variable fails a consumer's `noUnusedLocals`.
-	const keyName = readsValue(key) ? k : ctx.fresh("_k");
-	let binding: ts.BindingName = keyName;
-	if (v !== undefined) {
-		binding = f.createArrayBindingPattern(
-			readsValue(entryValue)
-				? [
-						readsValue(key) ? f.createBindingElement(undefined, undefined, k) : f.createOmittedExpression(),
-						f.createBindingElement(undefined, undefined, v),
-					]
-				: [f.createBindingElement(undefined, undefined, keyName)],
-		);
-	}
-	const iterable = asMapOrSet(ctx, value, field.key, field.value);
-	return {
-		constant: WIDTH_BYTES[lengthWidth(field.length)],
-		terms: [],
-		loops: [loopOver(ctx, total, binding, iterable, add(key, entryValue))],
 	};
 }
 

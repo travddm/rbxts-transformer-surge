@@ -899,47 +899,37 @@ describe("Emitter exact sizing", () => {
 		expect(output).toContain("buffer.create((value.n !== undefined ? 2 : 0) + 1)");
 	});
 
-	test("an array whose elements vary in size is sized by a loop over them, ahead of the result", () => {
-		const output = serializeBody({ kind: "array", element: { kind: "str" } });
+	const either: Field = { kind: "guardedUnion", variants: [{ kind: "num", width: "f64" }, { kind: "str" }] };
+
+	test("an array of unions is sized by a loop over them, ahead of the result", () => {
+		const output = serializeBody({ kind: "array", element: either });
 		expect(output).toMatch(
-			/^let (size\d+) = 4;\nfor \(const (item\d+) of value\) \{\n\s+\1 \+= \2\.size\(\) \+ 4;\n\}\nconst __surge_scratch = buffer\.create\(\1\);/,
+			/^let (size\d+) = 4;\nfor \(const (item\d+) of value\) \{\n\s+\1 \+= \(typeIs\(\2, "number"\) \? 8 : /,
 		);
+		expect(output).toMatch(/\nconst __surge_scratch = buffer\.create\(size\d+\);/);
 		expect(output).not.toContain("__surge_capacity");
 	});
 
 	test("a loop inside a loop, and inside an optional, adds to the one size", () => {
 		const nested = serializeBody({
 			kind: "optional",
-			inner: { kind: "array", element: { kind: "array", element: { kind: "str" } } },
+			inner: {
+				kind: "array",
+				element: {
+					kind: "taggedUnion",
+					tagKey: "kind",
+					variants: [
+						{ tagValue: "a", fields: [] },
+						{ tagValue: "b", fields: [{ name: "list", field: { kind: "array", element: either } }] },
+					],
+				},
+			},
 			packed: false,
 		});
 		expect(nested.match(/let size\d+/g)).toHaveLength(1);
 		expect(nested).toMatch(
-			/if \(value !== undefined\) \{\s+for \(const (item\d+) of value!\) \{\s+for \(const item\d+ of \1\) \{/,
+			/if \(value !== undefined\) \{\s+for \(const (item\d+) of value!\) \{\s+if \(\1\.kind === "a"\)/,
 		);
-	});
-
-	test.each([
-		["a set", { kind: "dict", key: u8, value: undefined, source: "set" } as Field, /for \(const _k\d+ of value/],
-		[
-			"a map whose value's size is fixed",
-			{ kind: "dict", key: { kind: "str" }, value: u8, source: "map" } as Field,
-			/for \(const \[k\d+\] of value/,
-		],
-		[
-			"a map whose key's size is fixed",
-			{ kind: "dict", key: u8, value: { kind: "str" }, source: "map" } as Field,
-			/for \(const \[, v\d+\] of value/,
-		],
-		[
-			"a map of fixed sizes",
-			{ kind: "dict", key: u8, value: u8, source: "map" } as Field,
-			/for \(const \[_k\d+\] of value/,
-		],
-	])("%s is sized by a loop over its entries, binding only what the size reads", (_label, field, loop) => {
-		const output = serializeBody(field);
-		expect(output.split("const __surge_scratch")[0]).toMatch(loop);
-		expect(output).not.toContain("__surge_capacity");
 	});
 
 	test("a union is sized by the variant its write picks, with the write's own tests", () => {
@@ -974,7 +964,7 @@ describe("Emitter exact sizing", () => {
 			tagKey: "kind",
 			variants: [
 				{ tagValue: "a", fields: [{ name: "x", field: u8 }] },
-				{ tagValue: "b", fields: [{ name: "names", field: { kind: "array", element: { kind: "str" } } }] },
+				{ tagValue: "b", fields: [{ name: "list", field: { kind: "array", element: either } }] },
 			],
 		});
 		expect(withLoop).toMatch(
@@ -983,7 +973,16 @@ describe("Emitter exact sizing", () => {
 	});
 
 	test.each([
-		["an exact array of strings", { kind: "array", element: { kind: "str" }, length: 3 } as Field],
+		// A loop measured slower than the scratch buffer on an array of strings
+		// and on a dict (docs/research/exact-sizing-with-loops.md in the surge
+		// repo).
+		["an array of strings", { kind: "array", element: { kind: "str" } } as Field],
+		[
+			"an array of arrays of strings",
+			{ kind: "array", element: { kind: "array", element: { kind: "str" } } } as Field,
+		],
+		["a dict", { kind: "dict", key: { kind: "str" }, value: u8, source: "map" } as Field],
+		["an exact array of unions", { kind: "array", element: either, length: 3 } as Field],
 		[
 			"a tagged union whose tag is a packed bit",
 			{
