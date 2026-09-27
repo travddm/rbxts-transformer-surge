@@ -640,8 +640,8 @@ function writeCFrame(
 	// rotation is written.
 	const { buf, pos, statements } = ctx.destructureAlloc("alloc", cframeBytes(field));
 	out.push(...statements);
-	// Read once rather than once per component: each read of a `CFrame`'s
-	// `Position` is a property of a Roblox userdata, and returns a new value.
+	// Read once rather than once per component: `Position` is a property of
+	// a Roblox userdata, which the engine answers on every read.
 	const position = ctx.fresh("position");
 	out.push(ctx.constStatement(position, f.createPropertyAccessExpression(value, "Position")));
 	writeNum3(ctx, position, "X", "Y", "Z", widths, { buf, pos, offset: 0 }, out);
