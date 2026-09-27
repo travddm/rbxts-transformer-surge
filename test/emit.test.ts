@@ -942,16 +942,65 @@ describe("Emitter exact sizing", () => {
 		expect(output).not.toContain("__surge_capacity");
 	});
 
+	test("a union is sized by the variant its write picks, with the write's own tests", () => {
+		const tagged = serializeBody({
+			kind: "taggedUnion",
+			tagKey: "kind",
+			variants: [
+				{ tagValue: "a", fields: [] },
+				{ tagValue: "b", fields: [{ name: "s", field: { kind: "str" } }] },
+			],
+		});
+		expect(tagged).toMatch(/^const __surge_scratch = buffer\.create\(\(value\.kind === "a" \? 0 : /);
+		const guarded = serializeBody({
+			kind: "guardedUnion",
+			variants: [{ kind: "num", width: "f64" }, { kind: "str" }],
+		});
+		expect(guarded).toMatch(/^const __surge_scratch = buffer\.create\(\(typeIs\(value, "number"\) \? 8 : /);
+	});
+
+	test("a union whose variants are one size tests nothing, and one with a loop in a variant is an if chain", () => {
+		const sameSize = serializeBody({
+			kind: "taggedUnion",
+			tagKey: "kind",
+			variants: [
+				{ tagValue: "a", fields: [{ name: "x", field: u8 }] },
+				{ tagValue: "b", fields: [{ name: "y", field: u8 }] },
+			],
+		});
+		expect(sameSize).toMatch(/^const __surge_scratch = buffer\.create\(2\);/);
+		const withLoop = serializeBody({
+			kind: "taggedUnion",
+			tagKey: "kind",
+			variants: [
+				{ tagValue: "a", fields: [{ name: "x", field: u8 }] },
+				{ tagValue: "b", fields: [{ name: "names", field: { kind: "array", element: { kind: "str" } } }] },
+			],
+		});
+		expect(withLoop).toMatch(
+			/^let (size\d+) = 1;\nif \(value\.kind === "a"\) \{\n\s+\1 \+= 1;\n\}\nelse \{\n\s+for /,
+		);
+	});
+
 	test.each([
 		["an exact array of strings", { kind: "array", element: { kind: "str" }, length: 3 } as Field],
 		[
-			"a tagged union",
+			"a tagged union whose tag is a packed bit",
 			{
-				kind: "taggedUnion",
-				tagKey: "kind",
-				variants: [
-					{ tagValue: "a", fields: [] },
-					{ tagValue: "b", fields: [{ name: "n", field: u8 }] },
+				kind: "object",
+				fields: [
+					{
+						name: "event",
+						field: {
+							kind: "taggedUnion",
+							tagKey: "kind",
+							packed: true,
+							variants: [
+								{ tagValue: "a", fields: [] },
+								{ tagValue: "b", fields: [{ name: "n", field: u8 }] },
+							],
+						},
+					},
 				],
 			} as Field,
 		],

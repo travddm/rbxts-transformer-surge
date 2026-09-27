@@ -6,7 +6,8 @@
  *
  * The size is an expression over the value, and, for an array whose elements
  * vary in size or a `dict`, a loop over its elements that adds each one's
- * bytes to a local ahead of that expression. The size reads the value, and
+ * bytes to a local ahead of that expression. A union's size is its variants'
+ * sizes, chosen by the tests its write makes. The size reads the value, and
  * the writes read it again. Binding each string and array to a local first
  * would read it once, but every such local would stay live across the whole
  * function, against the budget of Transformer 5.8.
@@ -16,8 +17,9 @@ import type ts from "typescript";
 import type { CountSpec, Field, ObjectFieldEntry } from "../field";
 import { WIDTH_BYTES } from "./constants";
 import type { EmitContext } from "./context";
-import { exactCount, fixedBytes, isAllPackedBits, lengthWidth, packedBits } from "./layout";
-import { asMapOrSet } from "./types";
+import { exactCount, fixedBytes, isAllPackedBits, lengthWidth, packedBits, tagKeyOf } from "./layout";
+import { asMapOrSet, fieldToTypeNode, objectShapeTypeNode } from "./types";
+import { guardFor, literalCheck } from "./write";
 
 /** A constant number of bytes, plus terms read from the value, plus loops that add to the total. */
 interface Size {
@@ -107,9 +109,73 @@ function measure(ctx: EmitContext, field: Field, value: ts.Expression, total: To
 		}
 		case "dict":
 			return measureDict(ctx, field, value, total);
+		case "taggedUnion": {
+			const tag = ctx.propertyAccess(value, tagKeyOf(field));
+			return measureUnion(
+				ctx,
+				field.variants.map((variant) => ({
+					check: literalCheck(ctx, tag, variant.tagValue),
+					size: measureObject(
+						ctx,
+						variant.fields,
+						ctx.castTo(value, objectShapeTypeNode(ctx, variant.fields)),
+						total,
+					),
+				})),
+				total,
+			);
+		}
+		case "guardedUnion":
+			return measureUnion(
+				ctx,
+				field.variants.map((variant) => ({
+					check: guardFor(ctx, variant, value),
+					size: measure(ctx, variant, ctx.castTo(value, fieldToTypeNode(ctx, variant)), total),
+				})),
+				total,
+			);
 		default:
 			return undefined;
 	}
+}
+
+/**
+ * A union's index, and the bytes of the variant the write picks: the write's
+ * own tests, in its order, each choosing its variant's size, and the last
+ * variant's size when none passes. The tests are a tag's comparisons or a
+ * guarded union's guards, which the write evaluates again.
+ */
+function measureUnion(
+	ctx: EmitContext,
+	variants: ReadonlyArray<{ readonly check: ts.Expression; readonly size: Size | undefined }>,
+	total: Total,
+): Size | undefined {
+	const f = ctx.factory;
+	const sizes: Size[] = [];
+	for (const variant of variants) {
+		if (variant.size === undefined) {
+			return undefined;
+		}
+		sizes.push(variant.size);
+	}
+	const index = constant(variants.length <= 256 ? 1 : 2);
+	const first = sizes[0];
+	if (sizes.every((size) => !readsValue(size) && size.constant === first.constant)) {
+		return add(index, constant(first.constant));
+	}
+	const last = sizes.length - 1;
+	if (sizes.every((size) => size.loops.length === 0)) {
+		let chosen = sum(ctx, sizes[last]);
+		for (let i = last - 1; i >= 0; i--) {
+			chosen = f.createConditionalExpression(variants[i].check, undefined, sum(ctx, sizes[i]), undefined, chosen);
+		}
+		return add(index, { constant: 0, terms: [f.createParenthesizedExpression(chosen)], loops: [] });
+	}
+	let chain: ts.Statement = f.createBlock(addTo(ctx, total, sizes[last]), true);
+	for (let i = last - 1; i >= 0; i--) {
+		chain = f.createIfStatement(variants[i].check, f.createBlock(addTo(ctx, total, sizes[i]), true), chain);
+	}
+	return add(index, { constant: 0, terms: [], loops: [chain] });
 }
 
 /**

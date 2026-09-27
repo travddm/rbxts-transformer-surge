@@ -824,18 +824,29 @@ function literalIndexExpr(
 	const f = ctx.factory;
 	let expr: ts.Expression = ctx.num(values.length - 1);
 	for (let i = values.length - 2; i >= 0; i--) {
-		const v = values[i];
-		const check =
-			v === undefined
-				? f.createBinaryExpression(
-						value,
-						ctx.ts_.SyntaxKind.EqualsEqualsEqualsToken,
-						f.createIdentifier("undefined"),
-					)
-				: f.createBinaryExpression(value, ctx.ts_.SyntaxKind.EqualsEqualsEqualsToken, ctx.literalValueExpr(v));
-		expr = f.createConditionalExpression(check, undefined, ctx.num(i), undefined, expr);
+		expr = f.createConditionalExpression(
+			literalCheck(ctx, value, values[i]),
+			undefined,
+			ctx.num(i),
+			undefined,
+			expr,
+		);
 	}
 	return expr;
+}
+
+/** `value === <literal>`, one test of {@link literalIndexExpr}'s chain. */
+export function literalCheck(
+	ctx: EmitContext,
+	value: ts.Expression,
+	literal: string | number | boolean | undefined,
+): ts.Expression {
+	const f = ctx.factory;
+	return f.createBinaryExpression(
+		value,
+		ctx.ts_.SyntaxKind.EqualsEqualsEqualsToken,
+		literal === undefined ? f.createIdentifier("undefined") : ctx.literalValueExpr(literal),
+	);
 }
 
 function writeDict(
@@ -1163,7 +1174,7 @@ function writeGuardedUnion(
 	if (chain) out.push(chain);
 }
 
-function guardFor(ctx: EmitContext, field: Field, value: ts.Expression): ts.Expression {
+export function guardFor(ctx: EmitContext, field: Field, value: ts.Expression): ts.Expression {
 	const f = ctx.factory;
 	const typeIs = (tag: string) => ctx.callLocal("typeIs", [value, f.createStringLiteral(tag)]);
 	switch (field.kind) {
