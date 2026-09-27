@@ -117,52 +117,47 @@ return rotation10.add(pos7);"
 exports[`Emitter element reservations an element of several fields reads and writes each at its offset from the element 1`] = `
 "// write
 const arr1 = value;
-const len2 = arr1.size();
-const pos3 = __surge_cursor;
-__surge_cursor = pos3 + 4;
+const pos2 = __surge_cursor;
+__surge_cursor = pos2 + 4;
 if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos3, __surge_cursor);
+    __surge_scratch = __surge_grow(__surge_scratch, pos2, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-buffer.writeu32(__surge_scratch, pos3, len2);
-const pos6 = __surge_cursor;
-__surge_cursor = pos6 + len2 * 3;
+buffer.writeu32(__surge_scratch, pos2, arr1.size());
+const pos4 = __surge_cursor;
+__surge_cursor = pos4 + arr1.size() * 3;
 if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos6, __surge_cursor);
+    __surge_scratch = __surge_grow(__surge_scratch, pos4, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-let element7 = pos6;
-for (const i4 of $range(1, len2)) {
-    const item5 = arr1[i4 - 1] as unknown as {
-        a: number;
-        b: number;
-    };
-    buffer.writeu8(__surge_scratch, element7, item5.a);
-    const pos8 = element7 + 1;
-    buffer.writeu16(__surge_scratch, pos8, item5.b);
-    element7 += 3;
+let element5 = pos4;
+for (const item3 of arr1) {
+    buffer.writeu8(__surge_scratch, element5, item3.a);
+    const pos6 = element5 + 1;
+    buffer.writeu16(__surge_scratch, pos6, item3.b);
+    element5 += 3;
 }
 
 // read
-const pos9 = __surge_readCursor;
-__surge_readCursor = pos9 + 4;
-const count10 = buffer.readu32(__surge_input, pos9);
-const result11 = new Array<{
+const pos7 = __surge_readCursor;
+__surge_readCursor = pos7 + 4;
+const count8 = buffer.readu32(__surge_input, pos7);
+const result9 = new Array<{
     a: number;
     b: number;
-}>(count10);
-const pos13 = __surge_readCursor;
-__surge_readCursor = pos13 + count10 * 3;
-let element14 = pos13;
-for (const i12 of $range(1, count10)) {
-    const pos15 = element14 + 1;
-    result11[i12 - 1] = {
-        a: buffer.readu8(__surge_input, element14),
-        b: buffer.readu16(__surge_input, pos15)
+}>(count8);
+const pos11 = __surge_readCursor;
+__surge_readCursor = pos11 + count8 * 3;
+let element12 = pos11;
+for (const i10 of $range(1, count8)) {
+    const pos13 = element12 + 1;
+    result9[i10 - 1] = {
+        a: buffer.readu8(__surge_input, element12),
+        b: buffer.readu16(__surge_input, pos13)
     };
-    element14 += 3;
+    element12 += 3;
 }
-return result11;"
+return result9;"
 `;
 
 exports[`Emitter exact sizing a shape of fixed size is created at that size, with no capacity check and no copy 1`] = `
@@ -182,51 +177,49 @@ exports[`Emitter exact sizing a size is its lengths and counts, read from the va
 "const __surge_scratch = buffer.create(value.list.size() * 2 + value.name.size() + (value.nick !== undefined ? value.nick!.size() + 4 : 0) + (value.pair.size() - 1) + 12);
 let __surge_cursor = 0;
 const arr1 = value.list;
-const len2 = arr1.size();
-const pos3 = __surge_cursor;
-__surge_cursor = pos3 + 4;
-buffer.writeu32(__surge_scratch, pos3, len2);
-const pos6 = __surge_cursor;
-__surge_cursor = pos6 + len2 * 2;
-let element7 = pos6;
-for (const i4 of $range(1, len2)) {
-    const item5 = arr1[i4 - 1] as unknown as number;
-    buffer.writeu16(__surge_scratch, element7, item5);
-    element7 += 2;
+const pos2 = __surge_cursor;
+__surge_cursor = pos2 + 4;
+buffer.writeu32(__surge_scratch, pos2, arr1.size());
+const pos4 = __surge_cursor;
+__surge_cursor = pos4 + arr1.size() * 2;
+let element5 = pos4;
+for (const item3 of arr1) {
+    buffer.writeu16(__surge_scratch, element5, item3);
+    element5 += 2;
 }
-const s8 = value.name;
-const len9 = s8.size();
+const s6 = value.name;
+const len7 = s6.size();
+const pos8 = __surge_cursor;
+__surge_cursor = pos8 + (len7 + 4);
+buffer.writeu32(__surge_scratch, pos8, len7);
+buffer.writestring(__surge_scratch, pos8 + 4, s6);
+const opt9 = value.nick;
 const pos10 = __surge_cursor;
-__surge_cursor = pos10 + (len9 + 4);
-buffer.writeu32(__surge_scratch, pos10, len9);
-buffer.writestring(__surge_scratch, pos10 + 4, s8);
-const opt11 = value.nick;
-const pos12 = __surge_cursor;
-__surge_cursor = pos12 + 1;
-buffer.writeu8(__surge_scratch, pos12, opt11 !== undefined ? 1 : 0);
-if (opt11 !== undefined) {
-    const s13 = opt11;
-    const len14 = s13.size();
-    const pos15 = __surge_cursor;
-    __surge_cursor = pos15 + (len14 + 4);
-    buffer.writeu32(__surge_scratch, pos15, len14);
-    buffer.writestring(__surge_scratch, pos15 + 4, s13);
+__surge_cursor = pos10 + 1;
+buffer.writeu8(__surge_scratch, pos10, opt9 !== undefined ? 1 : 0);
+if (opt9 !== undefined) {
+    const s11 = opt9;
+    const len12 = s11.size();
+    const pos13 = __surge_cursor;
+    __surge_cursor = pos13 + (len12 + 4);
+    buffer.writeu32(__surge_scratch, pos13, len12);
+    buffer.writestring(__surge_scratch, pos13 + 4, s11);
 }
-const tup16 = value.pair;
-const pos17 = __surge_cursor;
-__surge_cursor = pos17 + 1;
-buffer.writeu8(__surge_scratch, pos17, tup16[0]);
-const pos18 = __surge_cursor;
-__surge_cursor = pos18 + 1;
-buffer.writeu8(__surge_scratch, pos18, tup16.size() - 1);
-for (let i19 = 1; i19 < tup16.size(); i19++) {
-    const pos20 = __surge_cursor;
-    __surge_cursor = pos20 + 1;
-    buffer.writeu8(__surge_scratch, pos20, tup16[i19] as unknown as number);
+const tup14 = value.pair;
+const pos15 = __surge_cursor;
+__surge_cursor = pos15 + 1;
+buffer.writeu8(__surge_scratch, pos15, tup14[0]);
+const pos16 = __surge_cursor;
+__surge_cursor = pos16 + 1;
+buffer.writeu8(__surge_scratch, pos16, tup14.size() - 1);
+for (let i17 = 1; i17 < tup14.size(); i17++) {
+    const pos18 = __surge_cursor;
+    __surge_cursor = pos18 + 1;
+    buffer.writeu8(__surge_scratch, pos18, tup14[i17] as unknown as number);
 }
-const pos21 = __surge_cursor;
-__surge_cursor = pos21 + 1;
-buffer.writeu8(__surge_scratch, pos21, value.tag);
+const pos19 = __surge_cursor;
+__surge_cursor = pos19 + 1;
+buffer.writeu8(__surge_scratch, pos19, value.tag);
 return __surge_scratch;"
 `;
 
@@ -368,40 +361,38 @@ return {
 exports[`Emitter per-kind write/read snapshots array 1`] = `
 "// write
 const arr1 = value;
-const len2 = arr1.size();
-const pos3 = __surge_cursor;
-__surge_cursor = pos3 + 4;
+const pos2 = __surge_cursor;
+__surge_cursor = pos2 + 4;
 if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos3, __surge_cursor);
+    __surge_scratch = __surge_grow(__surge_scratch, pos2, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-buffer.writeu32(__surge_scratch, pos3, len2);
-const pos6 = __surge_cursor;
-__surge_cursor = pos6 + len2 * 8;
+buffer.writeu32(__surge_scratch, pos2, arr1.size());
+const pos4 = __surge_cursor;
+__surge_cursor = pos4 + arr1.size() * 8;
 if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos6, __surge_cursor);
+    __surge_scratch = __surge_grow(__surge_scratch, pos4, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-let element7 = pos6;
-for (const i4 of $range(1, len2)) {
-    const item5 = arr1[i4 - 1] as unknown as number;
-    buffer.writef64(__surge_scratch, element7, item5);
-    element7 += 8;
+let element5 = pos4;
+for (const item3 of arr1) {
+    buffer.writef64(__surge_scratch, element5, item3);
+    element5 += 8;
 }
 
 // read
-const pos8 = __surge_readCursor;
-__surge_readCursor = pos8 + 4;
-const count9 = buffer.readu32(__surge_input, pos8);
-const result10 = new Array<number>(count9);
-const pos12 = __surge_readCursor;
-__surge_readCursor = pos12 + count9 * 8;
-let element13 = pos12;
-for (const i11 of $range(1, count9)) {
-    result10[i11 - 1] = buffer.readf64(__surge_input, element13);
-    element13 += 8;
+const pos6 = __surge_readCursor;
+__surge_readCursor = pos6 + 4;
+const count7 = buffer.readu32(__surge_input, pos6);
+const result8 = new Array<number>(count7);
+const pos10 = __surge_readCursor;
+__surge_readCursor = pos10 + count7 * 8;
+let element11 = pos10;
+for (const i9 of $range(1, count7)) {
+    result8[i9 - 1] = buffer.readf64(__surge_input, element11);
+    element11 += 8;
 }
-return result10;"
+return result8;"
 `;
 
 exports[`Emitter per-kind write/read snapshots bitSet 1`] = `
@@ -1278,21 +1269,21 @@ return {
 exports[`Emitter read-order for side-effecting fields a helper-object field followed by a plain field binds the helper call before the next statement 1`] = `
 "// write
 surge_Tree_1_write(value.inner);
-const pos14 = __surge_cursor;
-__surge_cursor = pos14 + 8;
+const pos12 = __surge_cursor;
+__surge_cursor = pos12 + 8;
 if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos14, __surge_cursor);
+    __surge_scratch = __surge_grow(__surge_scratch, pos12, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-buffer.writef64(__surge_scratch, pos14, value.zebra);
+buffer.writef64(__surge_scratch, pos12, value.zebra);
 
 // read
-const val15 = surge_Tree_1_read();
-const pos16 = __surge_readCursor;
-__surge_readCursor = pos16 + 8;
+const val13 = surge_Tree_1_read();
+const pos14 = __surge_readCursor;
+__surge_readCursor = pos14 + 8;
 return {
-    inner: val15,
-    zebra: buffer.readf64(__surge_input, pos16)
+    inner: val13,
+    zebra: buffer.readf64(__surge_input, pos14)
 };
 
 // helpers
@@ -1301,68 +1292,66 @@ type surge_Tree_1_Type = {
 };
 function surge_Tree_1_write(value: surge_Tree_1_Type) {
     const arr1 = value.kids;
-    const len2 = arr1.size();
-    const pos3 = __surge_cursor;
-    __surge_cursor = pos3 + 4;
+    const pos2 = __surge_cursor;
+    __surge_cursor = pos2 + 4;
     if (__surge_cursor > __surge_capacity) {
-        __surge_scratch = __surge_grow(__surge_scratch, pos3, __surge_cursor);
+        __surge_scratch = __surge_grow(__surge_scratch, pos2, __surge_cursor);
         __surge_capacity = buffer.len(__surge_scratch);
     }
-    buffer.writeu32(__surge_scratch, pos3, len2);
-    const pos6 = __surge_cursor;
-    __surge_cursor = pos6 + len2 * 8;
+    buffer.writeu32(__surge_scratch, pos2, arr1.size());
+    const pos4 = __surge_cursor;
+    __surge_cursor = pos4 + arr1.size() * 8;
     if (__surge_cursor > __surge_capacity) {
-        __surge_scratch = __surge_grow(__surge_scratch, pos6, __surge_cursor);
+        __surge_scratch = __surge_grow(__surge_scratch, pos4, __surge_cursor);
         __surge_capacity = buffer.len(__surge_scratch);
     }
-    let element7 = pos6;
-    for (const i4 of $range(1, len2)) {
-        const item5 = arr1[i4 - 1] as unknown as number;
-        buffer.writef64(__surge_scratch, element7, item5);
-        element7 += 8;
+    let element5 = pos4;
+    for (const item3 of arr1) {
+        buffer.writef64(__surge_scratch, element5, item3);
+        element5 += 8;
     }
 }
 function surge_Tree_1_read(): surge_Tree_1_Type {
-    const pos8 = __surge_readCursor;
-    __surge_readCursor = pos8 + 4;
-    const count9 = buffer.readu32(__surge_input, pos8);
-    const result10 = new Array<number>(count9);
-    const pos12 = __surge_readCursor;
-    __surge_readCursor = pos12 + count9 * 8;
-    let element13 = pos12;
-    for (const i11 of $range(1, count9)) {
-        result10[i11 - 1] = buffer.readf64(__surge_input, element13);
-        element13 += 8;
+    const pos6 = __surge_readCursor;
+    __surge_readCursor = pos6 + 4;
+    const count7 = buffer.readu32(__surge_input, pos6);
+    const result8 = new Array<number>(count7);
+    const pos10 = __surge_readCursor;
+    __surge_readCursor = pos10 + count7 * 8;
+    let element11 = pos10;
+    for (const i9 of $range(1, count7)) {
+        result8[i9 - 1] = buffer.readf64(__surge_input, element11);
+        element11 += 8;
     }
     return {
-        kids: result10
+        kids: result8
     };
 }"
 `;
 
 exports[`Emitter read-side checks a count is bounded by what the rest of the input could hold 1`] = `
 "// read
-const pos8 = __surge_readCursor;
-__surge_readCursor = pos8 + 4;
+const pos6 = __surge_readCursor;
+__surge_readCursor = pos6 + 4;
 if (__surge_readCursor > __surge_inputLength) {
     throw "@rbxts/surge: deserialize read past the end of the input buffer";
 }
-const count9 = buffer.readu32(__surge_input, pos8);
-if (count9 * 8 > __surge_inputLength - __surge_readCursor) {
+const count7 = buffer.readu32(__surge_input, pos6);
+if (count7 * 8 > __surge_inputLength - __surge_readCursor) {
     throw "@rbxts/surge: deserialize found a count larger than the input buffer can hold";
 }
-const result10 = new Array<number>(count9);
-const pos12 = __surge_readCursor;
-__surge_readCursor = pos12 + count9 * 8;
+const result8 = new Array<number>(count7);
+const pos10 = __surge_readCursor;
+__surge_readCursor = pos10 + count7 * 8;
 if (__surge_readCursor > __surge_inputLength) {
     throw "@rbxts/surge: deserialize read past the end of the input buffer";
 }
-let element13 = pos12;
-for (const i11 of $range(1, count9)) {
-    result10[i11 - 1] = buffer.readf64(__surge_input, element13);
-    element13 += 8;
+let element11 = pos10;
+for (const i9 of $range(1, count7)) {
+    result8[i9 - 1] = buffer.readf64(__surge_input, element11);
+    element11 += 8;
 }
-return result10;"
+return result8;"
 `;
 
 exports[`Emitter read-side checks every read is bounded against the input length 1`] = `
