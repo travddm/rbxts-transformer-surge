@@ -26,9 +26,9 @@ function runTransform(source: string): {
  * before it emits, and returns the error messages. A type error in generated
  * code fails the user's build at a position they cannot see.
  */
-function typeErrorsOfGeneratedCode(source: string): string[] {
+function typeErrorsOfGeneratedCode(source: string, compilerOptions?: ts.CompilerOptions): string[] {
 	const { printed, diagnostics, cleanup } = runTransform(source);
-	const second = createFixtureProgram(printed, { surge: true });
+	const second = createFixtureProgram(printed, { surge: true, compilerOptions });
 	try {
 		expect(diagnostics).toHaveLength(0);
 		return ts
@@ -620,6 +620,20 @@ describe("transform generated code", () => {
 			);
 			expect(errors).toEqual([]);
 		}
+	});
+
+	test.each([
+		["an array", "{ x: number }[]"],
+		["an exact array", "DataType.Length<{ x: number }[], 3>"],
+		["a tuple's rest", "[string, ...{ x: number }[]]"],
+	])("the generated code for %s passes the type check under a consumer's noUncheckedIndexedAccess", (_name, type) => {
+		const errors = typeErrorsOfGeneratedCode(
+			`import { DataType, createCodec } from "@rbxts/surge";
+				interface T { list: ${type}; }
+				export const s = createCodec<T>();`,
+			{ noUncheckedIndexedAccess: true },
+		);
+		expect(errors).toEqual([]);
 	});
 
 	test("the generated code of a shape written exactly passes the type check", () => {

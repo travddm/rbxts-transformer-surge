@@ -375,6 +375,11 @@ function writeArray(
 	const f = ctx.factory;
 	const arr = ctx.fresh("arr");
 	out.push(ctx.constStatement(arr, value));
+	// `arr[i]` is typed with `undefined` under a consumer's
+	// `noUncheckedIndexedAccess`, and every index read here is below the
+	// length the loop runs to.
+	const elementAt = (index: ts.Expression): ts.Expression =>
+		ctx.castTo(f.createElementAccessExpression(arr, index), fieldToTypeNode(ctx, field.element));
 	const exact = exactCount(field.length);
 	if (exact !== undefined) {
 		// Indexed rather than `for...of`, so exactly this many are
@@ -386,22 +391,22 @@ function writeArray(
 		checkExactLength(ctx, ctx.sizeOf(arr), exact, padsAsAbsent(field.element), out);
 		const i = ctx.fresh("i");
 		const body: ts.Statement[] = [];
-		writeElement(ctx, field.element, f.createElementAccessExpression(arr, i), exact, out, body);
+		writeElement(ctx, field.element, elementAt(i), exact, out, body);
 		out.push(ctx.indexedLoop(i, 0, ctx.num(exact), body));
 		return;
 	}
 	writeCount(ctx, field.length, ctx.sizeOf(arr), out);
+	// A numeric loop over the length the count was written from, rather
+	// than a `for...of`, so the loop writes as many elements as the count
+	// says. A generic `for` skips an index that holds `nil`, where this
+	// writes it: as absent for an optional, and by raising for the rest.
+	const i = ctx.fresh("i");
 	const item = ctx.fresh("item");
-	const body: ts.Statement[] = [];
+	const body: ts.Statement[] = [
+		ctx.constStatement(item, elementAt(f.createBinaryExpression(i, ctx.ts_.SyntaxKind.MinusToken, ctx.num(1)))),
+	];
 	writeElement(ctx, field.element, item, ctx.sizeOf(arr), out, body);
-	out.push(
-		f.createForOfStatement(
-			undefined,
-			f.createVariableDeclarationList([f.createVariableDeclaration(item)], ctx.ts_.NodeFlags.Const),
-			arr,
-			f.createBlock(body, true),
-		),
-	);
+	out.push(ctx.countedLoop(i, ctx.sizeOf(arr), body));
 }
 
 /**

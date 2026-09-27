@@ -390,13 +390,13 @@ export abstract class EmitContext {
 	}
 
 	/**
-	 * A read loop whose `index` runs from 1 to `count`.
+	 * A loop whose `index` runs from 1 to `count`.
 	 *
 	 * `$range` is roblox-ts's numeric-for macro: `for (const i of $range(1,
 	 * count))` lowers to `for i = 1, count do`. A plain
-	 * `for (let i = 0; i < count; i++)` does not -- roblox-ts only emits a
-	 * numeric `for` when it can prove the bound is an integer
-	 * (`transformForStatement.js`'s `isProbablyInteger`), and a
+	 * `for (let i = 0; i < count; i++)` does not on the read side --
+	 * roblox-ts only emits a numeric `for` when it can prove the bound is an
+	 * integer (`transformForStatement.js`'s `isProbablyInteger`), and a
 	 * `buffer.readu32` result is just `number`, so it lowers to a `while`
 	 * loop with a `_shouldIncrement` flag that every element read pays for.
 	 * A body that never reads the index names it with a leading `_`, because

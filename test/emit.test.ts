@@ -610,7 +610,7 @@ describe("Emitter element reservations", () => {
 
 	test("an array of fixed-size elements reserves every element once, ahead of its loop", () => {
 		const output = emitSnapshot({ kind: "array", element: { kind: "num", width: "u16" } });
-		expect(output).toContain("__surge_cursor = pos4 + arr1.size() * 2;");
+		expect(output).toMatch(/__surge_cursor = pos\d+ \+ arr1\.size\(\) \* 2;/);
 		expect(output).toMatch(/__surge_readCursor = pos\d+ \+ count\d+ \* 2;/);
 		for (const section of ["write", "read"] as const) {
 			const body = loopBody(output, section);
@@ -744,6 +744,32 @@ describe("Emitter read tables", () => {
 		expect(read).toMatch(/const tup\d+ = new Array<unknown>\(3\);/);
 		for (const k of [0, 1, 2]) {
 			expect(read).toMatch(new RegExp(`tup\\d+\\[${k}\\] = `));
+		}
+	});
+});
+
+describe("Emitter write loops", () => {
+	function writeSection(output: string): string {
+		return output.split("// read\n")[0];
+	}
+
+	test("an array that writes a count reads each element by index, up to its length", () => {
+		const write = writeSection(emitSnapshot({ kind: "array", element: { kind: "str" } }));
+		// roblox-ts adds 1 to the index and folds it into the `- 1`.
+		expect(write).toMatch(
+			/for \(const (i\d+) of \$range\(1, arr1\.size\(\)\)\) \{\s+const item\d+ = arr1\[\1 - 1\] as unknown as string;/,
+		);
+		expect(write).not.toMatch(/for \(const \w+ of arr1\)/);
+	});
+
+	test("an element read by index is cast to the element's type, in either form", () => {
+		const point: Field = {
+			kind: "object",
+			fields: [{ name: "x", field: { kind: "num", width: "f64" } }],
+		};
+		for (const length of [undefined, 3]) {
+			const write = writeSection(emitSnapshot({ kind: "array", element: point, length }));
+			expect(write).toMatch(/arr1\[[^\]]+\] as unknown as \{\s+x: number;\s+\}/);
 		}
 	});
 });

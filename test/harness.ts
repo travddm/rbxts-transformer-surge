@@ -30,6 +30,8 @@ export interface FixtureOptions {
 	 * `detect.ts`'s package-identity check.
 	 */
 	readonly surge?: boolean;
+	/** Compiler options a consumer may set, over the defaults below. */
+	readonly compilerOptions?: ts.CompilerOptions;
 }
 
 export interface FixtureProgram {
@@ -59,6 +61,7 @@ export function createFixtureProgram(source: string, options: FixtureOptions = {
 		paths: options.surge
 			? { "@rbxts/surge": ["rbxts-surge/index"], "@rbxts/surge/*": ["rbxts-surge/*"] }
 			: undefined,
+		...options.compilerOptions,
 	};
 	if (options.roblox || options.surge) {
 		compilerOptions.noLib = true;
