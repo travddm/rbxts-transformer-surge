@@ -395,7 +395,11 @@ function writeArray(
 		out.push(ctx.indexedLoop(i, 0, ctx.num(exact), body));
 		return;
 	}
-	writeCount(ctx, field.length, ctx.sizeOf(arr), out);
+	// The length is taken once, so the count, the elements' reservation and
+	// the loop agree whatever a `__len` metamethod answers.
+	const len = ctx.fresh("len");
+	out.push(ctx.constStatement(len, ctx.sizeOf(arr)));
+	writeCount(ctx, field.length, len, out);
 	// A numeric loop over the length the count was written from, rather
 	// than a `for...of`, so the loop writes as many elements as the count
 	// says. A generic `for` skips an index that holds `nil`, where this
@@ -405,8 +409,8 @@ function writeArray(
 	const body: ts.Statement[] = [
 		ctx.constStatement(item, elementAt(f.createBinaryExpression(i, ctx.ts_.SyntaxKind.MinusToken, ctx.num(1)))),
 	];
-	writeElement(ctx, field.element, item, ctx.sizeOf(arr), out, body);
-	out.push(ctx.countedLoop(i, ctx.sizeOf(arr), body));
+	writeElement(ctx, field.element, item, len, out, body);
+	out.push(ctx.countedLoop(i, len, body));
 }
 
 /**

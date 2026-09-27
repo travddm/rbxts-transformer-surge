@@ -610,7 +610,7 @@ describe("Emitter element reservations", () => {
 
 	test("an array of fixed-size elements reserves every element once, ahead of its loop", () => {
 		const output = emitSnapshot({ kind: "array", element: { kind: "num", width: "u16" } });
-		expect(output).toMatch(/__surge_cursor = pos\d+ \+ arr1\.size\(\) \* 2;/);
+		expect(output).toMatch(/__surge_cursor = pos\d+ \+ len\d+ \* 2;/);
 		expect(output).toMatch(/__surge_readCursor = pos\d+ \+ count\d+ \* 2;/);
 		for (const section of ["write", "read"] as const) {
 			const body = loopBody(output, section);
@@ -632,7 +632,7 @@ describe("Emitter element reservations", () => {
 			},
 		});
 		expect(output).toMatchSnapshot();
-		expect(output).toContain("arr1.size() * 3;");
+		expect(output).toMatch(/len\d+ \* 3;/);
 		// The read waits for the store, so the element moves on after it.
 		expect(loopBody(output, "read")).toMatch(/\] = \{[^]*\};\s+element\d+ \+= 3;\s+\}\s+return /);
 	});
@@ -757,9 +757,14 @@ describe("Emitter write loops", () => {
 		const write = writeSection(emitSnapshot({ kind: "array", element: { kind: "str" } }));
 		// roblox-ts adds 1 to the index and folds it into the `- 1`.
 		expect(write).toMatch(
-			/for \(const (i\d+) of \$range\(1, arr1\.size\(\)\)\) \{\s+const item\d+ = arr1\[\1 - 1\] as unknown as string;/,
+			/for \(const (i\d+) of \$range\(1, len\d+\)\) \{\s+const item\d+ = arr1\[\1 - 1\] as unknown as string;/,
 		);
 		expect(write).not.toMatch(/for \(const \w+ of arr1\)/);
+		// The count, the loop and, for a fixed-size element, the reservation
+		// all use the one length.
+		for (const element of [{ kind: "str" }, { kind: "num", width: "u16" }] as Field[]) {
+			expect(writeSection(emitSnapshot({ kind: "array", element })).match(/arr1\.size\(\)/g)).toHaveLength(1);
+		}
 	});
 
 	test("an element read by index is cast to the element's type, in either form", () => {
