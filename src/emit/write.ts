@@ -943,6 +943,15 @@ function writeObject(
 	writeObjectInline(ctx, field.fields, value, out);
 }
 
+/** Whether `value` is a local once the casts around it, which compile to nothing, are taken off. */
+function isLocal(ctx: EmitContext, value: ts.Expression): boolean {
+	let inner = value;
+	while (ctx.ts_.isAsExpression(inner) || ctx.ts_.isParenthesizedExpression(inner)) {
+		inner = inner.expression;
+	}
+	return ctx.ts_.isIdentifier(inner);
+}
+
 export function writeObjectInline(
 	ctx: EmitContext,
 	fields: ReadonlyArray<ObjectFieldEntry>,
@@ -956,6 +965,16 @@ export function writeObjectInline(
 			writeField(ctx, entry.field, ctx.propertyAccess(value, entry), out);
 		}
 		return;
+	}
+	// A nested object's value is a path of property reads from the value
+	// `serialize` was given. Each property's write would read the whole path
+	// again, so an object with more than one property reads it once, into a
+	// local. A run above binds nothing: its locals are counted by property
+	// (`runFields` in layout.ts).
+	if (!isLocal(ctx, value) && fields.length > 1) {
+		const object = ctx.fresh("obj");
+		out.push(ctx.constStatement(object, value));
+		value = object;
 	}
 	// The packed region comes first: the read side needs an optional's
 	// presence bit before it reaches that optional's value.

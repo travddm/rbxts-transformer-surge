@@ -748,6 +748,82 @@ describe("Emitter read tables", () => {
 	});
 });
 
+describe("Emitter nested object values", () => {
+	const u8: Field = { kind: "num", width: "u8" };
+	const str: Field = { kind: "str" };
+
+	function writeSection(field: Field): string {
+		return emitSnapshot(field).split("// read\n")[0];
+	}
+
+	test("a nested object of more than one property reads its value once", () => {
+		const write = writeSection({
+			kind: "object",
+			fields: [
+				{
+					name: "inner",
+					field: {
+						kind: "object",
+						fields: [
+							{ name: "a", field: str },
+							{ name: "b", field: u8 },
+						],
+					},
+				},
+			],
+		});
+		expect(write).toMatch(/const (obj\d+) = value\.inner;[^]*\1\.a;[^]*\1\.b\)/);
+		expect(write).not.toContain("value.inner.");
+	});
+
+	test("a local, a cast local, one property, or a run binds nothing", () => {
+		const pairFields = [
+			{ name: "a", field: str },
+			{ name: "b", field: u8 },
+		];
+		// The root value is a local already.
+		expect(writeSection({ kind: "object", fields: pairFields })).not.toMatch(/const obj\d+/);
+		// A union's variant is the union's value under a cast, which compiles
+		// to nothing.
+		const union = writeSection({
+			kind: "taggedUnion",
+			tagKey: "kind",
+			variants: [
+				{ tagValue: "a", fields: pairFields },
+				{ tagValue: "b", fields: [{ name: "y", field: u8 }] },
+			],
+		});
+		expect(union).toMatch(/as unknown as/);
+		expect(union).not.toMatch(/const obj\d+/);
+		// One property reads the path once anyway.
+		expect(
+			writeSection({
+				kind: "object",
+				fields: [{ name: "inner", field: { kind: "object", fields: [{ name: "a", field: str }] } }],
+			}),
+		).not.toMatch(/const obj\d+/);
+		// A nested object of fixed-size properties joins the run around it.
+		const inRun = writeSection({
+			kind: "object",
+			fields: [
+				{ name: "head", field: u8 },
+				{
+					name: "inner",
+					field: {
+						kind: "object",
+						fields: [
+							{ name: "a", field: u8 },
+							{ name: "b", field: u8 },
+						],
+					},
+				},
+			],
+		});
+		expect(inRun).not.toMatch(/const obj\d+/);
+		expect(inRun).toContain("value.inner.a");
+	});
+});
+
 describe("Emitter exact arrays", () => {
 	test("an element read by index is cast to the element's type", () => {
 		const point: Field = {
