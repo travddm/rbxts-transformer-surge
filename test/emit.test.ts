@@ -70,6 +70,13 @@ describe("Emitter per-kind write/read snapshots", () => {
 		expect(emitSnapshot({ kind: "cframe" })).toMatchSnapshot();
 	});
 
+	test("a cframe reads its Position once for its three components", () => {
+		for (const field of [{ kind: "cframe" }, { kind: "cframe", quantized: true }] as Field[]) {
+			const write = emitSnapshot(field).split("// read\n")[0];
+			expect(write.match(/\.Position\b/g)).toHaveLength(1);
+		}
+	});
+
 	test("bitSet", () => {
 		expect(emitSnapshot({ kind: "bitSet", members: [false, -1, "a"] })).toMatchSnapshot();
 	});

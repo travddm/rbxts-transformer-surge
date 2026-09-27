@@ -47,23 +47,24 @@ if (__surge_cursor > __surge_capacity) {
     __surge_scratch = __surge_grow(__surge_scratch, pos1, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-buffer.writei16(__surge_scratch, pos1, value.Position.X);
-buffer.writei16(__surge_scratch, pos1 + 2, value.Position.Y);
-buffer.writei16(__surge_scratch, pos1 + 4, value.Position.Z);
-const [axis2, angle3] = value.ToAxisAngle();
-const rv4 = axis2.mul(angle3);
-buffer.writef32(__surge_scratch, pos1 + 6, rv4.X);
-buffer.writef32(__surge_scratch, pos1 + 10, rv4.Y);
-buffer.writef32(__surge_scratch, pos1 + 14, rv4.Z);
+const position2 = value.Position;
+buffer.writei16(__surge_scratch, pos1, position2.X);
+buffer.writei16(__surge_scratch, pos1 + 2, position2.Y);
+buffer.writei16(__surge_scratch, pos1 + 4, position2.Z);
+const [axis3, angle4] = value.ToAxisAngle();
+const rv5 = axis3.mul(angle4);
+buffer.writef32(__surge_scratch, pos1 + 6, rv5.X);
+buffer.writef32(__surge_scratch, pos1 + 10, rv5.Y);
+buffer.writef32(__surge_scratch, pos1 + 14, rv5.Z);
 
 // read
-const pos5 = __surge_readCursor;
-__surge_readCursor = pos5 + 18;
-const pos6 = new Vector3(buffer.readi16(__surge_input, pos5), buffer.readi16(__surge_input, pos5 + 2), buffer.readi16(__surge_input, pos5 + 4));
-const rv7 = new Vector3(buffer.readf32(__surge_input, pos5 + 6), buffer.readf32(__surge_input, pos5 + 10), buffer.readf32(__surge_input, pos5 + 14));
-const angle8 = rv7.Magnitude;
-const rotation9 = CFrame.fromAxisAngle(angle8 > 1e-6 ? rv7.Unit : Vector3.zAxis, angle8);
-return rotation9.add(pos6);"
+const pos6 = __surge_readCursor;
+__surge_readCursor = pos6 + 18;
+const pos7 = new Vector3(buffer.readi16(__surge_input, pos6), buffer.readi16(__surge_input, pos6 + 2), buffer.readi16(__surge_input, pos6 + 4));
+const rv8 = new Vector3(buffer.readf32(__surge_input, pos6 + 6), buffer.readf32(__surge_input, pos6 + 10), buffer.readf32(__surge_input, pos6 + 14));
+const angle9 = rv8.Magnitude;
+const rotation10 = CFrame.fromAxisAngle(angle9 > 1e-6 ? rv8.Unit : Vector3.zAxis, angle9);
+return rotation10.add(pos7);"
 `;
 
 exports[`Emitter component widths a Vector3 writes each component at its own width, at cumulative offsets 1`] = `
@@ -93,23 +94,24 @@ if (__surge_cursor > __surge_capacity) {
     __surge_scratch = __surge_grow(__surge_scratch, pos1, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-buffer.writef32(__surge_scratch, pos1, value.Position.X);
-buffer.writef32(__surge_scratch, pos1 + 4, value.Position.Y);
-buffer.writef32(__surge_scratch, pos1 + 8, value.Position.Z);
-const [axis2, angle3] = value.ToAxisAngle();
-const rv4 = axis2.mul((angle3 > 3.141592653589793 ? angle3 - 6.283185307179586 : angle3) * 10430.060040584269);
-buffer.writei16(__surge_scratch, pos1 + 12, math.round(rv4.X));
-buffer.writei16(__surge_scratch, pos1 + 14, math.round(rv4.Y));
-buffer.writei16(__surge_scratch, pos1 + 16, math.round(rv4.Z));
+const position2 = value.Position;
+buffer.writef32(__surge_scratch, pos1, position2.X);
+buffer.writef32(__surge_scratch, pos1 + 4, position2.Y);
+buffer.writef32(__surge_scratch, pos1 + 8, position2.Z);
+const [axis3, angle4] = value.ToAxisAngle();
+const rv5 = axis3.mul((angle4 > 3.141592653589793 ? angle4 - 6.283185307179586 : angle4) * 10430.060040584269);
+buffer.writei16(__surge_scratch, pos1 + 12, math.round(rv5.X));
+buffer.writei16(__surge_scratch, pos1 + 14, math.round(rv5.Y));
+buffer.writei16(__surge_scratch, pos1 + 16, math.round(rv5.Z));
 
 // read
-const pos5 = __surge_readCursor;
-__surge_readCursor = pos5 + 18;
-const pos6 = new Vector3(buffer.readf32(__surge_input, pos5), buffer.readf32(__surge_input, pos5 + 4), buffer.readf32(__surge_input, pos5 + 8));
-const rv7 = new Vector3(buffer.readi16(__surge_input, pos5 + 12) * 0.00009587672516830327, buffer.readi16(__surge_input, pos5 + 14) * 0.00009587672516830327, buffer.readi16(__surge_input, pos5 + 16) * 0.00009587672516830327);
-const angle8 = rv7.Magnitude;
-const rotation9 = CFrame.fromAxisAngle(angle8 > 1e-6 ? rv7.Unit : Vector3.zAxis, angle8);
-return rotation9.add(pos6);"
+const pos6 = __surge_readCursor;
+__surge_readCursor = pos6 + 18;
+const pos7 = new Vector3(buffer.readf32(__surge_input, pos6), buffer.readf32(__surge_input, pos6 + 4), buffer.readf32(__surge_input, pos6 + 8));
+const rv8 = new Vector3(buffer.readi16(__surge_input, pos6 + 12) * 0.00009587672516830327, buffer.readi16(__surge_input, pos6 + 14) * 0.00009587672516830327, buffer.readi16(__surge_input, pos6 + 16) * 0.00009587672516830327);
+const angle9 = rv8.Magnitude;
+const rotation10 = CFrame.fromAxisAngle(angle9 > 1e-6 ? rv8.Unit : Vector3.zAxis, angle9);
+return rotation10.add(pos7);"
 `;
 
 exports[`Emitter element reservations an element of several fields reads and writes each at its offset from the element 1`] = `
@@ -473,23 +475,24 @@ if (__surge_cursor > __surge_capacity) {
     __surge_scratch = __surge_grow(__surge_scratch, pos1, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-buffer.writef32(__surge_scratch, pos1, value.Position.X);
-buffer.writef32(__surge_scratch, pos1 + 4, value.Position.Y);
-buffer.writef32(__surge_scratch, pos1 + 8, value.Position.Z);
-const [axis2, angle3] = value.ToAxisAngle();
-const rv4 = axis2.mul(angle3);
-buffer.writef32(__surge_scratch, pos1 + 12, rv4.X);
-buffer.writef32(__surge_scratch, pos1 + 16, rv4.Y);
-buffer.writef32(__surge_scratch, pos1 + 20, rv4.Z);
+const position2 = value.Position;
+buffer.writef32(__surge_scratch, pos1, position2.X);
+buffer.writef32(__surge_scratch, pos1 + 4, position2.Y);
+buffer.writef32(__surge_scratch, pos1 + 8, position2.Z);
+const [axis3, angle4] = value.ToAxisAngle();
+const rv5 = axis3.mul(angle4);
+buffer.writef32(__surge_scratch, pos1 + 12, rv5.X);
+buffer.writef32(__surge_scratch, pos1 + 16, rv5.Y);
+buffer.writef32(__surge_scratch, pos1 + 20, rv5.Z);
 
 // read
-const pos5 = __surge_readCursor;
-__surge_readCursor = pos5 + 24;
-const pos6 = new Vector3(buffer.readf32(__surge_input, pos5), buffer.readf32(__surge_input, pos5 + 4), buffer.readf32(__surge_input, pos5 + 8));
-const rv7 = new Vector3(buffer.readf32(__surge_input, pos5 + 12), buffer.readf32(__surge_input, pos5 + 16), buffer.readf32(__surge_input, pos5 + 20));
-const angle8 = rv7.Magnitude;
-const rotation9 = CFrame.fromAxisAngle(angle8 > 1e-6 ? rv7.Unit : Vector3.zAxis, angle8);
-return rotation9.add(pos6);"
+const pos6 = __surge_readCursor;
+__surge_readCursor = pos6 + 24;
+const pos7 = new Vector3(buffer.readf32(__surge_input, pos6), buffer.readf32(__surge_input, pos6 + 4), buffer.readf32(__surge_input, pos6 + 8));
+const rv8 = new Vector3(buffer.readf32(__surge_input, pos6 + 12), buffer.readf32(__surge_input, pos6 + 16), buffer.readf32(__surge_input, pos6 + 20));
+const angle9 = rv8.Magnitude;
+const rotation10 = CFrame.fromAxisAngle(angle9 > 1e-6 ? rv8.Unit : Vector3.zAxis, angle9);
+return rotation10.add(pos7);"
 `;
 
 exports[`Emitter per-kind write/read snapshots cframe inside Packed 1`] = `
