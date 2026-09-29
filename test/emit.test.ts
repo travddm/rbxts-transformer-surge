@@ -292,6 +292,28 @@ describe("Emitter packed region", () => {
 		expect(reservations(read, "read")).toEqual([1, 1]);
 		expect(output).toMatchSnapshot();
 	});
+
+	const packedBools = (count: number): Field => ({
+		kind: "object",
+		fields: Array.from({ length: count }, (_, i) => ({
+			name: `b${String(i).padStart(3, "0")}`,
+			field: { kind: "bool", packed: true } as Field,
+		})),
+	});
+
+	test("the read side reads each byte of the region once and tests each bit in place", () => {
+		const read = emitSnapshot(packedBools(10)).split("// read")[1];
+		expect(read.match(/const bits\d+ = buffer\.readu8\(__surge_input, pos\d+( \+ 1)?\);/g)).toHaveLength(2);
+		// Bit 9 is the second byte's second bit.
+		expect(read).toMatch(/b009: bit32\.btest\(bits\d+, 2\)/);
+		expect(read).not.toContain("unpackBit");
+	});
+
+	test("a region of more than LOCALS_PER_BLOCK bytes reads the bytes past them in place", () => {
+		const read = emitSnapshot(packedBools(33 * 8)).split("// read")[1];
+		expect(read.match(/const bits\d+ = /g)).toHaveLength(32);
+		expect(read).toMatch(/b256: bit32\.btest\(buffer\.readu8\(__surge_input, pos\d+ \+ 32\), 1\)/);
+	});
 });
 
 describe("Emitter packed tag bit", () => {
@@ -308,18 +330,18 @@ describe("Emitter packed tag bit", () => {
 	test("a packed two-variant tagged union property is one tag bit, with no index byte", () => {
 		const output = emitSnapshot({ kind: "object", fields: [{ name: "shape", field: union(2) }] });
 		expect(output).toContain('value.shape.kind === "b" ? 1 : 0');
-		expect(output).toContain("__surge_unpackBit(");
+		expect(output).toMatch(/bit32\.btest\(bits\d+, 1\)/);
 		expect(output).not.toContain("readu8(buf3"); // no index byte is read before the variant
 		expect(output).toMatchSnapshot();
 	});
 
 	test("a packed tagged union with three variants keeps its index byte", () => {
 		const output = emitSnapshot({ kind: "object", fields: [{ name: "shape", field: union(3) }] });
-		expect(output).not.toContain("__surge_unpackBit(");
+		expect(output).not.toContain("bit32.btest(");
 	});
 
 	test("a packed two-variant tagged union that is not an object property keeps its index byte", () => {
-		expect(emitSnapshot(union(2))).not.toContain("__surge_unpackBit(");
+		expect(emitSnapshot(union(2))).not.toContain("bit32.btest(");
 	});
 });
 

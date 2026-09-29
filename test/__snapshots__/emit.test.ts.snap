@@ -236,10 +236,11 @@ buffer.writeu8(__surge_scratch, pos1, (value.a ? 1 : 0) + (value.b ? 2 : 0) + (v
 // read
 const pos2 = __surge_readCursor;
 __surge_readCursor = pos2 + 1;
+const bits3 = buffer.readu8(__surge_input, pos2);
 return {
-    a: __surge_unpackBit(__surge_input, pos2, 0),
-    b: __surge_unpackBit(__surge_input, pos2, 1),
-    c: __surge_unpackBit(__surge_input, pos2, 2)
+    a: bit32.btest(bits3, 1),
+    b: bit32.btest(bits3, 2),
+    c: bit32.btest(bits3, 4)
 };"
 `;
 
@@ -276,20 +277,21 @@ buffer.writestring(__surge_scratch, pos6 + 4, s4);
 // read
 const pos7 = __surge_readCursor;
 __surge_readCursor = pos7 + 1;
-let opt8;
-if (__surge_unpackBit(__surge_input, pos7, 0)) {
-    const pos9 = __surge_readCursor;
-    __surge_readCursor = pos9 + 1;
-    opt8 = buffer.readu8(__surge_input, pos9);
+const bits8 = buffer.readu8(__surge_input, pos7);
+let opt9;
+if (bit32.btest(bits8, 1)) {
+    const pos10 = __surge_readCursor;
+    __surge_readCursor = pos10 + 1;
+    opt9 = buffer.readu8(__surge_input, pos10);
 }
-const pos10 = __surge_readCursor;
-const len11 = buffer.readu32(__surge_input, pos10);
-__surge_readCursor = pos10 + 4 + len11;
+const pos11 = __surge_readCursor;
+const len12 = buffer.readu32(__surge_input, pos11);
+__surge_readCursor = pos11 + 4 + len12;
 return {
-    count: opt8,
-    flag: __surge_unpackBit(__surge_input, pos7, 1),
-    label: buffer.readstring(__surge_input, pos10 + 4, len11),
-    maybeFlag: __surge_unpackBit(__surge_input, pos7, 2) ? __surge_unpackBit(__surge_input, pos7, 3) : undefined
+    count: opt9,
+    flag: bit32.btest(bits8, 2),
+    label: buffer.readstring(__surge_input, pos11 + 4, len12),
+    maybeFlag: bit32.btest(bits8, 4) ? bit32.btest(bits8, 8) : undefined
 };"
 `;
 
@@ -329,32 +331,33 @@ else if (idx2 === 1) {
 // read
 const pos5 = __surge_readCursor;
 __surge_readCursor = pos5 + 1;
-const idx6 = __surge_unpackBit(__surge_input, pos5, 0) ? 1 : 0;
-let result7: {
+const bits6 = buffer.readu8(__surge_input, pos5);
+const idx7 = bit32.btest(bits6, 1) ? 1 : 0;
+let result8: {
     kind: "a";
     n: number;
 } | {
     kind: "b";
     n: number;
 };
-if (idx6 === 1) {
-    const pos9 = __surge_readCursor;
-    __surge_readCursor = pos9 + 1;
-    result7 = {
+if (idx7 === 1) {
+    const pos10 = __surge_readCursor;
+    __surge_readCursor = pos10 + 1;
+    result8 = {
         kind: "b",
-        n: buffer.readu8(__surge_input, pos9)
+        n: buffer.readu8(__surge_input, pos10)
     };
 }
 else {
-    const pos8 = __surge_readCursor;
-    __surge_readCursor = pos8 + 1;
-    result7 = {
+    const pos9 = __surge_readCursor;
+    __surge_readCursor = pos9 + 1;
+    result8 = {
         kind: "a",
-        n: buffer.readu8(__surge_input, pos8)
+        n: buffer.readu8(__surge_input, pos9)
     };
 }
 return {
-    shape: result7
+    shape: result8
 };"
 `;
 

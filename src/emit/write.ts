@@ -1106,7 +1106,7 @@ function writePackedBits(
 	}
 }
 
-/** Sums `1 << bitIndex` for each set bit in `bits` (bit 0 = the byte's least-significant bit, matching `unpackBit`'s `buffer.readbits`). */
+/** Sums `1 << bitIndex` for each set bit in `bits` (bit 0 = the byte's least-significant bit, as the read side's `bit32.btest` tests it). */
 function packedByteExpr(ctx: EmitContext, bits: ReadonlyArray<PackedBit>, value: ts.Expression): ts.Expression {
 	const f = ctx.factory;
 	let expr: ts.Expression | undefined;

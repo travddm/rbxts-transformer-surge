@@ -5,6 +5,7 @@ import { FIXED_DATATYPES } from "../datatypes";
 import type { ComponentWidths, CountSpec, Field, FieldKey, ObjectFieldEntry } from "../field";
 import {
 	DEFAULT_COMPONENTS,
+	LOCALS_PER_BLOCK,
 	QUANTIZED_COMPONENTS,
 	QUANTIZED_ROTATION_SCALE,
 	READ_BUFFER,
@@ -830,6 +831,34 @@ function objectLiteral(
 	return f.createObjectLiteralExpression(properties, true);
 }
 
+/**
+ * The bytes of a packed region, for its bits to be tested against: each read
+ * once into a local, as hand-written code would. The locals stay live to the
+ * end of the object's read, since an item in any block may need a bit, so a
+ * region binds at most `LOCALS_PER_BLOCK` of them and reads any byte past
+ * that in place, once for each of its bits.
+ */
+function readPackedBytes(
+	ctx: EmitContext,
+	buf: ts.Expression,
+	pos: ts.Expression,
+	count: number,
+	out: ts.Statement[],
+): ts.Expression[] {
+	const bytes: ts.Expression[] = [];
+	for (let k = 0; k < count; k++) {
+		const read = ctx.bufferCall("readu8", [buf, ctx.offsetFrom(pos, k)]);
+		if (k >= LOCALS_PER_BLOCK) {
+			bytes.push(read);
+			continue;
+		}
+		const local = ctx.fresh("bits");
+		out.push(ctx.constStatement(local, read));
+		bytes.push(local);
+	}
+	return bytes;
+}
+
 export function readObjectInline(
 	ctx: EmitContext,
 	fields: ReadonlyArray<ObjectFieldEntry>,
@@ -859,11 +888,17 @@ export function readObjectInline(
 		{ present?: ts.Expression; value?: ts.Expression; tag?: ts.Expression }
 	>();
 	if (bits.length > 0) {
-		const { buf, pos, statements } = ctx.destructureAlloc("readAlloc", Math.ceil(bits.length / 8));
+		const regionBytes = Math.ceil(bits.length / 8);
+		const { buf, pos, statements } = ctx.destructureAlloc("readAlloc", regionBytes);
 		out.push(...statements);
+		const bytes = readPackedBytes(ctx, buf, pos, regionBytes, out);
 		bits.forEach(({ entry, role }, i) => {
 			const exprs = bitExprs.get(entry) ?? {};
-			exprs[role] = ctx.call("unpackBit", [buf, pos, ctx.num(i)]);
+			exprs[role] = f.createCallExpression(
+				f.createPropertyAccessExpression(f.createIdentifier("bit32"), "btest"),
+				undefined,
+				[bytes[Math.floor(i / 8)], ctx.num(2 ** (i % 8))],
+			);
 			bitExprs.set(entry, exprs);
 		});
 	}
