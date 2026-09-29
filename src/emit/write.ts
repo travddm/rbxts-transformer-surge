@@ -1143,35 +1143,23 @@ function writeTaggedUnion(
 	// `false` when the enclosing object's packed region holds the tag as one bit.
 	writeIndex = true,
 ): void {
-	const f = ctx.factory;
-	const tagExpr = ctx.propertyAccess(value, tagKeyOf(field));
-	const idxBytes = field.variants.length <= 256 ? 1 : 2;
-	const idx = ctx.fresh("idx");
-	out.push(
-		ctx.constStatement(
-			idx,
-			literalIndexExpr(
-				ctx,
-				field.variants.map((v) => v.tagValue),
-				tagExpr,
-			),
-		),
+	const tag = ctx.fresh("tag");
+	out.push(ctx.constStatement(tag, ctx.propertyAccess(value, tagKeyOf(field))));
+	writeVariants(
+		ctx,
+		field.variants.map((variant) => ({
+			check: literalCheck(ctx, tag, variant.tagValue),
+			write: (branch: ts.Statement[]) =>
+				writeObjectInline(
+					ctx,
+					variant.fields,
+					ctx.castTo(value, objectShapeTypeNode(ctx, variant.fields)),
+					branch,
+				),
+		})),
+		writeIndex,
+		out,
 	);
-	if (writeIndex) {
-		const { buf, pos, statements } = ctx.destructureAlloc("alloc", idxBytes);
-		out.push(...statements);
-		out.push(f.createExpressionStatement(ctx.bufferCall(idxBytes === 1 ? "writeu8" : "writeu16", [buf, pos, idx])));
-	}
-
-	let chain: ts.Statement | undefined;
-	for (let i = field.variants.length - 1; i >= 0; i--) {
-		const branch: ts.Statement[] = [];
-		const variantType = objectShapeTypeNode(ctx, field.variants[i].fields);
-		writeObjectInline(ctx, field.variants[i].fields, ctx.castTo(value, variantType), branch);
-		const cond = f.createBinaryExpression(idx, ctx.ts_.SyntaxKind.EqualsEqualsEqualsToken, ctx.num(i));
-		chain = f.createIfStatement(cond, f.createBlock(branch, true), chain);
-	}
-	if (chain) out.push(chain);
 }
 
 function writeGuardedUnion(
@@ -1180,32 +1168,58 @@ function writeGuardedUnion(
 	value: ts.Expression,
 	out: ts.Statement[],
 ): void {
-	const f = ctx.factory;
-	const idxBytes = field.variants.length <= 256 ? 1 : 2;
-	const idx = ctx.fresh("idx");
-	let idxExpr: ts.Expression = ctx.num(field.variants.length - 1);
-	for (let i = field.variants.length - 2; i >= 0; i--) {
-		idxExpr = f.createConditionalExpression(
-			guardFor(ctx, field.variants[i], value),
-			undefined,
-			ctx.num(i),
-			undefined,
-			idxExpr,
-		);
-	}
-	out.push(ctx.constStatement(idx, idxExpr));
-	const { buf, pos, statements } = ctx.destructureAlloc("alloc", idxBytes);
-	out.push(...statements);
-	out.push(f.createExpressionStatement(ctx.bufferCall(idxBytes === 1 ? "writeu8" : "writeu16", [buf, pos, idx])));
+	writeVariants(
+		ctx,
+		field.variants.map((variant) => ({
+			check: guardFor(ctx, variant, value),
+			write: (branch: ts.Statement[]) =>
+				writeField(ctx, variant, ctx.castTo(value, fieldToTypeNode(ctx, variant)), branch),
+		})),
+		true,
+		out,
+	);
+}
 
+/**
+ * A union's write, which tests its variants once: each test's branch writes
+ * the variant's index, unless a packed region holds it, and then the
+ * variant. The last variant is written when no test passes, as the size
+ * (`measureUnion` in size.ts) takes it, so the two agree on a value that
+ * matches no variant.
+ */
+function writeVariants(
+	ctx: EmitContext,
+	variants: ReadonlyArray<{ readonly check: ts.Expression; readonly write: (branch: ts.Statement[]) => void }>,
+	writeIndex: boolean,
+	out: ts.Statement[],
+): void {
+	const f = ctx.factory;
+	const idxBytes = variants.length <= 256 ? 1 : 2;
+	const last = variants.length - 1;
 	let chain: ts.Statement | undefined;
-	for (let i = field.variants.length - 1; i >= 0; i--) {
+	for (let i = last; i >= 0; i--) {
 		const branch: ts.Statement[] = [];
-		writeField(ctx, field.variants[i], ctx.castTo(value, fieldToTypeNode(ctx, field.variants[i])), branch);
-		const cond = f.createBinaryExpression(idx, ctx.ts_.SyntaxKind.EqualsEqualsEqualsToken, ctx.num(i));
-		chain = f.createIfStatement(cond, f.createBlock(branch, true), chain);
+		if (writeIndex) {
+			const { buf, pos, statements } = ctx.destructureAlloc("alloc", idxBytes);
+			branch.push(...statements);
+			branch.push(
+				f.createExpressionStatement(
+					ctx.bufferCall(idxBytes === 1 ? "writeu8" : "writeu16", [buf, pos, ctx.num(i)]),
+				),
+			);
+		}
+		variants[i].write(branch);
+		const block = f.createBlock(branch, true);
+		chain = i === last ? block : f.createIfStatement(variants[i].check, block, chain);
 	}
-	if (chain) out.push(chain);
+	if (chain === undefined) {
+		return;
+	}
+	if (ctx.ts_.isBlock(chain)) {
+		out.push(...chain.statements);
+	} else {
+		out.push(chain);
+	}
 }
 
 export function guardFor(ctx: EmitContext, field: Field, value: ts.Expression): ts.Expression {

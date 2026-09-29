@@ -429,10 +429,39 @@ describe("Emitter property names that are not identifiers", () => {
 				{ tagValue: "b", fields: [] },
 			],
 		});
-		expect(output).toContain('value["the-kind"] === "a"');
+		expect(output).toContain('const tag1 = value["the-kind"];');
 		expect(output).toContain('"the-kind": "a"');
 		expect(output).toContain('"a-value": string');
 		expect(output).not.toContain("value.the-kind");
+	});
+});
+
+describe("Emitter union writes", () => {
+	const u8: Field = { kind: "num", width: "u8" };
+
+	test("a tagged union reads its tag once and tests it once, each branch writing its own index", () => {
+		const write = emitSnapshot({
+			kind: "taggedUnion",
+			tagKey: "kind",
+			variants: ["a", "b", "c"].map((tagValue) => ({ tagValue, fields: [{ name: "n", field: u8 }] })),
+		}).split("// read")[0];
+		expect(write.match(/value\.kind/g)).toHaveLength(1);
+		expect(write).not.toContain("idx");
+		expect(write).toMatch(/^\/\/ write\nconst (tag\d+) = value\.kind;\nif \(\1 === "a"\) \{/);
+		expect(write).toMatch(/else if \(tag\d+ === "b"\)/);
+		// The last variant is written when no test passes, as the size takes it.
+		expect(write).toMatch(/\}\nelse \{\n[^]*?writeu8\(__surge_scratch, pos\d+, 2\)/);
+	});
+
+	test("a guarded union tests each guard once, each branch writing its own index", () => {
+		const write = emitSnapshot({
+			kind: "guardedUnion",
+			variants: [{ kind: "num", width: "f64" }, { kind: "str" }, { kind: "bool", packed: false }],
+		}).split("// read")[0];
+		expect(write.match(/typeIs\(value, "number"\)/g)).toHaveLength(1);
+		expect(write.match(/typeIs\(value, "string"\)/g)).toHaveLength(1);
+		expect(write).not.toContain('typeIs(value, "boolean")');
+		expect(write).not.toContain("idx");
 	});
 });
 

@@ -304,8 +304,8 @@ if (__surge_cursor > __surge_capacity) {
     __surge_capacity = buffer.len(__surge_scratch);
 }
 buffer.writeu8(__surge_scratch, pos1, value.shape.kind === "b" ? 1 : 0);
-const idx2 = value.shape.kind === "a" ? 0 : 1;
-if (idx2 === 0) {
+const tag2 = value.shape.kind;
+if (tag2 === "a") {
     const pos4 = __surge_cursor;
     __surge_cursor = pos4 + 1;
     if (__surge_cursor > __surge_capacity) {
@@ -316,7 +316,7 @@ if (idx2 === 0) {
         n: number;
     }).n);
 }
-else if (idx2 === 1) {
+else {
     const pos3 = __surge_cursor;
     __surge_cursor = pos3 + 1;
     if (__surge_cursor > __surge_capacity) {
@@ -809,15 +809,14 @@ const surge_SortOrder_1_index = new Map([["Custom", 0], ["LayoutOrder", 1], ["Na
 
 exports[`Emitter per-kind write/read snapshots guardedUnion 1`] = `
 "// write
-const idx1 = typeIs(value, "number") ? 0 : 1;
-const pos2 = __surge_cursor;
-__surge_cursor = pos2 + 1;
-if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos2, __surge_cursor);
-    __surge_capacity = buffer.len(__surge_scratch);
-}
-buffer.writeu8(__surge_scratch, pos2, idx1);
-if (idx1 === 0) {
+if (typeIs(value, "number")) {
+    const pos5 = __surge_cursor;
+    __surge_cursor = pos5 + 1;
+    if (__surge_cursor > __surge_capacity) {
+        __surge_scratch = __surge_grow(__surge_scratch, pos5, __surge_cursor);
+        __surge_capacity = buffer.len(__surge_scratch);
+    }
+    buffer.writeu8(__surge_scratch, pos5, 0);
     const pos6 = __surge_cursor;
     __surge_cursor = pos6 + 8;
     if (__surge_cursor > __surge_capacity) {
@@ -826,17 +825,24 @@ if (idx1 === 0) {
     }
     buffer.writef64(__surge_scratch, pos6, value as unknown as number);
 }
-else if (idx1 === 1) {
-    const s3 = value as unknown as string;
-    const len4 = s3.size();
-    const pos5 = __surge_cursor;
-    __surge_cursor = pos5 + (len4 + 4);
+else {
+    const pos1 = __surge_cursor;
+    __surge_cursor = pos1 + 1;
     if (__surge_cursor > __surge_capacity) {
-        __surge_scratch = __surge_grow(__surge_scratch, pos5, __surge_cursor);
+        __surge_scratch = __surge_grow(__surge_scratch, pos1, __surge_cursor);
         __surge_capacity = buffer.len(__surge_scratch);
     }
-    buffer.writeu32(__surge_scratch, pos5, len4);
-    buffer.writestring(__surge_scratch, pos5 + 4, s3);
+    buffer.writeu8(__surge_scratch, pos1, 1);
+    const s2 = value as unknown as string;
+    const len3 = s2.size();
+    const pos4 = __surge_cursor;
+    __surge_cursor = pos4 + (len3 + 4);
+    if (__surge_cursor > __surge_capacity) {
+        __surge_scratch = __surge_grow(__surge_scratch, pos4, __surge_cursor);
+        __surge_capacity = buffer.len(__surge_scratch);
+    }
+    buffer.writeu32(__surge_scratch, pos4, len3);
+    buffer.writestring(__surge_scratch, pos4 + 4, s2);
 }
 
 // read
@@ -1098,26 +1104,33 @@ return buffer.readstring(__surge_input, pos4 + 4, len5);"
 
 exports[`Emitter per-kind write/read snapshots taggedUnion 1`] = `
 "// write
-const idx1 = value.kind === "a" ? 0 : 1;
-const pos2 = __surge_cursor;
-__surge_cursor = pos2 + 1;
-if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos2, __surge_cursor);
-    __surge_capacity = buffer.len(__surge_scratch);
-}
-buffer.writeu8(__surge_scratch, pos2, idx1);
-if (idx1 === 0) {
+const tag1 = value.kind;
+if (tag1 === "a") {
     const pos6 = __surge_cursor;
-    __surge_cursor = pos6 + 8;
+    __surge_cursor = pos6 + 1;
     if (__surge_cursor > __surge_capacity) {
         __surge_scratch = __surge_grow(__surge_scratch, pos6, __surge_cursor);
         __surge_capacity = buffer.len(__surge_scratch);
     }
-    buffer.writef64(__surge_scratch, pos6, (value as unknown as {
+    buffer.writeu8(__surge_scratch, pos6, 0);
+    const pos7 = __surge_cursor;
+    __surge_cursor = pos7 + 8;
+    if (__surge_cursor > __surge_capacity) {
+        __surge_scratch = __surge_grow(__surge_scratch, pos7, __surge_cursor);
+        __surge_capacity = buffer.len(__surge_scratch);
+    }
+    buffer.writef64(__surge_scratch, pos7, (value as unknown as {
         x: number;
     }).x);
 }
-else if (idx1 === 1) {
+else {
+    const pos2 = __surge_cursor;
+    __surge_cursor = pos2 + 1;
+    if (__surge_cursor > __surge_capacity) {
+        __surge_scratch = __surge_grow(__surge_scratch, pos2, __surge_cursor);
+        __surge_capacity = buffer.len(__surge_scratch);
+    }
+    buffer.writeu8(__surge_scratch, pos2, 1);
     const s3 = (value as unknown as {
         y: string;
     }).y;
@@ -1133,34 +1146,34 @@ else if (idx1 === 1) {
 }
 
 // read
-const pos7 = __surge_readCursor;
-__surge_readCursor = pos7 + 1;
-const idx8 = buffer.readu8(__surge_input, pos7);
-let result9: {
+const pos8 = __surge_readCursor;
+__surge_readCursor = pos8 + 1;
+const idx9 = buffer.readu8(__surge_input, pos8);
+let result10: {
     kind: "a";
     x: number;
 } | {
     kind: "b";
     y: string;
 };
-if (idx8 === 1) {
-    const pos11 = __surge_readCursor;
-    const len12 = buffer.readu32(__surge_input, pos11);
-    __surge_readCursor = pos11 + 4 + len12;
-    result9 = {
+if (idx9 === 1) {
+    const pos12 = __surge_readCursor;
+    const len13 = buffer.readu32(__surge_input, pos12);
+    __surge_readCursor = pos12 + 4 + len13;
+    result10 = {
         kind: "b",
-        y: buffer.readstring(__surge_input, pos11 + 4, len12)
+        y: buffer.readstring(__surge_input, pos12 + 4, len13)
     };
 }
 else {
-    const pos10 = __surge_readCursor;
-    __surge_readCursor = pos10 + 8;
-    result9 = {
+    const pos11 = __surge_readCursor;
+    __surge_readCursor = pos11 + 8;
+    result10 = {
         kind: "a",
-        x: buffer.readf64(__surge_input, pos10)
+        x: buffer.readf64(__surge_input, pos11)
     };
 }
-return result9;"
+return result10;"
 `;
 
 exports[`Emitter per-kind write/read snapshots tuple with a rest element 1`] = `
