@@ -252,6 +252,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				let tableParts: { buffer: ts.Identifier; blobs: ts.Identifier } | undefined;
 				if (needsRead) {
 					emitter.beginFunction();
+					emitter.readLocally();
 					if (options.readChecks && serializedCarriesBlobs) {
 						tableParts = { buffer: emitter.fresh("inputBuffer"), blobs: emitter.fresh("inputBlobs") };
 					}

@@ -123,6 +123,8 @@ export abstract class EmitContext {
 	private writeSizeStatements: ReadonlyArray<ts.Statement> = [];
 	/** The locals that size bound, by the {@link pathKey} of the value each holds. */
 	private sizeBindings: ReadonlyMap<string, SizeBinding> = new Map();
+	/** Whether `deserialize` declares the read state itself (see {@link readLocally}). */
+	private readsLocally = false;
 	protected readonly generatedHelpers = new Set<string>();
 	protected readonly helperDecls: ts.Statement[] = [];
 	private readonly enumTables = new Map<string, { itemsName: string; indexName: string }>();
@@ -289,9 +291,28 @@ export abstract class EmitContext {
 		];
 	}
 
-	/** The input buffer and the read cursor, as {@link writeStateDecls}. */
+	/**
+	 * Has the `deserialize` about to be emitted hold the input buffer and the
+	 * read cursor in locals of its own, which count toward its budget, where
+	 * no recursion helper reads them: a helper's read function takes no
+	 * arguments and reads the closure's (Transformer 5.3 in
+	 * docs/specs/transformer.md in the surge repo). Called after
+	 * {@link beginFunction} and before the body is emitted.
+	 */
+	public readLocally(): void {
+		if (this.helperFields.size > 0) {
+			return;
+		}
+		this.readsLocally = true;
+		this.liveLocals += this.readChecks ? 3 : 2;
+	}
+
+	/**
+	 * The input buffer and the read cursor, as {@link writeStateDecls}. A
+	 * `deserialize` that reads locally declares its own instead.
+	 */
 	public readStateDecls(): ts.Statement[] {
-		if (!this.usesReadBytes) {
+		if (!this.usesReadBytes || this.readsLocally) {
 			return [];
 		}
 		const decls = [
@@ -331,6 +352,16 @@ export abstract class EmitContext {
 	public beginReadStatements(input: ts.Expression): ts.Statement[] {
 		if (!this.usesReadBytes) {
 			return [];
+		}
+		if (this.readsLocally) {
+			const buffer = this.factory.createIdentifier(READ_BUFFER);
+			const locals = [this.constStatement(buffer, input), this.letStatement(READ_CURSOR, this.num(0))];
+			if (this.readChecks) {
+				locals.push(
+					this.constStatement(this.factory.createIdentifier(READ_LENGTH), this.bufferCall("len", [buffer])),
+				);
+			}
+			return locals;
 		}
 		const statements = [this.assign(READ_BUFFER, input), this.assign(READ_CURSOR, this.num(0))];
 		if (this.readChecks) {
@@ -603,8 +634,8 @@ export abstract class EmitContext {
 	 * write side compare against the capacity and grow on the branch that is
 	 * not taken, unless the `serialize` writes exactly (see
 	 * {@link writeExactly}). The cursor and the buffer are locals of the
-	 * closure this code is emitted into, or of that `serialize`, not module
-	 * state in `@rbxts/surge`, which is what makes this four instructions
+	 * closure this code is emitted into, or of the function it is emitted
+	 * into (see {@link readLocally}), not module state in `@rbxts/surge`, which is what makes this four instructions
 	 * instead of a call into another module. What removing that call was worth
 	 * is in docs/research/generated-code-against-hand-written.md in the surge
 	 * repo.
@@ -676,7 +707,7 @@ export abstract class EmitContext {
 		};
 	}
 
-	/** `name = value;`, for the closure-scoped cursor state. */
+	/** `name = value;`, for the cursor state. */
 	public assign(name: string, value: ts.Expression): ts.Statement {
 		return this.factory.createExpressionStatement(
 			this.factory.createBinaryExpression(

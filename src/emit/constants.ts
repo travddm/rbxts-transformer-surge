@@ -55,8 +55,9 @@ export function importAlias(name: string): string {
 }
 
 // The cursor state, declared in the closure each serializer is emitted into,
-// or in a `serialize` that writes exactly (Transformer 5.20), rather than
-// owned by `@rbxts/surge`. A reservation is then a compare and two moves here
+// in a `serialize` that writes exactly (Transformer 5.20), or in a
+// `deserialize` no recursion helper reads through, rather than owned by
+// `@rbxts/surge`. A reservation is then a compare and two moves here
 // instead of a call into another module (Transformer 5.3 and 5.4 in
 // docs/specs/transformer.md in the surge repo). What that was worth is in
 // docs/research/generated-code-against-hand-written.md there. They carry the

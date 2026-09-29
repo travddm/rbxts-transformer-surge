@@ -748,6 +748,63 @@ describe("Emitter read tables", () => {
 	});
 });
 
+describe("Emitter read state", () => {
+	const u8: Field = { kind: "num", width: "u8" };
+
+	function deserializeBody(field: Field, helperFields: ReadonlyMap<string, Field>, options: EmitOptions = {}) {
+		const emitter = new Emitter(ts, ts.factory, helperFields, options);
+		const body: ts.Statement[] = [];
+		emitter.beginFunction();
+		emitter.readLocally();
+		const result = emitter.readField(field, body);
+		return {
+			closure: printNodes(emitter.readStateDecls()),
+			body: printNodes([
+				...emitter.beginReadStatements(ts.factory.createIdentifier("input")),
+				...body,
+				ts.factory.createReturnStatement(result),
+			]),
+		};
+	}
+
+	test("a deserialize that reaches no recursion helper holds the input and the cursor in locals", () => {
+		const { closure, body } = deserializeBody({ kind: "object", fields: [{ name: "n", field: u8 }] }, new Map());
+		expect(closure).toBe("");
+		expect(body).toMatch(/^const __surge_input = input;\nlet __surge_readCursor = 0;\n/);
+		const checked = deserializeBody(u8, new Map(), { readChecks: true });
+		expect(checked.closure).toBe("");
+		expect(checked.body).toMatch(
+			/^const __surge_input = input;\nlet __surge_readCursor = 0;\nconst __surge_inputLength = buffer\.len\(__surge_input\);\n/,
+		);
+	});
+
+	test("one that reaches a recursion helper keeps them in the closure, where the helper reads them", () => {
+		const helperFields = new Map<string, Field>([
+			[
+				"surge_Node_1",
+				{
+					kind: "object",
+					fields: [
+						{
+							name: "next",
+							field: {
+								kind: "optional",
+								inner: { kind: "recursiveRef", helperName: "surge_Node_1" },
+								packed: false,
+							},
+						},
+						{ name: "value", field: u8 },
+					],
+				},
+			],
+		]);
+		const { closure, body } = deserializeBody({ kind: "recursiveRef", helperName: "surge_Node_1" }, helperFields);
+		expect(closure).toContain("let __surge_input = buffer.create(0);");
+		expect(closure).toContain("let __surge_readCursor = 0;");
+		expect(body).toMatch(/^__surge_input = input;\n__surge_readCursor = 0;\n/);
+	});
+});
+
 describe("Emitter nested object values", () => {
 	const u8: Field = { kind: "num", width: "u8" };
 	const str: Field = { kind: "str" };
