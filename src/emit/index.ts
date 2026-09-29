@@ -39,7 +39,7 @@ export class Emitter extends EmitContext {
 	public sizeExactly(field: Field, value: ts.Expression): void {
 		const exact = exactSize(this, field, value);
 		if (exact !== undefined) {
-			this.writeExactly(exact.size, exact.statements);
+			this.writeExactly(exact.size, exact.statements, exact.bindings);
 		}
 	}
 

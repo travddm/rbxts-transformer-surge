@@ -29,6 +29,17 @@ export interface Slot {
 }
 
 /**
+ * A local that the size of a `serialize` written exactly binds ahead of the
+ * result (Transformer 5.20 in docs/specs/transformer.md in the surge repo),
+ * and that the write reads instead of binding its own: the value of an
+ * object, an array or a tuple, or of a `str` or a `buffer` with its length.
+ */
+export interface SizeBinding {
+	readonly value: ts.Identifier;
+	readonly len?: ts.Identifier;
+}
+
+/**
  * One reservation shared by several consecutive fields. `buf` and `pos` are set
  * by the first field that asks for bytes, which is where the cursor advances;
  * `used` tracks how much of `total` the fields have taken.
@@ -110,6 +121,8 @@ export abstract class EmitContext {
 	 */
 	private writeSize: ts.Expression | undefined;
 	private writeSizeStatements: ReadonlyArray<ts.Statement> = [];
+	/** The locals that size bound, by the {@link pathKey} of the value each holds. */
+	private sizeBindings: ReadonlyMap<string, SizeBinding> = new Map();
 	protected readonly generatedHelpers = new Set<string>();
 	protected readonly helperDecls: ts.Statement[] = [];
 	private readonly enumTables = new Map<string, { itemsName: string; indexName: string }>();
@@ -212,13 +225,49 @@ export abstract class EmitContext {
 	 * and write into it (Transformer 5.20 in docs/specs/transformer.md in the
 	 * surge repo): its buffer and its cursor are locals of `serialize`,
 	 * which count toward its budget, and no reservation checks the capacity.
-	 * `statements`, the loops that add up what `size` reads, run first.
-	 * Called after {@link beginFunction} and before the body is emitted.
+	 * `statements`, which bind the locals in `bindings` and run the loops that
+	 * add up what `size` reads, run first. Called after {@link beginFunction}
+	 * and before the body is emitted.
 	 */
-	public writeExactly(size: ts.Expression, statements: ReadonlyArray<ts.Statement>): void {
+	public writeExactly(
+		size: ts.Expression,
+		statements: ReadonlyArray<ts.Statement>,
+		bindings: ReadonlyMap<string, SizeBinding>,
+	): void {
 		this.writeSize = size;
 		this.writeSizeStatements = statements;
+		this.sizeBindings = bindings;
 		this.liveLocals += 2;
+	}
+
+	/** The local the size bound for `value`, which the write reads instead of binding its own. */
+	public boundBySize(value: ts.Expression): SizeBinding | undefined {
+		const key = this.pathKey(value);
+		return key === undefined ? undefined : this.sizeBindings.get(key);
+	}
+
+	/**
+	 * `value` as text, when it is a path of property reads and literal indexes
+	 * from a local, and `undefined` otherwise. The size and the write build
+	 * the same path to the same value, so it keys what one binds for the other.
+	 */
+	public pathKey(value: ts.Expression): string | undefined {
+		const ts_ = this.ts_;
+		if (ts_.isIdentifier(value)) {
+			return value.text;
+		}
+		let step: string;
+		if (ts_.isPropertyAccessExpression(value) && ts_.isIdentifier(value.name)) {
+			step = `.${value.name.text}`;
+		} else if (ts_.isElementAccessExpression(value) && ts_.isNumericLiteral(value.argumentExpression)) {
+			step = `[${value.argumentExpression.text}]`;
+		} else if (ts_.isElementAccessExpression(value) && ts_.isStringLiteral(value.argumentExpression)) {
+			step = `[${JSON.stringify(value.argumentExpression.text)}]`;
+		} else {
+			return undefined;
+		}
+		const object = this.pathKey(value.expression);
+		return object === undefined ? undefined : object + step;
 	}
 
 	/**

@@ -883,9 +883,39 @@ describe("Emitter exact sizing", () => {
 		});
 		expect(output).toMatchSnapshot();
 		// 4 (list count) + 4 (name count) + 1 (nick flag) + 1 + 1 (pair) + 1 (tag).
-		expect(output).toContain(
-			"buffer.create(value.list.size() * 2 + value.name.size() + (value.nick !== undefined ? value.nick!.size() + 4 : 0) + (value.pair.size() - 1) + 12)",
+		// The optional's string is read in a branch, so it is read by its path.
+		expect(output).toMatch(
+			/buffer\.create\(arr\d+\.size\(\) \* 2 \+ len\d+ \+ \(value\.nick !== undefined \? value\.nick!\.size\(\) \+ 4 : 0\) \+ \(tup\d+\.size\(\) - 1\) \+ 12\)/,
 		);
+	});
+
+	test("the size binds the locals the write reads, and the write binds none of them again", () => {
+		const str: Field = { kind: "str" };
+		const object = (...fields: [string, Field][]): Field => ({
+			kind: "object",
+			fields: fields.map(([name, field]) => ({ name, field })),
+		});
+		const leaf = object(["name", str], ["weight", { kind: "num", width: "f32" }]);
+		const third = object(["flag", { kind: "bool", packed: false }], ["leaf", leaf]);
+		const second = object(["count", { kind: "num", width: "u16" }], ["inner", third]);
+		const output = serializeBody(object(["root", object(["inner", second], ["label", str])], ["version", u8]));
+		expect(output).toMatch(
+			/^const (obj\d+) = value\.root;\nconst (obj\d+) = \1\.inner;\nconst (obj\d+) = \2\.inner;\nconst (obj\d+) = \3\.leaf;\nconst (s\d+) = \4\.name;\nconst (len\d+) = \5\.size\(\);\nconst (s\d+) = \1\.label;\nconst (len\d+) = \7\.size\(\);\nconst __surge_scratch = buffer\.create\(\6 \+ \8 \+ 16\);/,
+		);
+		expect(output.match(/\bconst obj\d+ =/g)).toHaveLength(4);
+		expect(output.match(/\.size\(\)/g)).toHaveLength(2);
+	});
+
+	test("a size binds no more than LOCALS_PER_BLOCK locals, and reads the value's path for the rest", () => {
+		const output = serializeBody({
+			kind: "object",
+			fields: Array.from({ length: 20 }, (_, i) => ({ name: `s${i}`, field: { kind: "str" } as Field })),
+		});
+		const create = /buffer\.create\((.*)\);/.exec(output)![1];
+		// Two locals a string: sixteen are bound, and the last four are read.
+		expect(create.match(/len\d+/g)).toHaveLength(16);
+		expect(create).toContain("value.s16.size() + value.s17.size() + value.s18.size() + value.s19.size()");
+		expect(output.match(/\bconst len\d+ =/g)).toHaveLength(20);
 	});
 
 	test("a packed region counts as its bytes, and a packed optional adds no flag byte", () => {
@@ -904,7 +934,7 @@ describe("Emitter exact sizing", () => {
 	test("an array of unions is sized by a loop over them, ahead of the result", () => {
 		const output = serializeBody({ kind: "array", element: either });
 		expect(output).toMatch(
-			/^let (size\d+) = 4;\nfor \(const (item\d+) of value\) \{\n\s+\1 \+= \(typeIs\(\2, "number"\) \? 8 : /,
+			/^const (arr\d+) = value;\nlet (size\d+) = 4;\nfor \(const (item\d+) of \1\) \{\n\s+\2 \+= \(typeIs\(\3, "number"\) \? 8 : /,
 		);
 		expect(output).toMatch(/\nconst __surge_scratch = buffer\.create\(size\d+\);/);
 		expect(output).not.toContain("__surge_capacity");

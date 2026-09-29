@@ -174,48 +174,48 @@ return __surge_scratch;"
 `;
 
 exports[`Emitter exact sizing a size is its lengths and counts, read from the value, and one constant 1`] = `
-"const __surge_scratch = buffer.create(value.list.size() * 2 + value.name.size() + (value.nick !== undefined ? value.nick!.size() + 4 : 0) + (value.pair.size() - 1) + 12);
+"const arr1 = value.list;
+const s2 = value.name;
+const len3 = s2.size();
+const tup4 = value.pair;
+const __surge_scratch = buffer.create(arr1.size() * 2 + len3 + (value.nick !== undefined ? value.nick!.size() + 4 : 0) + (tup4.size() - 1) + 12);
 let __surge_cursor = 0;
-const arr1 = value.list;
-const pos2 = __surge_cursor;
-__surge_cursor = pos2 + 4;
-buffer.writeu32(__surge_scratch, pos2, arr1.size());
-const pos4 = __surge_cursor;
-__surge_cursor = pos4 + arr1.size() * 2;
-let element5 = pos4;
-for (const item3 of arr1) {
-    buffer.writeu16(__surge_scratch, element5, item3);
-    element5 += 2;
+const pos5 = __surge_cursor;
+__surge_cursor = pos5 + 4;
+buffer.writeu32(__surge_scratch, pos5, arr1.size());
+const pos7 = __surge_cursor;
+__surge_cursor = pos7 + arr1.size() * 2;
+let element8 = pos7;
+for (const item6 of arr1) {
+    buffer.writeu16(__surge_scratch, element8, item6);
+    element8 += 2;
 }
-const s6 = value.name;
-const len7 = s6.size();
-const pos8 = __surge_cursor;
-__surge_cursor = pos8 + (len7 + 4);
-buffer.writeu32(__surge_scratch, pos8, len7);
-buffer.writestring(__surge_scratch, pos8 + 4, s6);
-const opt9 = value.nick;
-const pos10 = __surge_cursor;
-__surge_cursor = pos10 + 1;
-buffer.writeu8(__surge_scratch, pos10, opt9 !== undefined ? 1 : 0);
-if (opt9 !== undefined) {
-    const s11 = opt9;
-    const len12 = s11.size();
-    const pos13 = __surge_cursor;
-    __surge_cursor = pos13 + (len12 + 4);
-    buffer.writeu32(__surge_scratch, pos13, len12);
-    buffer.writestring(__surge_scratch, pos13 + 4, s11);
+const pos9 = __surge_cursor;
+__surge_cursor = pos9 + (len3 + 4);
+buffer.writeu32(__surge_scratch, pos9, len3);
+buffer.writestring(__surge_scratch, pos9 + 4, s2);
+const opt10 = value.nick;
+const pos11 = __surge_cursor;
+__surge_cursor = pos11 + 1;
+buffer.writeu8(__surge_scratch, pos11, opt10 !== undefined ? 1 : 0);
+if (opt10 !== undefined) {
+    const s12 = opt10;
+    const len13 = s12.size();
+    const pos14 = __surge_cursor;
+    __surge_cursor = pos14 + (len13 + 4);
+    buffer.writeu32(__surge_scratch, pos14, len13);
+    buffer.writestring(__surge_scratch, pos14 + 4, s12);
 }
-const tup14 = value.pair;
 const pos15 = __surge_cursor;
 __surge_cursor = pos15 + 1;
-buffer.writeu8(__surge_scratch, pos15, tup14[0]);
+buffer.writeu8(__surge_scratch, pos15, tup4[0]);
 const pos16 = __surge_cursor;
 __surge_cursor = pos16 + 1;
-buffer.writeu8(__surge_scratch, pos16, tup14.size() - 1);
-for (let i17 = 1; i17 < tup14.size(); i17++) {
+buffer.writeu8(__surge_scratch, pos16, tup4.size() - 1);
+for (let i17 = 1; i17 < tup4.size(); i17++) {
     const pos18 = __surge_cursor;
     __surge_cursor = pos18 + 1;
-    buffer.writeu8(__surge_scratch, pos18, tup14[i17] as unknown as number);
+    buffer.writeu8(__surge_scratch, pos18, tup4[i17] as unknown as number);
 }
 const pos19 = __surge_cursor;
 __surge_cursor = pos19 + 1;

@@ -214,6 +214,17 @@ function padsAsAbsent(element: Field): boolean {
 }
 
 /** Reserves and writes the count a variable-length kind puts ahead of its contents. */
+/**
+ * `const <base>N = <value>`, and the new local. Where the size of 5.20 has
+ * bound the value already, the caller takes that local from
+ * `ctx.boundBySize` instead.
+ */
+function bindLocal(ctx: EmitContext, base: string, value: ts.Expression, out: ts.Statement[]): ts.Identifier {
+	const local = ctx.fresh(base);
+	out.push(ctx.constStatement(local, value));
+	return local;
+}
+
 function writeCount(ctx: EmitContext, length: CountSpec | undefined, count: ts.Expression, out: ts.Statement[]): void {
 	const width = lengthWidth(length);
 	checkCountFits(ctx, width, count, out);
@@ -251,9 +262,9 @@ function writeStr(
 	out: ts.Statement[],
 ): void {
 	const f = ctx.factory;
-	const s = ctx.fresh("s");
-	out.push(ctx.constStatement(s, value));
-	const lenExpr = f.createCallExpression(f.createPropertyAccessExpression(s, "size"), undefined, []);
+	const bound = ctx.boundBySize(value);
+	const s = bound?.value ?? bindLocal(ctx, "s", value, out);
+	const lenExpr = ctx.sizeOf(s);
 	const exact = exactCount(field.length);
 	if (exact !== undefined) {
 		checkExactLength(ctx, lenExpr, exact, false, out);
@@ -264,8 +275,7 @@ function writeStr(
 		out.push(f.createExpressionStatement(ctx.bufferCall("writestring", [buf, pos, s, ctx.num(exact)])));
 		return;
 	}
-	const len = ctx.fresh("len");
-	out.push(ctx.constStatement(len, lenExpr));
+	const len = bound?.len ?? bindLocal(ctx, "len", lenExpr, out);
 	const bytes = writeCountedBytes(ctx, field.length, len, out);
 	out.push(f.createExpressionStatement(ctx.bufferCall("writestring", [bytes.buf, ctx.at(bytes, 0), s])));
 }
@@ -277,8 +287,8 @@ function writeBuffer(
 	out: ts.Statement[],
 ): void {
 	const f = ctx.factory;
-	const source = ctx.fresh("src");
-	out.push(ctx.constStatement(source, value));
+	const bound = ctx.boundBySize(value);
+	const source = bound?.value ?? bindLocal(ctx, "src", value, out);
 	const exact = exactCount(field.length);
 	if (exact !== undefined) {
 		checkExactLength(ctx, ctx.bufferCall("len", [source]), exact, false, out);
@@ -289,8 +299,7 @@ function writeBuffer(
 		out.push(f.createExpressionStatement(ctx.bufferCall("copy", [buf, pos, source, ctx.num(0), ctx.num(exact)])));
 		return;
 	}
-	const len = ctx.fresh("len");
-	out.push(ctx.constStatement(len, ctx.bufferCall("len", [source])));
+	const len = bound?.len ?? bindLocal(ctx, "len", ctx.bufferCall("len", [source]), out);
 	const bytes = writeCountedBytes(ctx, field.length, len, out);
 	out.push(
 		f.createExpressionStatement(ctx.bufferCall("copy", [bytes.buf, ctx.at(bytes, 0), source, ctx.num(0), len])),
@@ -373,8 +382,7 @@ function writeArray(
 	out: ts.Statement[],
 ): void {
 	const f = ctx.factory;
-	const arr = ctx.fresh("arr");
-	out.push(ctx.constStatement(arr, value));
+	const arr = ctx.boundBySize(value)?.value ?? bindLocal(ctx, "arr", value, out);
 	const exact = exactCount(field.length);
 	if (exact !== undefined) {
 		// Indexed rather than `for...of`, so exactly this many are
@@ -438,8 +446,7 @@ function writeTuple(
 	out: ts.Statement[],
 ): void {
 	const f = ctx.factory;
-	const tup = ctx.fresh("tup");
-	out.push(ctx.constStatement(tup, value));
+	const tup = ctx.boundBySize(value)?.value ?? bindLocal(ctx, "tup", value, out);
 	ctx.pushScoped(
 		field.fixed.map((elementField, i) =>
 			ctx.measure((itemOut) =>
@@ -955,7 +962,7 @@ function writeObject(
 }
 
 /** Whether `value` is a local once the casts around it, which compile to nothing, are taken off. */
-function isLocal(ctx: EmitContext, value: ts.Expression): boolean {
+export function isLocal(ctx: EmitContext, value: ts.Expression): boolean {
 	let inner = value;
 	while (ctx.ts_.isAsExpression(inner) || ctx.ts_.isParenthesizedExpression(inner)) {
 		inner = inner.expression;
@@ -981,11 +988,10 @@ export function writeObjectInline(
 	// `serialize` was given. Each property's write would read the whole path
 	// again, so an object with more than one property reads it once, into a
 	// local. A run above binds nothing: its locals are counted by property
-	// (`runFields` in layout.ts).
+	// (`runFields` in layout.ts). A size ahead of the result may have bound it
+	// already, under this same condition (`measureObject` in size.ts).
 	if (!isLocal(ctx, value) && fields.length > 1) {
-		const object = ctx.fresh("obj");
-		out.push(ctx.constStatement(object, value));
-		value = object;
+		value = ctx.boundBySize(value)?.value ?? bindLocal(ctx, "obj", value, out);
 	}
 	// The packed region comes first: the read side needs an optional's
 	// presence bit before it reaches that optional's value.
