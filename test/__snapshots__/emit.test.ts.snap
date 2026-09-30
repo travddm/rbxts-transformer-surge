@@ -811,18 +811,13 @@ exports[`Emitter per-kind write/read snapshots guardedUnion 1`] = `
 "// write
 if (typeIs(value, "number")) {
     const pos5 = __surge_cursor;
-    __surge_cursor = pos5 + 1;
+    __surge_cursor = pos5 + 9;
     if (__surge_cursor > __surge_capacity) {
         __surge_scratch = __surge_grow(__surge_scratch, pos5, __surge_cursor);
         __surge_capacity = buffer.len(__surge_scratch);
     }
     buffer.writeu8(__surge_scratch, pos5, 0);
-    const pos6 = __surge_cursor;
-    __surge_cursor = pos6 + 8;
-    if (__surge_cursor > __surge_capacity) {
-        __surge_scratch = __surge_grow(__surge_scratch, pos6, __surge_cursor);
-        __surge_capacity = buffer.len(__surge_scratch);
-    }
+    const pos6 = pos5 + 1;
     buffer.writef64(__surge_scratch, pos6, value as unknown as number);
 }
 else {
@@ -1107,18 +1102,13 @@ exports[`Emitter per-kind write/read snapshots taggedUnion 1`] = `
 const tag1 = value.kind;
 if (tag1 === "a") {
     const pos6 = __surge_cursor;
-    __surge_cursor = pos6 + 1;
+    __surge_cursor = pos6 + 9;
     if (__surge_cursor > __surge_capacity) {
         __surge_scratch = __surge_grow(__surge_scratch, pos6, __surge_cursor);
         __surge_capacity = buffer.len(__surge_scratch);
     }
     buffer.writeu8(__surge_scratch, pos6, 0);
-    const pos7 = __surge_cursor;
-    __surge_cursor = pos7 + 8;
-    if (__surge_cursor > __surge_capacity) {
-        __surge_scratch = __surge_grow(__surge_scratch, pos7, __surge_cursor);
-        __surge_capacity = buffer.len(__surge_scratch);
-    }
+    const pos7 = pos6 + 1;
     buffer.writef64(__surge_scratch, pos7, (value as unknown as {
         x: number;
     }).x);

@@ -463,6 +463,33 @@ describe("Emitter union writes", () => {
 		expect(write).not.toContain('typeIs(value, "boolean")');
 		expect(write).not.toContain("idx");
 	});
+
+	test("a variant's index shares the reservation of the fixed-size fields that follow it", () => {
+		const write = emitSnapshot({
+			kind: "taggedUnion",
+			tagKey: "kind",
+			variants: [
+				// The index, a u16 and a u32: one reservation of 7.
+				{
+					tagValue: "damage",
+					fields: [
+						{ name: "amount", field: { kind: "num", width: "u16" } },
+						{ name: "id", field: { kind: "num", width: "u32" } },
+					],
+				},
+				// A string first: the index reserves on its own.
+				{ tagValue: "say", fields: [{ name: "text", field: { kind: "str" } }] },
+				// No fields: the index reserves on its own.
+				{ tagValue: "quit", fields: [] },
+			],
+		}).split("// read")[0];
+		expect(reservations(write, "write")).toEqual([7, 1, 1]);
+		const guarded = emitSnapshot({
+			kind: "guardedUnion",
+			variants: [{ kind: "num", width: "f64" }, { kind: "str" }],
+		}).split("// read")[0];
+		expect(reservations(guarded, "write")).toEqual([9, 1]);
+	});
 });
 
 describe("Emitter union guards", () => {

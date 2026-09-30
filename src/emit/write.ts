@@ -4,6 +4,7 @@ import type ts from "typescript";
 import { FIXED_DATATYPES } from "../datatypes";
 import type { ComponentWidths, CountSpec, Field, LengthWidth, NumRange, ObjectFieldEntry } from "../field";
 import {
+	ALLOC_RUN_FIELDS,
 	CURSOR,
 	DEFAULT_COMPONENTS,
 	PACKED_CFRAME_MAX_BYTES,
@@ -24,6 +25,7 @@ import {
 	isAllPackedBits,
 	lengthWidth,
 	packedBits,
+	runFields,
 	tagKeyOf,
 } from "./layout";
 import { fieldToTypeNode, objectShapeTypeNode } from "./types";
@@ -975,6 +977,8 @@ export function writeObjectInline(
 	fields: ReadonlyArray<ObjectFieldEntry>,
 	value: ts.Expression,
 	out: ts.Statement[],
+	// A union variant's index, written ahead of the object's properties.
+	lead?: VariantIndex,
 ): void {
 	// `fixedBytes` admitted this object into the enclosing run, so it has no
 	// packed region and each property takes the run's next bytes.
@@ -996,22 +1000,45 @@ export function writeObjectInline(
 	// The packed region comes first: the read side needs an optional's
 	// presence bit before it reaches that optional's value.
 	const bits = packedBits(fields);
-	const items: ScopedItem[] = [];
-	if (bits.length > 0) {
-		items.push(ctx.measure((itemOut) => writePackedBits(ctx, bits, value, itemOut)));
-	}
 	// A field whose bytes the packed region already holds writes nothing
 	// here; one whose presence or tag is a bit writes the rest of itself
 	// through its own path, so neither can share a reservation.
 	const written = fields.filter((entry) => !isAllPackedBits(entry.field));
 	const shareable = (entry: ObjectFieldEntry) =>
 		!bits.some((bit) => bit.entry === entry) && fixedBytes(entry.field) !== undefined;
-	for (const group of allocRuns(written, shareable, (entry) => entry.field)) {
-		if (group.length > 1) {
-			const total = group.reduce((sum, entry) => sum + fixedBytes(entry.field)!, 0);
+	const groups = allocRuns(written, shareable, (entry) => entry.field);
+	const items: ScopedItem[] = [];
+	// A variant's index comes before everything the variant writes. It
+	// shares the reservation of the properties right after it when those have
+	// a fixed size and the run stays within its bound, and reserves on its
+	// own otherwise.
+	let pendingLead = lead;
+	const first = groups[0];
+	if (
+		pendingLead !== undefined &&
+		(bits.length > 0 ||
+			first === undefined ||
+			!shareable(first[0]) ||
+			first.reduce((sum, entry) => sum + runFields(entry.field), 1) > ALLOC_RUN_FIELDS)
+	) {
+		const index = pendingLead;
+		items.push(ctx.measure((itemOut) => writeVariantIndex(ctx, index, itemOut)));
+		pendingLead = undefined;
+	}
+	if (bits.length > 0) {
+		items.push(ctx.measure((itemOut) => writePackedBits(ctx, bits, value, itemOut)));
+	}
+	for (const group of groups) {
+		if (group.length > 1 || pendingLead !== undefined) {
+			const index = pendingLead;
+			pendingLead = undefined;
+			const total = group.reduce((sum, entry) => sum + fixedBytes(entry.field)!, index?.bytes ?? 0);
 			items.push(
 				ctx.measure((itemOut) => {
 					ctx.withAllocRun("alloc", total, () => {
+						if (index !== undefined) {
+							writeVariantIndex(ctx, index, itemOut);
+						}
 						for (const entry of group) {
 							writeField(ctx, entry.field, ctx.propertyAccess(value, entry), itemOut);
 						}
@@ -1149,12 +1176,13 @@ function writeTaggedUnion(
 		ctx,
 		field.variants.map((variant) => ({
 			check: literalCheck(ctx, tag, variant.tagValue),
-			write: (branch: ts.Statement[]) =>
+			write: (branch: ts.Statement[], index: VariantIndex | undefined) =>
 				writeObjectInline(
 					ctx,
 					variant.fields,
 					ctx.castTo(value, objectShapeTypeNode(ctx, variant.fields)),
 					branch,
+					index,
 				),
 		})),
 		writeIndex,
@@ -1172,24 +1200,58 @@ function writeGuardedUnion(
 		ctx,
 		field.variants.map((variant) => ({
 			check: guardFor(ctx, variant, value),
-			write: (branch: ts.Statement[]) =>
-				writeField(ctx, variant, ctx.castTo(value, fieldToTypeNode(ctx, variant)), branch),
+			write: (branch: ts.Statement[], index: VariantIndex | undefined) => {
+				const cast = ctx.castTo(value, fieldToTypeNode(ctx, variant));
+				const bytes = fixedBytes(variant);
+				if (index === undefined || bytes === undefined || runFields(variant) + 1 > ALLOC_RUN_FIELDS) {
+					if (index !== undefined) {
+						writeVariantIndex(ctx, index, branch);
+					}
+					writeField(ctx, variant, cast, branch);
+					return;
+				}
+				// A variant of a fixed size shares its index's reservation.
+				ctx.withAllocRun("alloc", index.bytes + bytes, () => {
+					writeVariantIndex(ctx, index, branch);
+					writeField(ctx, variant, cast, branch);
+				});
+			},
 		})),
 		true,
 		out,
 	);
 }
 
+/** A union variant's index, which its branch writes ahead of the variant. */
+interface VariantIndex {
+	readonly bytes: number;
+	readonly index: number;
+}
+
+function writeVariantIndex(ctx: EmitContext, variant: VariantIndex, out: ts.Statement[]): void {
+	const { buf, pos, statements } = ctx.destructureAlloc("alloc", variant.bytes);
+	out.push(...statements);
+	out.push(
+		ctx.factory.createExpressionStatement(
+			ctx.bufferCall(variant.bytes === 1 ? "writeu8" : "writeu16", [buf, pos, ctx.num(variant.index)]),
+		),
+	);
+}
+
 /**
  * A union's write, which tests its variants once: each test's branch writes
  * the variant's index, unless a packed region holds it, and then the
- * variant. The last variant is written when no test passes, as the size
- * (`measureUnion` in size.ts) takes it, so the two agree on a value that
- * matches no variant.
+ * variant. The index shares the variant's first reservation where the
+ * variant starts with bytes of a fixed size. The last variant is written
+ * when no test passes, as the size (`measureUnion` in size.ts) takes it, so
+ * the two agree on a value that matches no variant.
  */
 function writeVariants(
 	ctx: EmitContext,
-	variants: ReadonlyArray<{ readonly check: ts.Expression; readonly write: (branch: ts.Statement[]) => void }>,
+	variants: ReadonlyArray<{
+		readonly check: ts.Expression;
+		readonly write: (branch: ts.Statement[], index: VariantIndex | undefined) => void;
+	}>,
 	writeIndex: boolean,
 	out: ts.Statement[],
 ): void {
@@ -1199,16 +1261,7 @@ function writeVariants(
 	let chain: ts.Statement | undefined;
 	for (let i = last; i >= 0; i--) {
 		const branch: ts.Statement[] = [];
-		if (writeIndex) {
-			const { buf, pos, statements } = ctx.destructureAlloc("alloc", idxBytes);
-			branch.push(...statements);
-			branch.push(
-				f.createExpressionStatement(
-					ctx.bufferCall(idxBytes === 1 ? "writeu8" : "writeu16", [buf, pos, ctx.num(i)]),
-				),
-			);
-		}
-		variants[i].write(branch);
+		variants[i].write(branch, writeIndex ? { bytes: idxBytes, index: i } : undefined);
 		const block = f.createBlock(branch, true);
 		chain = i === last ? block : f.createIfStatement(variants[i].check, block, chain);
 	}
