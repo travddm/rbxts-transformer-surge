@@ -19,7 +19,7 @@ import { LOCALS_PER_BLOCK, WIDTH_BYTES } from "./constants";
 import type { EmitContext, SizeBinding } from "./context";
 import { exactCount, fixedBytes, isAllPackedBits, lengthWidth, packedBits, tagKeyOf } from "./layout";
 import { fieldToTypeNode, objectShapeTypeNode } from "./types";
-import { guardFor, isLocal, literalCheck } from "./write";
+import { guardFor, isLocal, literalCheck, severalEnums } from "./write";
 
 /** A constant number of bytes, plus terms read from the value, plus loops that add to the total. */
 interface Size {
@@ -195,7 +195,7 @@ function measure(
 			return measureUnion(
 				ctx,
 				field.variants.map((variant) => ({
-					check: guardFor(ctx, variant, value),
+					check: guardFor(ctx, variant, value, severalEnums(field.variants)),
 					size: measure(ctx, variant, ctx.castTo(value, fieldToTypeNode(ctx, variant)), total, undefined),
 				})),
 				total,

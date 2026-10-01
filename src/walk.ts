@@ -108,7 +108,14 @@ function setMembers(key: Field): ReadonlyArray<SetMember> | undefined {
 
 function runtimeTypeTag(field: Field): string | undefined {
 	// A `datatype` is tagged with its own type name, so two different ones can share a union.
-	return field.kind === "datatype" ? field.name : RUNTIME_TYPE_TAGS[field.kind];
+	if (field.kind === "datatype") {
+		return field.name;
+	}
+	// An `enum` is told from another by its `EnumType` as well (`guardFor` in emit/write.ts).
+	if (field.kind === "enum") {
+		return `EnumItem:${field.enumName}`;
+	}
+	return RUNTIME_TYPE_TAGS[field.kind];
 }
 
 let helperCounter = 0;
@@ -899,21 +906,11 @@ export class TypeWalker {
 		}
 		named.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
-		// One `enum` field indexes the members of one enum. Items of two enums
-		// would all be looked up under the first enum's name, and two items
-		// with the same name (`None`) would share an index and read back as
-		// the first enum's item.
+		// One `enum` field indexes the members of one enum, so the caller
+		// passes the items of one enum: `walkUnionBody` groups a union's items
+		// by enum.
 		const first = constituents[0];
 		const parentSymbol = this.enumOf(first);
-		const other = constituents.find((constituent) => this.enumOf(constituent) !== parentSymbol);
-		if (other) {
-			this.report(
-				`a union of items from two enums ("${parentSymbol?.name}" and "${this.enumOf(other)?.name}") isn't ` +
-					`supported -- use one enum per field, or opt into the blob passthrough channel with "unknown".`,
-				node,
-			);
-			return { kind: "blob" };
-		}
 
 		const aliasName = (first as ts.Type & { aliasSymbol?: ts.Symbol }).aliasSymbol?.name;
 		const enumName = aliasName ?? parentSymbol?.name ?? "Enum";
@@ -1013,7 +1010,16 @@ export class TypeWalker {
 			return { kind: "literal", values };
 		}
 
-		if (nonUndefined.every((t) => this.isEnumItemLike(t))) {
+		// TypeScript flattens an enum in a union into its items, so the items
+		// are grouped back by the enum that declares them, and each group is
+		// one `enum` variant.
+		const enumGroups = new Map<ts.Symbol | undefined, ts.Type[]>();
+		for (const item of nonUndefined.filter((t) => this.isEnumItemLike(t))) {
+			const key = this.enumOf(item);
+			enumGroups.set(key, [...(enumGroups.get(key) ?? []), item]);
+		}
+
+		if (enumGroups.size === 1 && nonUndefined.every((t) => this.isEnumItemLike(t))) {
 			const enumField = this.walkEnum(nonUndefined, node);
 			return hasUndefined ? { kind: "optional", inner: enumField, packed } : enumField;
 		}
@@ -1022,14 +1028,6 @@ export class TypeWalker {
 			return { kind: "optional", inner: this.walk(nonUndefined[0], node, packed), packed };
 		}
 
-		// TypeScript flattens an enum in a union into its items, so the items
-		// are grouped back by the enum that declares them, and each group is
-		// one `enum` variant beside the other constituents.
-		const enumGroups = new Map<ts.Symbol | undefined, ts.Type[]>();
-		for (const item of nonUndefined.filter((t) => this.isEnumItemLike(t))) {
-			const key = this.enumOf(item);
-			enumGroups.set(key, [...(enumGroups.get(key) ?? []), item]);
-		}
 		const reported = this.diagnostics.length;
 		const enumVariants = [...enumGroups.values()].map((group) => this.walkEnum(group, node));
 		// A group that `walkEnum` rejected has reported why, which the checks
@@ -1121,8 +1119,7 @@ export class TypeWalker {
 			if (seenTags.has(tag)) {
 				this.report(
 					`this union has two or more variants that are all "${tag}" at runtime (for example two ` +
-						`"DataType" number widths, or items of two enums next to another type), so the write side ` +
-						`can't tell them apart.`,
+						`"DataType" number widths), so the write side can't tell them apart.`,
 					node,
 				);
 				return { kind: "blob" };
@@ -1130,8 +1127,8 @@ export class TypeWalker {
 			seenTags.add(tag);
 		}
 		// Sorted by kind, then by value for two `literalConst` variants and by
-		// name for two `datatype` variants (the only kinds that can repeat
-		// among guarded-union variants): `type.types`
+		// name for two `datatype` or two `enum` variants (the only kinds that
+		// can repeat among guarded-union variants): `type.types`
 		// order is otherwise the checker's unstable type-id order (see
 		// `compareLiteral`'s doc comment), and the variant index is encoded in
 		// the buffer.
@@ -1144,6 +1141,9 @@ export class TypeWalker {
 			}
 			if (a.kind === "datatype" && b.kind === "datatype") {
 				return compareLiteral(a.name, b.name);
+			}
+			if (a.kind === "enum" && b.kind === "enum") {
+				return compareLiteral(a.enumName, b.enumName);
 			}
 			return 0;
 		});

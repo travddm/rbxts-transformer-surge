@@ -1199,7 +1199,7 @@ function writeGuardedUnion(
 	writeVariants(
 		ctx,
 		field.variants.map((variant) => ({
-			check: guardFor(ctx, variant, value),
+			check: guardFor(ctx, variant, value, severalEnums(field.variants)),
 			write: (branch: ts.Statement[], index: VariantIndex | undefined) => {
 				const cast = ctx.castTo(value, fieldToTypeNode(ctx, variant));
 				const bytes = fixedBytes(variant);
@@ -1275,7 +1275,17 @@ function writeVariants(
 	}
 }
 
-export function guardFor(ctx: EmitContext, field: Field, value: ts.Expression): ts.Expression {
+/** Whether a union holds more than one `enum` variant, which `typeIs` alone cannot tell apart. */
+export function severalEnums(variants: ReadonlyArray<Field>): boolean {
+	return variants.filter((variant) => variant.kind === "enum").length > 1;
+}
+
+/**
+ * The test that picks `field` among a guarded union's variants. Where the
+ * union holds more than one enum (`byEnumType`), an `enum` variant is also
+ * tested by the enum that declares its items.
+ */
+export function guardFor(ctx: EmitContext, field: Field, value: ts.Expression, byEnumType = false): ts.Expression {
 	const f = ctx.factory;
 	const typeIs = (tag: string) => ctx.callLocal("typeIs", [value, f.createStringLiteral(tag)]);
 	switch (field.kind) {
@@ -1318,7 +1328,16 @@ export function guardFor(ctx: EmitContext, field: Field, value: ts.Expression): 
 		case "numberSequence":
 			return typeIs("NumberSequence");
 		case "enum":
-			return typeIs("EnumItem");
+			return byEnumType
+				? f.createLogicalAnd(
+						typeIs("EnumItem"),
+						f.createBinaryExpression(
+							f.createPropertyAccessExpression(value, "EnumType"),
+							ctx.ts_.SyntaxKind.EqualsEqualsEqualsToken,
+							f.createPropertyAccessExpression(f.createIdentifier("Enum"), field.enumName),
+						),
+					)
+				: typeIs("EnumItem");
 		default:
 			// `classifyUnion` in walk.ts reports a diagnostic for every other
 			// kind, so none of them reaches the emitter.

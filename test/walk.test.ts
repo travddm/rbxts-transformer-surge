@@ -225,16 +225,52 @@ describe("TypeWalker classification with fixture packages", () => {
 		});
 	});
 
-	// One `enum` field holds the members of one enum: items of two enums used
-	// to be merged under the first enum's name.
-	test.each([
-		["two whole enums", "Enum.SortOrder | Enum.HumanoidRigType"],
-		["two items with the same name", "Enum.AutomaticSize.None | Enum.ActuatorType.None"],
-	])("a union of items from %s is rejected with a diagnostic", (_name, type) => {
-		const { field, diagnostics } = walkDeclaration(`interface T { e: ${type}; }`, "T", { roblox: true });
-		expect(field).toEqual({ kind: "object", fields: [{ name: "e", field: { kind: "blob" } }] });
-		expect(diagnostics).toHaveLength(1);
-		expect(diagnostics[0].message).toContain("items from two enums");
+	// One `enum` field holds the members of one enum, so items of two enums
+	// are two variants, in the order of the enums' names.
+	test("a union of two whole enums is one enum variant for each, sorted by enum name", () => {
+		const { field, diagnostics } = walkDeclaration(
+			"interface T { e: Enum.SortOrder | Enum.HumanoidRigType; }",
+			"T",
+			{ roblox: true },
+		);
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{
+					name: "e",
+					field: {
+						kind: "guardedUnion",
+						variants: [
+							{ kind: "enum", enumName: "HumanoidRigType", members: ["R15", "R6"] },
+							{ kind: "enum", enumName: "SortOrder", members: ["Custom", "LayoutOrder", "Name"] },
+						],
+					},
+				},
+			],
+		});
+	});
+
+	test("two items with the same name from two enums are two one-member enum variants", () => {
+		const { field, diagnostics } = walkDeclaration(
+			"interface T { e: Enum.AutomaticSize.None | Enum.ActuatorType.None; }",
+			"T",
+			{ roblox: true },
+		);
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toMatchObject({
+			fields: [
+				{
+					field: {
+						kind: "guardedUnion",
+						variants: [
+							{ kind: "enum", enumName: "ActuatorType", members: ["None"] },
+							{ kind: "enum", enumName: "AutomaticSize", members: ["None"] },
+						],
+					},
+				},
+			],
+		});
 	});
 
 	// TypeScript flattens an enum in a union into its items; they are grouped
@@ -286,16 +322,30 @@ describe("TypeWalker classification with fixture packages", () => {
 		});
 	});
 
-	test("items of two enums next to another type are two EnumItem variants, and rejected", () => {
+	test("items of two enums next to another type are two enum variants beside it", () => {
 		const { field, diagnostics } = walkDeclaration(
-			"interface T { e: Enum.SortOrder | Enum.HumanoidRigType | string; }",
+			"interface T { e?: Enum.SortOrder | Enum.HumanoidRigType | string; }",
 			"T",
 			{ roblox: true },
 		);
-		expect(field).toEqual({ kind: "object", fields: [{ name: "e", field: { kind: "blob" } }] });
-		expect(diagnostics).toHaveLength(1);
-		expect(diagnostics[0].message).toContain('"EnumItem" at runtime');
-		expect(diagnostics[0].message).toContain("items of two enums");
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toMatchObject({
+			fields: [
+				{
+					field: {
+						kind: "optional",
+						inner: {
+							kind: "guardedUnion",
+							variants: [
+								{ kind: "enum", enumName: "HumanoidRigType" },
+								{ kind: "enum", enumName: "SortOrder" },
+								{ kind: "str" },
+							],
+						},
+					},
+				},
+			],
+		});
 	});
 
 	test("a user type with the properties of an enum item walks as an object, not as an enum", () => {

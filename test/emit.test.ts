@@ -492,6 +492,25 @@ describe("Emitter union writes", () => {
 	});
 });
 
+describe("Emitter enum guards", () => {
+	const order: Field = { kind: "enum", enumName: "SortOrder", members: ["Custom", "Name"] };
+	const rig: Field = { kind: "enum", enumName: "HumanoidRigType", members: ["R15", "R6"] };
+
+	test("one enum in a union is guarded by its runtime type alone", () => {
+		const output = emitSnapshot({ kind: "guardedUnion", variants: [order, { kind: "str" }] });
+		expect(output).toContain('if (typeIs(value, "EnumItem")) {');
+		expect(output).not.toContain("EnumType");
+	});
+
+	test("two enums in a union are each guarded by the enum that declares their items", () => {
+		const write = emitSnapshot({ kind: "guardedUnion", variants: [rig, order, { kind: "str" }] }).split(
+			"// read",
+		)[0];
+		expect(write).toContain('if (typeIs(value, "EnumItem") && value.EnumType === Enum.HumanoidRigType) {');
+		expect(write).toContain('else if (typeIs(value, "EnumItem") && value.EnumType === Enum.SortOrder) {');
+	});
+});
+
 describe("Emitter union guards", () => {
 	test("Roblox datatype, enum, and recursive-object variants are guarded by their runtime type", () => {
 		const node: Field = { kind: "object", fields: [{ name: "x", field: { kind: "num", width: "u8" } }] };
