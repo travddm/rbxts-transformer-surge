@@ -1050,10 +1050,25 @@ describe("TypeWalker union guards", () => {
 		expect(diagnostics[0].message).toContain("table-shaped");
 	});
 
-	test("an opaque variant next to a non-opaque variant is rejected", () => {
-		const { diagnostics } = walkDeclaration("interface T { v: Instance | string; }", "T", { roblox: true });
-		expect(diagnostics).toHaveLength(1);
-		expect(diagnostics[0].message).toContain("opaque");
+	test("an opaque variant next to other variants is one blob variant, and the last", () => {
+		const { field, diagnostics } = walkDeclaration(
+			"interface T { v: Instance | Vector2int16 | string | number; }",
+			"T",
+			{ roblox: true },
+		);
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{
+					name: "v",
+					field: {
+						kind: "guardedUnion",
+						variants: [{ kind: "num", width: "f64" }, { kind: "str" }, { kind: "blob" }],
+					},
+				},
+			],
+		});
 	});
 
 	test("two variants with the same runtime type are rejected", () => {

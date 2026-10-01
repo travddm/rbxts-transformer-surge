@@ -1065,12 +1065,16 @@ export class TypeWalker {
 		}
 
 		const reported = this.diagnostics.length;
-		const fields = [...walked, ...constituents.map((t) => this.walk(t, node, packed))];
+		const all = [...walked, ...constituents.map((t) => this.walk(t, node, packed))];
 		// A rejected constituent has reported why and walked to a `blob`, which
-		// the checks below would report a second time as an opaque variant.
+		// would otherwise pass for an opaque variant.
 		if (this.diagnostics.length > reported) {
 			return { kind: "blob" };
 		}
+		// Every opaque constituent writes and reads through `pushBlob` and
+		// `nextBlob` alike, so they are one `blob` variant.
+		const opaque = all.some((f) => f.kind === "blob");
+		const fields = all.filter((f) => f.kind !== "blob");
 
 		// Every constituent routed to the opaque passthrough channel (for
 		// example a union of `Instance` subclasses, now that they're
@@ -1078,22 +1082,14 @@ export class TypeWalker {
 		// the surge repo): there is nothing left to guard on, since
 		// `pushBlob`/`nextBlob` write and read identically regardless of which
 		// variant produced the value.
-		if (fields.length > 0 && fields.every((f) => f.kind === "blob")) {
+		if (opaque && fields.length === 0) {
 			return { kind: "blob" };
 		}
 
 		// The write side picks a variant with a runtime type check (`guardFor`
-		// in emit/write.ts), so every shape that check can't decide is rejected here.
-		if (fields.some((f) => f.kind === "blob")) {
-			this.report(
-				"this union mixes an opaque variant (an Instance, a Roblox datatype without its own encoding, or " +
-					'"unknown") with other variants. An opaque value has no runtime type to check, so the write side cannot ' +
-					'tell the variants apart -- type the field as "unknown" to send the whole value through the blob ' +
-					"passthrough channel.",
-				node,
-			);
-			return { kind: "blob" };
-		}
+		// in emit/write.ts), so every shape that check can't decide is rejected
+		// here. An opaque value has no type to check: its variant is the last,
+		// which the write takes when no check passes.
 		const unguardable = fields.find((f) => f.kind !== "literalConst" && runtimeTypeTag(f) === undefined);
 		if (unguardable) {
 			this.report(`a "${unguardable.kind}" variant isn't supported as a member of this union.`, node);
@@ -1132,7 +1128,7 @@ export class TypeWalker {
 		// order is otherwise the checker's unstable type-id order (see
 		// `compareLiteral`'s doc comment), and the variant index is encoded in
 		// the buffer.
-		const variants = [...fields].sort((a, b) => {
+		const variants: Field[] = [...fields].sort((a, b) => {
 			if (a.kind !== b.kind) {
 				return a.kind < b.kind ? -1 : 1;
 			}
@@ -1147,6 +1143,9 @@ export class TypeWalker {
 			}
 			return 0;
 		});
+		if (opaque) {
+			variants.push({ kind: "blob" });
+		}
 		return { kind: "guardedUnion", variants };
 	}
 

@@ -1175,7 +1175,7 @@ function writeTaggedUnion(
 	writeVariants(
 		ctx,
 		field.variants.map((variant) => ({
-			check: literalCheck(ctx, tag, variant.tagValue),
+			check: () => literalCheck(ctx, tag, variant.tagValue),
 			write: (branch: ts.Statement[], index: VariantIndex | undefined) =>
 				writeObjectInline(
 					ctx,
@@ -1199,7 +1199,7 @@ function writeGuardedUnion(
 	writeVariants(
 		ctx,
 		field.variants.map((variant) => ({
-			check: guardFor(ctx, variant, value, severalEnums(field.variants)),
+			check: () => guardFor(ctx, variant, value, severalEnums(field.variants)),
 			write: (branch: ts.Statement[], index: VariantIndex | undefined) => {
 				const cast = ctx.castTo(value, fieldToTypeNode(ctx, variant));
 				const bytes = fixedBytes(variant);
@@ -1249,7 +1249,8 @@ function writeVariantIndex(ctx: EmitContext, variant: VariantIndex, out: ts.Stat
 function writeVariants(
 	ctx: EmitContext,
 	variants: ReadonlyArray<{
-		readonly check: ts.Expression;
+		// Built only for a variant that is not the last, which has no test.
+		readonly check: () => ts.Expression;
 		readonly write: (branch: ts.Statement[], index: VariantIndex | undefined) => void;
 	}>,
 	writeIndex: boolean,
@@ -1263,7 +1264,7 @@ function writeVariants(
 		const branch: ts.Statement[] = [];
 		variants[i].write(branch, writeIndex ? { bytes: idxBytes, index: i } : undefined);
 		const block = f.createBlock(branch, true);
-		chain = i === last ? block : f.createIfStatement(variants[i].check, block, chain);
+		chain = i === last ? block : f.createIfStatement(variants[i].check(), block, chain);
 	}
 	if (chain === undefined) {
 		return;

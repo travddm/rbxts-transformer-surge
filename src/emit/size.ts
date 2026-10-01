@@ -179,7 +179,7 @@ function measure(
 			return measureUnion(
 				ctx,
 				field.variants.map((variant) => ({
-					check: literalCheck(ctx, tag, variant.tagValue),
+					check: () => literalCheck(ctx, tag, variant.tagValue),
 					size: measureObject(
 						ctx,
 						variant.fields,
@@ -195,7 +195,7 @@ function measure(
 			return measureUnion(
 				ctx,
 				field.variants.map((variant) => ({
-					check: guardFor(ctx, variant, value, severalEnums(field.variants)),
+					check: () => guardFor(ctx, variant, value, severalEnums(field.variants)),
 					size: measure(ctx, variant, ctx.castTo(value, fieldToTypeNode(ctx, variant)), total, undefined),
 				})),
 				total,
@@ -213,7 +213,7 @@ function measure(
  */
 function measureUnion(
 	ctx: EmitContext,
-	variants: ReadonlyArray<{ readonly check: ts.Expression; readonly size: Size | undefined }>,
+	variants: ReadonlyArray<{ readonly check: () => ts.Expression; readonly size: Size | undefined }>,
 	total: Total,
 ): Size | undefined {
 	const f = ctx.factory;
@@ -233,13 +233,19 @@ function measureUnion(
 	if (sizes.every((size) => size.loops.length === 0)) {
 		let chosen = sum(ctx, sizes[last]);
 		for (let i = last - 1; i >= 0; i--) {
-			chosen = f.createConditionalExpression(variants[i].check, undefined, sum(ctx, sizes[i]), undefined, chosen);
+			chosen = f.createConditionalExpression(
+				variants[i].check(),
+				undefined,
+				sum(ctx, sizes[i]),
+				undefined,
+				chosen,
+			);
 		}
 		return add(index, { constant: 0, terms: [f.createParenthesizedExpression(chosen)], loops: [] });
 	}
 	let chain: ts.Statement = f.createBlock(addTo(ctx, total, sizes[last]), true);
 	for (let i = last - 1; i >= 0; i--) {
-		chain = f.createIfStatement(variants[i].check, f.createBlock(addTo(ctx, total, sizes[i]), true), chain);
+		chain = f.createIfStatement(variants[i].check(), f.createBlock(addTo(ctx, total, sizes[i]), true), chain);
 	}
 	return add(index, { constant: 0, terms: [], loops: [chain] });
 }

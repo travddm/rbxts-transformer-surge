@@ -492,6 +492,16 @@ describe("Emitter union writes", () => {
 	});
 });
 
+describe("Emitter opaque union variant", () => {
+	test("a blob variant is the write's last branch, with no test, and goes to the blob channel", () => {
+		const output = emitSnapshot({ kind: "guardedUnion", variants: [{ kind: "str" }, { kind: "blob" }] });
+		const [write, read] = output.split("// read");
+		expect(write.match(/typeIs\(/g)).toHaveLength(1);
+		expect(write).toMatch(/else \{[^]*?writeu8\(__surge_scratch, pos\d+, 1\);[^]*?__surge_pushBlob\(/);
+		expect(read).toContain("__surge_nextBlob()");
+	});
+});
+
 describe("Emitter enum guards", () => {
 	const order: Field = { kind: "enum", enumName: "SortOrder", members: ["Custom", "Name"] };
 	const rig: Field = { kind: "enum", enumName: "HumanoidRigType", members: ["R15", "R6"] };
