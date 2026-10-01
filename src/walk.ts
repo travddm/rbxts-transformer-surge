@@ -1022,20 +1022,44 @@ export class TypeWalker {
 			return { kind: "optional", inner: this.walk(nonUndefined[0], node, packed), packed };
 		}
 
-		constituents = nonUndefined.length > 0 ? nonUndefined : constituents;
-		const union = hasUndefined
-			? this.classifyUnion(constituents, node, packed)
-			: this.classifyUnion(constituents, node, packed);
+		// TypeScript flattens an enum in a union into its items, so the items
+		// are grouped back by the enum that declares them, and each group is
+		// one `enum` variant beside the other constituents.
+		const enumGroups = new Map<ts.Symbol | undefined, ts.Type[]>();
+		for (const item of nonUndefined.filter((t) => this.isEnumItemLike(t))) {
+			const key = this.enumOf(item);
+			enumGroups.set(key, [...(enumGroups.get(key) ?? []), item]);
+		}
+		const reported = this.diagnostics.length;
+		const enumVariants = [...enumGroups.values()].map((group) => this.walkEnum(group, node));
+		// A group that `walkEnum` rejected has reported why, which the checks
+		// in `classifyUnion` would report again as an opaque variant.
+		if (this.diagnostics.length > reported) {
+			return { kind: "blob" };
+		}
+		constituents = nonUndefined.length > 0 ? nonUndefined.filter((t) => !this.isEnumItemLike(t)) : constituents;
+		const union = this.classifyUnion(constituents, node, packed, enumVariants);
 		return hasUndefined ? { kind: "optional", inner: union, packed } : union;
 	}
 
-	private classifyUnion(constituents: ts.Type[], node: ts.Node, packed: boolean): Field {
+	/**
+	 * A union's variants: a tagged union where every constituent is an object
+	 * with a shared literal discriminant, and a guarded union otherwise.
+	 * `walked` are variants already walked from constituents that are not in
+	 * `constituents`, such as an enum's items.
+	 */
+	private classifyUnion(
+		constituents: ts.Type[],
+		node: ts.Node,
+		packed: boolean,
+		walked: ReadonlyArray<Field> = [],
+	): Field {
 		// A tuple's `length` is a literal, but a tuple is not an object with a
 		// tag: walked as one, its inherited `Array` methods each fail the walk.
 		const objectLike = constituents.filter(
 			(t) => t.getProperties().length > 0 && !this.checker.isTupleType(t) && !this.checker.isArrayType(t),
 		);
-		if (objectLike.length === constituents.length) {
+		if (walked.length === 0 && objectLike.length === constituents.length) {
 			const discriminant = this.findDiscriminant(objectLike, node);
 			if (discriminant) {
 				return this.buildTaggedUnion(objectLike, discriminant, node, packed);
@@ -1043,7 +1067,7 @@ export class TypeWalker {
 		}
 
 		const reported = this.diagnostics.length;
-		const fields = constituents.map((t) => this.walk(t, node, packed));
+		const fields = [...walked, ...constituents.map((t) => this.walk(t, node, packed))];
 		// A rejected constituent has reported why and walked to a `blob`, which
 		// the checks below would report a second time as an opaque variant.
 		if (this.diagnostics.length > reported) {
@@ -1097,8 +1121,8 @@ export class TypeWalker {
 			if (seenTags.has(tag)) {
 				this.report(
 					`this union has two or more variants that are all "${tag}" at runtime (for example two ` +
-						`"DataType" number widths, or an enum with several members next to another type), so the ` +
-						`write side can't tell them apart.`,
+						`"DataType" number widths, or items of two enums next to another type), so the write side ` +
+						`can't tell them apart.`,
 					node,
 				);
 				return { kind: "blob" };

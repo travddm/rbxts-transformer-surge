@@ -237,6 +237,67 @@ describe("TypeWalker classification with fixture packages", () => {
 		expect(diagnostics[0].message).toContain("items from two enums");
 	});
 
+	// TypeScript flattens an enum in a union into its items; they are grouped
+	// back by enum into one `enum` variant.
+	test("a whole enum next to another type walks as one enum variant beside it", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { e: Enum.SortOrder | string; }", "T", {
+			roblox: true,
+		});
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{
+					name: "e",
+					field: {
+						kind: "guardedUnion",
+						variants: [
+							{ kind: "enum", enumName: "SortOrder", members: ["Custom", "LayoutOrder", "Name"] },
+							{ kind: "str" },
+						],
+					},
+				},
+			],
+		});
+	});
+
+	test("a whole enum next to another type and undefined is an optional of that union", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { e?: Enum.SortOrder | number; }", "T", {
+			roblox: true,
+		});
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toMatchObject({
+			fields: [{ name: "e", field: { kind: "optional", inner: { kind: "guardedUnion" } } }],
+		});
+	});
+
+	test("one item of an enum next to another type is a one-member enum variant", () => {
+		const { field } = walkDeclaration("interface T { e: Enum.SortOrder.Name | string; }", "T", { roblox: true });
+		expect(field).toMatchObject({
+			fields: [
+				{
+					name: "e",
+					field: {
+						kind: "guardedUnion",
+						variants: [{ kind: "enum", enumName: "SortOrder", members: ["Name"] }, { kind: "str" }],
+					},
+				},
+			],
+		});
+	});
+
+	test("items of two enums next to another type are two EnumItem variants, and rejected", () => {
+		const { field, diagnostics } = walkDeclaration(
+			"interface T { e: Enum.SortOrder | Enum.HumanoidRigType | string; }",
+			"T",
+			{ roblox: true },
+		);
+		expect(field).toEqual({ kind: "object", fields: [{ name: "e", field: { kind: "blob" } }] });
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toContain('"EnumItem" at runtime');
+		expect(diagnostics[0].message).toContain("items of two enums");
+	});
+
 	test("a user type with the properties of an enum item walks as an object, not as an enum", () => {
 		const { field, diagnostics } = walkDeclaration(
 			`interface Item { Name: "Sword"; Value: number; EnumType: string; } interface T { item: Item; }`,
