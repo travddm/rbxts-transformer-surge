@@ -1181,49 +1181,48 @@ return result10;"
 
 exports[`Emitter per-kind write/read snapshots tuple with a rest element 1`] = `
 "// write
-const tup1 = value;
-const s2 = tup1[0];
-const len3 = s2.size();
+const s1 = value[0];
+const len2 = s1.size();
+const pos3 = __surge_cursor;
+__surge_cursor = pos3 + (len2 + 4);
+if (__surge_cursor > __surge_capacity) {
+    __surge_scratch = __surge_grow(__surge_scratch, pos3, __surge_cursor);
+    __surge_capacity = buffer.len(__surge_scratch);
+}
+buffer.writeu32(__surge_scratch, pos3, len2);
+buffer.writestring(__surge_scratch, pos3 + 4, s1);
 const pos4 = __surge_cursor;
-__surge_cursor = pos4 + (len3 + 4);
+__surge_cursor = pos4 + 4;
 if (__surge_cursor > __surge_capacity) {
     __surge_scratch = __surge_grow(__surge_scratch, pos4, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-buffer.writeu32(__surge_scratch, pos4, len3);
-buffer.writestring(__surge_scratch, pos4 + 4, s2);
-const pos5 = __surge_cursor;
-__surge_cursor = pos5 + 4;
-if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos5, __surge_cursor);
-    __surge_capacity = buffer.len(__surge_scratch);
-}
-buffer.writeu32(__surge_scratch, pos5, tup1.size() - 1);
-for (let i6 = 1; i6 < tup1.size(); i6++) {
-    const pos7 = __surge_cursor;
-    __surge_cursor = pos7 + 8;
+buffer.writeu32(__surge_scratch, pos4, value.size() - 1);
+for (let i5 = 1; i5 < value.size(); i5++) {
+    const pos6 = __surge_cursor;
+    __surge_cursor = pos6 + 8;
     if (__surge_cursor > __surge_capacity) {
-        __surge_scratch = __surge_grow(__surge_scratch, pos7, __surge_cursor);
+        __surge_scratch = __surge_grow(__surge_scratch, pos6, __surge_cursor);
         __surge_capacity = buffer.len(__surge_scratch);
     }
-    buffer.writef64(__surge_scratch, pos7, tup1[i6] as unknown as number);
+    buffer.writef64(__surge_scratch, pos6, value[i5] as unknown as number);
 }
 
 // read
-const tup8 = new Array<unknown>(1);
-const pos9 = __surge_readCursor;
-const len10 = buffer.readu32(__surge_input, pos9);
-__surge_readCursor = pos9 + 4 + len10;
-tup8[0] = buffer.readstring(__surge_input, pos9 + 4, len10);
-const pos11 = __surge_readCursor;
-__surge_readCursor = pos11 + 4;
-const count12 = buffer.readu32(__surge_input, pos11);
-for (const i13 of $range(1, count12)) {
-    const pos14 = __surge_readCursor;
-    __surge_readCursor = pos14 + 8;
-    tup8[i13] = buffer.readf64(__surge_input, pos14);
+const tup7 = new Array<unknown>(1);
+const pos8 = __surge_readCursor;
+const len9 = buffer.readu32(__surge_input, pos8);
+__surge_readCursor = pos8 + 4 + len9;
+tup7[0] = buffer.readstring(__surge_input, pos8 + 4, len9);
+const pos10 = __surge_readCursor;
+__surge_readCursor = pos10 + 4;
+const count11 = buffer.readu32(__surge_input, pos10);
+for (const i12 of $range(1, count11)) {
+    const pos13 = __surge_readCursor;
+    __surge_readCursor = pos13 + 8;
+    tup7[i12] = buffer.readf64(__surge_input, pos13);
 }
-return tup8 as unknown as [
+return tup7 as unknown as [
     string,
     ...number[]
 ];"

@@ -458,12 +458,42 @@ function writeTuple(
 	out: ts.Statement[],
 ): void {
 	const f = ctx.factory;
-	const tup = ctx.boundBySize(value)?.value ?? bindLocal(ctx, "tup", value, out);
+	// `fixedBytes` admitted this tuple into the enclosing run, so each element
+	// takes the run's next bytes, and nothing is bound, as for a nested object
+	// (`writeObjectInline`).
+	if (ctx.inAllocRun()) {
+		field.fixed.forEach((elementField, i) =>
+			writeField(ctx, elementField, f.createElementAccessExpression(value, ctx.num(i)), out),
+		);
+		return;
+	}
+	const tup = ctx.boundBySize(value)?.value ?? (isLocal(ctx, value) ? value : bindLocal(ctx, "tup", value, out));
+	// Consecutive fixed-size elements share a reservation, as an object's
+	// properties do (Transformer 5.5).
+	const elements = field.fixed.map((elementField, i) => ({ elementField, i }));
+	const groups = allocRuns(
+		elements,
+		(element) => fixedBytes(element.elementField) !== undefined,
+		(element) => element.elementField,
+	);
 	ctx.pushScoped(
-		field.fixed.map((elementField, i) =>
-			ctx.measure((itemOut) =>
-				writeField(ctx, elementField, f.createElementAccessExpression(tup, ctx.num(i)), itemOut),
-			),
+		groups.map((group) =>
+			ctx.measure((itemOut) => {
+				const write = () => {
+					for (const { elementField, i } of group) {
+						writeField(ctx, elementField, f.createElementAccessExpression(tup, ctx.num(i)), itemOut);
+					}
+				};
+				if (group.length > 1) {
+					ctx.withAllocRun(
+						"alloc",
+						group.reduce((sum, element) => sum + fixedBytes(element.elementField)!, 0),
+						write,
+					);
+				} else {
+					write();
+				}
+			}),
 		),
 		out,
 	);

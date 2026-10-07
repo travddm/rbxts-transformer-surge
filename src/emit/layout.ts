@@ -212,6 +212,20 @@ export function fixedBytes(field: Field): number | undefined {
 			}
 			return total;
 		}
+		case "tuple": {
+			if (field.rest !== undefined) {
+				return undefined;
+			}
+			let total = 0;
+			for (const element of field.fixed) {
+				const bytes = fixedBytes(element);
+				if (bytes === undefined) {
+					return undefined;
+				}
+				total += bytes;
+			}
+			return total;
+		}
 		default:
 			return undefined;
 	}
@@ -228,6 +242,10 @@ export function runLocals(field: Field): number {
 	switch (field.kind) {
 		case "object":
 			return field.fields.reduce((total, entry) => total + runLocals(entry.field), 0);
+		case "tuple":
+			// What its elements declare: inside a run, a tuple binds nothing and
+			// is read into one table constructor.
+			return field.fixed.reduce((total, element) => total + runLocals(element), 0);
 		case "cframe":
 			// `position`, `axis`, `angle` and `rv` on the write side, and a local
 			// roblox-ts hoists out of a quantized rotation's product.

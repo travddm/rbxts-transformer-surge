@@ -347,6 +347,14 @@ function readArray(ctx: EmitContext, field: Extract<Field, { kind: "array" }>, o
 }
 
 function readTuple(ctx: EmitContext, field: Extract<Field, { kind: "tuple" }>, out: ts.Statement[]): ts.Expression {
+	// `fixedBytes` admitted this tuple into the enclosing run, so each element
+	// reads the run's next bytes, into one table constructor.
+	if (ctx.inAllocRun()) {
+		return ctx.castTo(
+			ctx.factory.createArrayLiteralExpression(field.fixed.map((element) => readField(ctx, element, out))),
+			fieldToTypeNode(ctx, field),
+		);
+	}
 	// Sized for the fixed elements alone: the rest's count follows them in
 	// the bytes, and the table has to exist before they are stored.
 	const fixedCount = field.fixed.length;
@@ -357,11 +365,32 @@ function readTuple(ctx: EmitContext, field: Extract<Field, { kind: "tuple" }>, o
 		fixedCount === 0 ? undefined : ctx.num(fixedCount),
 		out,
 	);
+	// Consecutive fixed-size elements share a reservation, as an object's
+	// properties do (Transformer 5.5).
+	const elements = field.fixed.map((elementField, k) => ({ elementField, k }));
+	const groups = allocRuns(
+		elements,
+		(element) => fixedBytes(element.elementField) !== undefined,
+		(element) => element.elementField,
+	);
 	ctx.pushScoped(
-		field.fixed.map((elementField, k) =>
-			ctx.measure((itemOut) =>
-				storeElement(ctx, result, ctx.num(k), readField(ctx, elementField, itemOut), itemOut),
-			),
+		groups.map((group) =>
+			ctx.measure((itemOut) => {
+				const read = () => {
+					for (const { elementField, k } of group) {
+						storeElement(ctx, result, ctx.num(k), readField(ctx, elementField, itemOut), itemOut);
+					}
+				};
+				if (group.length > 1) {
+					ctx.withAllocRun(
+						"readAlloc",
+						group.reduce((sum, element) => sum + fixedBytes(element.elementField)!, 0),
+						read,
+					);
+				} else {
+					read();
+				}
+			}),
 		),
 		out,
 	);

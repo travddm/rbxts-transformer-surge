@@ -777,6 +777,37 @@ describe("Emitter element reservations", () => {
 		expect(loopBody(output, "read")).toMatch(/\] = \{[^]*\};\s+element\d+ \+= 3;\s+\}\s+return /);
 	});
 
+	test("a tuple's fixed-size elements share a reservation, and an array of such tuples reserves them all once", () => {
+		const u8: Field = { kind: "num", width: "u8" };
+		const mixed = emitSnapshot({
+			kind: "tuple",
+			fixed: [u8, { kind: "num", width: "u16" }, { kind: "str" }, u8, u8],
+			rest: undefined,
+		});
+		expect(reservations(mixed, "write")).toEqual([3, 2]);
+		expect(reservations(mixed, "read")).toEqual([3, 2]);
+		const array = emitSnapshot({
+			kind: "array",
+			element: {
+				kind: "tuple",
+				fixed: [
+					{ kind: "num", width: "u16" },
+					{ kind: "num", width: "f32" },
+				],
+				rest: undefined,
+			},
+		});
+		expect(array).toContain("arr1.size() * 6;");
+		for (const section of ["write", "read"] as const) {
+			const body = loopBody(array, section);
+			expect(body).not.toContain("__surge_cursor");
+			expect(body).not.toContain("__surge_readCursor");
+			expect(body).toMatch(/element\d+ \+= 6;/);
+		}
+		// Each element is read into one table constructor.
+		expect(loopBody(array, "read")).toMatch(/\] = \[buffer\.readu16\([^]*?, buffer\.readf32\(/);
+	});
+
 	test("the exact form reserves a constant, and a variable-size element still reserves in the loop", () => {
 		const exact = emitSnapshot({ kind: "array", element: { kind: "num", width: "u8" }, length: 3 });
 		expect(reservations(exact, "write")).toEqual([3]);
@@ -1499,6 +1530,7 @@ describe("Emitter local-register ceiling", () => {
 		["bitSet", { kind: "bitSet", members: ["a", "b", "c", "d", "e", "f", "g", "h", "i"] } as Field],
 		["enum", { kind: "enum", enumName: "Material", members: ["Air", "Brick", "Glass"] } as Field],
 		["literal", { kind: "literal", values: ["a", "b", "c"] } as Field],
+		["tuple", { kind: "tuple", fixed: [u8, { kind: "vector3" }], rest: undefined } as Field],
 		...Object.keys(FIXED_DATATYPES).map((name): [string, Field] => [name, { kind: "datatype", name }]),
 		[
 			"nested object",
