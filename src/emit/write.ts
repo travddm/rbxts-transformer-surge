@@ -4,7 +4,7 @@ import type ts from "typescript";
 import { FIXED_DATATYPES } from "../datatypes";
 import type { ComponentWidths, CountSpec, Field, LengthWidth, NumRange, ObjectFieldEntry } from "../field";
 import {
-	ALLOC_RUN_FIELDS,
+	ALLOC_RUN_LOCALS,
 	CURSOR,
 	DEFAULT_COMPONENTS,
 	PACKED_CFRAME_MAX_BYTES,
@@ -25,7 +25,7 @@ import {
 	isAllPackedBits,
 	lengthWidth,
 	packedBits,
-	runFields,
+	runLocals,
 	tagKeyOf,
 } from "./layout";
 import { fieldToTypeNode, objectShapeTypeNode } from "./types";
@@ -992,7 +992,7 @@ export function writeObjectInline(
 	// `serialize` was given. Each property's write would read the whole path
 	// again, so an object with more than one property reads it once, into a
 	// local. A run above binds nothing: its locals are counted by property
-	// (`runFields` in layout.ts). A size ahead of the result may have bound it
+	// (`runLocals` in layout.ts). A size ahead of the result may have bound it
 	// already, under this same condition (`measureObject` in size.ts).
 	if (!isLocal(ctx, value) && fields.length > 1) {
 		value = ctx.boundBySize(value)?.value ?? bindLocal(ctx, "obj", value, out);
@@ -1019,7 +1019,7 @@ export function writeObjectInline(
 		(bits.length > 0 ||
 			first === undefined ||
 			!shareable(first[0]) ||
-			first.reduce((sum, entry) => sum + runFields(entry.field), 1) > ALLOC_RUN_FIELDS)
+			first.reduce((sum, entry) => sum + runLocals(entry.field), 1) > ALLOC_RUN_LOCALS)
 	) {
 		const index = pendingLead;
 		items.push(ctx.measure((itemOut) => writeVariantIndex(ctx, index, itemOut)));
@@ -1207,7 +1207,7 @@ function writeGuardedUnion(
 			write: (branch: ts.Statement[], index: VariantIndex | undefined) => {
 				const cast = ctx.castTo(value, fieldToTypeNode(ctx, variant));
 				const bytes = fixedBytes(variant);
-				if (index === undefined || bytes === undefined || runFields(variant) + 1 > ALLOC_RUN_FIELDS) {
+				if (index === undefined || bytes === undefined || runLocals(variant) + 1 > ALLOC_RUN_LOCALS) {
 					if (index !== undefined) {
 						writeVariantIndex(ctx, index, branch);
 					}

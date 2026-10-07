@@ -7,7 +7,7 @@ import { FIXED_DATATYPES } from "../datatypes";
 import type { ComponentWidths, CountSpec, Field, FieldKey, LengthWidth, ObjectFieldEntry } from "../field";
 import { DEFAULT_LENGTH_WIDTH } from "../field";
 import {
-	ALLOC_RUN_FIELDS,
+	ALLOC_RUN_LOCALS,
 	DEFAULT_COMPONENTS,
 	QUANTIZED_ROTATION_BYTES,
 	ROTATION_BYTES,
@@ -218,32 +218,54 @@ export function fixedBytes(field: Field): number | undefined {
 }
 
 /**
- * How many fields `field` adds to an alloc run: one, or for a nested
- * object the fields it holds at any depth, since each of those takes a
- * position of its own from the run.
+ * How many locals `field` declares in an alloc run, in the Luau roblox-ts
+ * compiles it to, on whichever side and under whichever check option
+ * declares more: the position it takes from the run, and what its write or
+ * read binds besides. A nested object declares what the properties it holds
+ * at any depth declare.
  */
-export function runFields(field: Field): number {
-	return field.kind === "object" ? field.fields.reduce((total, entry) => total + runFields(entry.field), 0) : 1;
+export function runLocals(field: Field): number {
+	switch (field.kind) {
+		case "object":
+			return field.fields.reduce((total, entry) => total + runLocals(entry.field), 0);
+		case "cframe":
+			// `position`, `axis`, `angle` and `rv` on the write side, and a local
+			// roblox-ts hoists out of a quantized rotation's product.
+			return field.quantized ? 6 : 5;
+		case "bitSet":
+			// The read's set, and one local for each byte it reads.
+			return 2 + bitSetBytes(field);
+		case "enum":
+		case "literal":
+			// The read's index, and the item name roblox-ts hoists out of an
+			// enum's write.
+			return 2;
+		case "num":
+			// The value `writeChecks` binds to check against a range.
+			return field.range === undefined ? 1 : 2;
+		default:
+			return 1;
+	}
 }
 
 /**
  * The bytes each element of an array reserves when one reservation covers
  * all of them, or `undefined`: an element without a constant size, one of
- * zero bytes, or one with more fields than a run holds. Each element is a
- * run, so the bound on a run applies to it, and an element past the bound
- * reserves on its own, where its fields can be emitted in blocks.
+ * zero bytes, or one that declares more locals than a run holds. Each
+ * element is a run, so the bound on a run applies to it, and an element past
+ * the bound reserves on its own, where its fields can be emitted in blocks.
  */
 export function elementBytes(element: Field): number | undefined {
 	const bytes = fixedBytes(element);
-	return bytes === undefined || bytes === 0 || runFields(element) > ALLOC_RUN_FIELDS ? undefined : bytes;
+	return bytes === undefined || bytes === 0 || runLocals(element) > ALLOC_RUN_LOCALS ? undefined : bytes;
 }
 
 /**
  * Splits `entries` into the groups one reservation can cover: a maximal
  * run of neighbours `shareable` accepts, or a single entry it does not.
  * A run of one is returned as a group of one, so the caller emits it the
- * way it always did. A run holds at most `ALLOC_RUN_FIELDS` fields, counted
- * by `runFields` through `fieldOf`, so that it always fits in a block.
+ * way it always did. A run declares at most `ALLOC_RUN_LOCALS` locals,
+ * counted by `runLocals` through `fieldOf`, so that it always fits in a block.
  */
 export function allocRuns<T>(
 	entries: ReadonlyArray<T>,
@@ -251,16 +273,16 @@ export function allocRuns<T>(
 	fieldOf: (entry: T) => Field,
 ): Array<Array<T>> {
 	const groups: Array<Array<T>> = [];
-	let lastFields = 0;
+	let lastLocals = 0;
 	for (const entry of entries) {
 		const last = groups[groups.length - 1];
-		const fields = runFields(fieldOf(entry));
-		if (last !== undefined && lastFields + fields <= ALLOC_RUN_FIELDS && shareable(entry) && shareable(last[0])) {
+		const locals = runLocals(fieldOf(entry));
+		if (last !== undefined && lastLocals + locals <= ALLOC_RUN_LOCALS && shareable(entry) && shareable(last[0])) {
 			last.push(entry);
-			lastFields += fields;
+			lastLocals += locals;
 		} else {
 			groups.push([entry]);
-			lastFields = fields;
+			lastLocals = locals;
 		}
 	}
 	return groups;

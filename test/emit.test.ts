@@ -3,6 +3,7 @@ import * as ts from "typescript";
 import { FIXED_DATATYPES } from "../src/datatypes";
 import { Emitter } from "../src/emit";
 import type { EmitOptions } from "../src/emit/context";
+import { runLocals } from "../src/emit/layout";
 import type { Field } from "../src/field";
 import { printNodes } from "./harness";
 
@@ -1320,6 +1321,76 @@ describe("Emitter local-register ceiling", () => {
 		});
 		expect(maxLocalsInOneScope(output)).toBeLessThanOrEqual(40);
 		expect(output.match(/buffer\.writef64/g)).toHaveLength(150);
+	});
+
+	test("a run of CFrame properties ends before its locals would pass 31", () => {
+		// Five locals a CFrame, so six to a run: 31 CFrames are six runs.
+		const output = emitSnapshot({
+			kind: "object",
+			fields: Array.from({ length: 31 }, (_, i) => ({ name: `c${i}`, field: { kind: "cframe" } as Field })),
+		});
+		expect(reservations(output, "write")).toEqual([144, 144, 144, 144, 144, 24]);
+		expect(reservations(output, "read")).toEqual([144, 144, 144, 144, 144, 24]);
+	});
+
+	/** The names the `const` and `let` statements of one side of `field` declare, each name of a destructuring counted. */
+	function declaredLocals(field: Field, side: "write" | "read", options: EmitOptions): number {
+		const emitter = new Emitter(ts, ts.factory, new Map(), options);
+		const out: ts.Statement[] = [];
+		if (side === "write") {
+			emitter.writeField(field, ts.factory.createIdentifier("value"), out);
+		} else {
+			out.push(ts.factory.createReturnStatement(emitter.readField(field, out)));
+		}
+		let count = 0;
+		for (const line of printNodes(out).split("\n")) {
+			const declaration = /^\s*(?:const|let) (\[[^\]]*\]|\w+)/.exec(line);
+			if (declaration !== null) {
+				count += declaration[1].split(",").length;
+			}
+		}
+		return count;
+	}
+
+	const u8: Field = { kind: "num", width: "u8" };
+	// What the emitter declares, which is what this can see. roblox-ts hoists a
+	// local of its own out of an enum's write and out of a quantized rotation's
+	// product; the round trips in the surge repository compile shapes at the
+	// bound through roblox-ts.
+	test.each([
+		["u8", u8],
+		["ranged u8", { kind: "num", width: "u8", range: { min: 0, max: 10, whole: true } } as Field],
+		["bool", { kind: "bool", packed: false } as Field],
+		["vector2", { kind: "vector2" } as Field],
+		["vector3", { kind: "vector3" } as Field],
+		["color3", { kind: "color3" } as Field],
+		["cframe", { kind: "cframe" } as Field],
+		["quantized cframe", { kind: "cframe", quantized: true } as Field],
+		["bitSet", { kind: "bitSet", members: ["a", "b", "c", "d", "e", "f", "g", "h", "i"] } as Field],
+		["enum", { kind: "enum", enumName: "Material", members: ["Air", "Brick", "Glass"] } as Field],
+		["literal", { kind: "literal", values: ["a", "b", "c"] } as Field],
+		...Object.keys(FIXED_DATATYPES).map((name): [string, Field] => [name, { kind: "datatype", name }]),
+		[
+			"nested object",
+			{
+				kind: "object",
+				fields: [
+					{ name: "x", field: u8 },
+					{ name: "at", field: { kind: "cframe" } },
+				],
+			} as Field,
+		],
+	])("runLocals counts at least what one more %s declares in a run", (_label, field) => {
+		const object = (count: number): Field => ({
+			kind: "object",
+			fields: [{ name: "a", field: u8 }, ...Array.from({ length: count }, (_, i) => ({ name: `p${i}`, field }))],
+		});
+		for (const side of ["write", "read"] as const) {
+			for (const options of [{}, { writeChecks: true, readChecks: true }]) {
+				const added = declaredLocals(object(2), side, options) - declaredLocals(object(1), side, options);
+				expect(added).toBeLessThanOrEqual(runLocals(field));
+			}
+		}
 	});
 });
 

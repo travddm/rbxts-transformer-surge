@@ -32,13 +32,13 @@ export const WIDTH_BYTES: Record<NumWidth, number> = {
 // expression temporaries, and the temporaries roblox-ts adds itself.
 export const LOCALS_BUDGET = 120;
 export const LOCALS_PER_BLOCK = 32;
-// A run of K fields declares K locals: the position the reservation took, then
-// one more for each field after the first. A nested object in a run counts as
-// the fields it holds (`runFields` in layout.ts). `pushScoped` cannot split a
-// run, because every field after the first reads the reservation's locals, so
-// a run has to fit in the block `pushScoped` would give it. The bound is one
-// field short of the block, which is one more than a run now needs.
-export const ALLOC_RUN_FIELDS = LOCALS_PER_BLOCK - 1;
+// A run's fields declare locals that live to the end of the run: the position
+// each takes from the reservation, and what its write or read binds besides,
+// such as a `CFrame`'s position and rotation (`runLocals` in layout.ts).
+// `pushScoped` cannot split a run, because every field after the first reads
+// the reservation's locals, so a run has to fit in the block `pushScoped`
+// would give it. The bound is one local short of the block.
+export const ALLOC_RUN_LOCALS = LOCALS_PER_BLOCK - 1;
 
 /**
  * The module of `@rbxts/surge` that holds the helpers generated code calls
