@@ -293,8 +293,8 @@ function readTag(
 /**
  * An array's count, and its elements: their count times their size when
  * that size is the same for each, and otherwise, for an element that is a
- * union, a loop over them, as the write's own. A loop measured slower than
- * the scratch buffer for an array of strings (docs/research/
+ * union or an object, a loop over them, as the write's own. A loop measured
+ * slower than the scratch buffer for an array of strings (docs/research/
  * exact-sizing-with-loops.md in the surge repo), so an array of any other
  * element that varies in size is not sized, and neither is the exact form,
  * whose write reads by index up to its length rather than iterating.
@@ -323,7 +323,11 @@ function measureArray(
 	if (!readsValue(element)) {
 		return elements(ctx, field.length, ctx.sizeOf(arr), element.constant);
 	}
-	if (field.element.kind !== "taggedUnion" && field.element.kind !== "guardedUnion") {
+	if (
+		field.element.kind !== "taggedUnion" &&
+		field.element.kind !== "guardedUnion" &&
+		field.element.kind !== "object"
+	) {
 		return undefined;
 	}
 	return {
