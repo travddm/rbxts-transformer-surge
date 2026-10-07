@@ -48,7 +48,7 @@ describe("transform (end-to-end)", () => {
 			const s = createCodec<P>();`,
 		);
 		try {
-			for (const name of ["beginWriteBlobs", "finishWriteBlobs", "beginReadBlobs"]) {
+			for (const name of ["__surge_writeBlobs", "__surge_readBlobs"]) {
 				expect(printed).not.toContain(name);
 			}
 			// `Serialized<P>` is the buffer alone, and `P` is sized exactly, so
@@ -73,7 +73,7 @@ describe("transform (end-to-end)", () => {
 		);
 		try {
 			expect(diagnostics).toHaveLength(0);
-			expect(printed).not.toContain("pushBlob");
+			expect(printed).not.toContain("__surge_writeBlobs");
 			expect(printed).toContain("blobs: [] as Array<defined>");
 		} finally {
 			cleanup();
@@ -91,7 +91,7 @@ describe("transform (end-to-end)", () => {
 			try {
 				expect(diagnostics).toHaveLength(0);
 				expect(printed).toContain("__surge_input = input.buffer;");
-				expect(printed).not.toContain("beginReadBlobs");
+				expect(printed).not.toContain("__surge_readBlobs");
 			} finally {
 				cleanup();
 			}
@@ -167,7 +167,7 @@ describe("transform (end-to-end)", () => {
 			);
 			try {
 				expect(diagnostics).toHaveLength(0);
-				expect(printed.includes("pushBlob")).toBe(carries);
+				expect(printed.includes("__surge_writeBlobs.push(")).toBe(carries);
 				expect(printed.includes("blobs:")).toBe(carries);
 			} finally {
 				cleanup();
@@ -186,8 +186,8 @@ describe("transform (end-to-end)", () => {
 		);
 		try {
 			expect(diagnostics).toHaveLength(0);
-			expect(printed).toContain("pushBlob");
-			expect(printed).toContain("blobs: __surge_finishWriteBlobs()");
+			expect(printed).toContain("__surge_writeBlobs.push(");
+			expect(printed).toContain("blobs: __surge_writeBlobs }");
 		} finally {
 			cleanup();
 		}
@@ -200,12 +200,19 @@ describe("transform (end-to-end)", () => {
 			const s = createCodec<P>();`,
 		);
 		try {
-			for (const name of ["beginWriteBlobs", "finishWriteBlobs", "beginReadBlobs", "pushBlob", "nextBlob"]) {
-				expect(printed).toContain(name);
-			}
+			// The blob list is a local of `serialize`, and the list `deserialize`
+			// was given and its index locals of `deserialize`.
+			expect(printed).toContain("const __surge_writeBlobs: Array<defined> = [];");
+			expect(printed).toContain("__surge_writeBlobs.push(value.part as unknown as defined);");
+			expect(printed).toContain("blobs: __surge_writeBlobs }");
 			// `deserialize` takes the table `serialize` returns.
 			expect(printed).toContain("__surge_input = input.buffer;");
-			expect(printed).toContain("__surge_beginReadBlobs(input.blobs);");
+			expect(printed).toContain("const __surge_readBlobs: Array<defined> | undefined = input.blobs;");
+			expect(printed).toContain("__surge_readBlobs![__surge_readBlobIndex]");
+			// The package's blob functions are no longer called.
+			for (const name of ["beginWriteBlobs", "finishWriteBlobs", "beginReadBlobs", "pushBlob", "nextBlob"]) {
+				expect(printed).not.toContain(name);
+			}
 		} finally {
 			cleanup();
 		}
@@ -218,8 +225,11 @@ describe("transform (end-to-end)", () => {
 			const s = createCodec<Node>();`,
 		);
 		try {
-			expect(printed).toContain("beginWriteBlobs");
-			expect(printed).toContain("pushBlob");
+			// A recursion helper reads the closure's state, which each call resets.
+			expect(printed).toContain("let __surge_writeBlobs: Array<defined> = [];");
+			expect(printed).toContain("let __surge_readBlobs: Array<defined> | undefined = undefined;");
+			expect(printed).toMatch(/\(value: Node\) => \{[^]*?\n\s+__surge_writeBlobs = \[\];\n/);
+			expect(printed).toContain("__surge_readBlobIndex = 0;");
 		} finally {
 			cleanup();
 		}
@@ -833,7 +843,7 @@ describe("transform readChecks option", () => {
 				"deserialize was given something other than a table of a buffer and a blobs array",
 			);
 			expect(printed).not.toContain('if (!typeIs(input, "buffer")) {');
-			expect(printed.includes("__surge_beginReadBlobs(")).toBe(readsBlobs);
+			expect(printed.includes("const __surge_readBlobs")).toBe(readsBlobs);
 		} finally {
 			cleanup();
 		}

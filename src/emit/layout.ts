@@ -249,6 +249,35 @@ export function runLocals(field: Field): number {
 }
 
 /**
+ * Whether `field` writes a blob anywhere in it. A recursion helper's fields
+ * are not followed: a shape that has one keeps the blob channel's state in
+ * its closure whatever it holds (Transformer 5.9 in docs/specs/transformer.md
+ * in the surge repo).
+ */
+export function holdsBlob(field: Field): boolean {
+	switch (field.kind) {
+		case "blob":
+			return true;
+		case "object":
+			return field.fields.some((entry) => holdsBlob(entry.field));
+		case "array":
+			return holdsBlob(field.element);
+		case "tuple":
+			return field.fixed.some(holdsBlob) || (field.rest !== undefined && holdsBlob(field.rest));
+		case "dict":
+			return holdsBlob(field.key) || (field.value !== undefined && holdsBlob(field.value));
+		case "optional":
+			return holdsBlob(field.inner);
+		case "taggedUnion":
+			return field.variants.some((variant) => variant.fields.some((entry) => holdsBlob(entry.field)));
+		case "guardedUnion":
+			return field.variants.some(holdsBlob);
+		default:
+			return false;
+	}
+}
+
+/**
  * The bytes each element of an array reserves when one reservation covers
  * all of them, or `undefined`: an element without a constant size, one of
  * zero bytes, or one that declares more locals than a run holds. Each

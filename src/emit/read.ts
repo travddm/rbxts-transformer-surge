@@ -386,7 +386,7 @@ function readLiteral(ctx: EmitContext, field: Extract<Field, { kind: "literal" }
 }
 
 function readBlob(ctx: EmitContext, out: ts.Statement[]): ts.Expression {
-	return ctx.bindSideEffect(ctx.call("nextBlob", []), out);
+	return ctx.nextBlob(out);
 }
 
 function readNum2(ctx: EmitContext, width: "f32", out: ts.Statement[]): [ts.Expression, ts.Expression] {

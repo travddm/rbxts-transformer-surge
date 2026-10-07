@@ -253,7 +253,7 @@ describe("Emitter read-order for side-effecting fields", () => {
 		};
 		const output = emitSnapshot(field);
 		const readSection = output.slice(output.indexOf("// read"));
-		const blobIndex = readSection.indexOf("nextBlob()");
+		const blobIndex = readSection.indexOf("__surge_readBlobIndex += 1;");
 		const bAllocIndex = readSection.indexOf("__surge_readCursor = pos");
 		expect(blobIndex).toBeGreaterThan(-1);
 		expect(bAllocIndex).toBeGreaterThan(-1);
@@ -499,8 +499,8 @@ describe("Emitter opaque union variant", () => {
 		const output = emitSnapshot({ kind: "guardedUnion", variants: [{ kind: "str" }, { kind: "blob" }] });
 		const [write, read] = output.split("// read");
 		expect(write.match(/typeIs\(/g)).toHaveLength(1);
-		expect(write).toMatch(/else \{[^]*?writeu8\(__surge_scratch, pos\d+, 1\);[^]*?__surge_pushBlob\(/);
-		expect(read).toContain("__surge_nextBlob()");
+		expect(write).toMatch(/else \{[^]*?writeu8\(__surge_scratch, pos\d+, 1\);[^]*?__surge_writeBlobs\.push\(/);
+		expect(read).toContain("__surge_readBlobs![__surge_readBlobIndex]");
 	});
 });
 

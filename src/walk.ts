@@ -1092,17 +1092,17 @@ export class TypeWalker {
 		if (this.diagnostics.length > reported) {
 			return { kind: "blob" };
 		}
-		// Every opaque constituent writes and reads through `pushBlob` and
-		// `nextBlob` alike, so they are one `blob` variant.
+		// Every opaque constituent goes through the blob channel alike, so
+		// they are one `blob` variant.
 		const opaque = all.some((f) => f.kind === "blob");
 		const fields = all.filter((f) => f.kind !== "blob");
 
 		// Every constituent routed to the opaque passthrough channel (for
 		// example a union of `Instance` subclasses, now that they're
 		// nominally detected -- Transformer 4.4 in docs/specs/transformer.md in
-		// the surge repo): there is nothing left to guard on, since
-		// `pushBlob`/`nextBlob` write and read identically regardless of which
-		// variant produced the value.
+		// the surge repo): there is nothing left to guard on, since the blob
+		// channel writes and reads identically regardless of which variant
+		// produced the value.
 		if (opaque && fields.length === 0) {
 			return { kind: "blob" };
 		}

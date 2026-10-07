@@ -177,15 +177,6 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				return typescript.visitEachChild(node, visit, ctx);
 			}
 
-			function surgeCall(name: string, args: ts.Expression[]): ts.Expression {
-				usedImports.add(name);
-				return ctx.factory.createCallExpression(
-					ctx.factory.createIdentifier(importAlias(name)),
-					undefined,
-					args,
-				);
-			}
-
 			function buildReplacement(
 				factoryName: FactoryName,
 				node: ts.CallExpression,
@@ -224,15 +215,15 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				);
 				// The bodies are emitted before either is assembled, because
 				// whether this shape uses the blob side channel at all is only
-				// known once they are: the emitter records `pushBlob`/`nextBlob`
-				// in `usedImports` as it emits them, including from inside any
-				// recursion helper it generates on the way. A shape with no blob
-				// field -- which is most of them -- then pays nothing for the
-				// channel: no `beginWriteBlobs` table allocation per call, and
-				// no `finishWriteBlobs`/`beginReadBlobs` call either.
+				// known once they are: the emitter records each blob it writes
+				// or reads, including from inside any recursion helper it
+				// generates on the way. A shape with no blob field -- which is
+				// most of them -- then pays nothing for the channel: no blob
+				// list per call, and no state for one.
 				const writeStatements: ts.Statement[] = [];
 				if (needsWrite) {
 					emitter.beginFunction();
+					emitter.countBlobLocals(rootField, "write");
 					emitter.sizeExactly(rootField, f.createIdentifier("value"));
 					emitter.writeField(rootField, f.createIdentifier("value"), writeStatements);
 				}
@@ -253,13 +244,14 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				if (needsRead) {
 					emitter.beginFunction();
 					emitter.readLocally();
+					emitter.countBlobLocals(rootField, "read");
 					if (options.readChecks && serializedCarriesBlobs) {
 						tableParts = { buffer: emitter.fresh("inputBuffer"), blobs: emitter.fresh("inputBlobs") };
 					}
 					resultExpr = emitter.readField(rootField, readStatements);
 				}
 
-				const usesBlobs = emitter.usedImports.has("pushBlob") || emitter.usedImports.has("nextBlob");
+				const usesBlobs = emitter.usesWriteBlobs || emitter.usesReadBlobs;
 
 				if (usesBlobs && !serializedCarriesBlobs) {
 					report(
@@ -274,19 +266,19 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				// Built only for a side the factory returns: assembling a side
 				// registers its imports, such as `finishWrite` for the write side.
 				const buildSerialize = (): ts.ArrowFunction => {
-					const writeBody: ts.Statement[] = [...emitter.beginWriteStatements()];
-					if (usesBlobs) {
-						writeBody.push(f.createExpressionStatement(surgeCall("beginWriteBlobs", [])));
-					}
-					writeBody.push(...writeStatements);
+					const writeBody: ts.Statement[] = [
+						...emitter.beginWriteStatements(),
+						...emitter.beginWriteBlobsStatements(),
+						...writeStatements,
+					];
 					const bytes = emitter.finishWriteExpression();
 					let result: ts.Expression = bytes;
 					if (serializedCarriesBlobs) {
 						// A shape the declared result gives an array but that never fills
 						// one returns it empty. Asserted, because an empty array literal is
 						// `never[]`.
-						const blobs = usesBlobs
-							? surgeCall("finishWriteBlobs", [])
+						const blobs = emitter.usesWriteBlobs
+							? emitter.writeBlobsExpression()
 							: f.createAsExpression(
 									f.createArrayLiteralExpression([]),
 									f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
@@ -320,7 +312,9 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					// neither bytes nor blobs, such as one made only of literals, reads
 					// nothing of it; an underscore keeps the parameter from failing a
 					// consumer's `noUnusedParameters`.
-					const input = f.createIdentifier(emitter.usesReadBytes || usesBlobs ? "input" : "_input");
+					const input = f.createIdentifier(
+						emitter.usesReadBytes || emitter.usesReadBlobs ? "input" : "_input",
+					);
 					const inputParam = f.createParameterDeclaration(
 						undefined,
 						undefined,
@@ -349,14 +343,10 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 							serializedCarriesBlobs ? f.createPropertyAccessExpression(input, "buffer") : input,
 						),
 					];
-					if (usesBlobs) {
-						readBody.push(
-							f.createExpressionStatement(
-								surgeCall("beginReadBlobs", [f.createPropertyAccessExpression(input, "blobs")]),
-							),
-						);
-					}
-					readBody.push(...readStatements);
+					readBody.push(
+						...emitter.beginReadBlobsStatements(f.createPropertyAccessExpression(input, "blobs")),
+						...readStatements,
+					);
 					// Asserted as the type argument, which gives the value `T` as its
 					// contextual type: inferred instead, a literal in an object
 					// literal widens to `string` or `number`, and the result is not
@@ -421,18 +411,14 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 							),
 							...emitter.beginReadStatements(tableParts.buffer),
 						);
-						if (usesBlobs) {
-							readBody.push(
-								f.createExpressionStatement(
-									surgeCall("beginReadBlobs", [
-										f.createAsExpression(
-											tableParts.blobs,
-											f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
-										),
-									]),
+						readBody.push(
+							...emitter.beginReadBlobsStatements(
+								f.createAsExpression(
+									tableParts.blobs,
+									f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
 								),
-							);
-						}
+							),
+						);
 					} else {
 						readBody.push(
 							emitter.throwIf(
@@ -483,6 +469,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				const iifeBody = [
 					...(needsWrite ? emitter.writeStateDecls() : []),
 					...(needsRead ? emitter.readStateDecls() : []),
+					...emitter.blobStateDecls(),
 					...emitter.getHelperDecls(),
 					f.createReturnStatement(resultValue),
 				];

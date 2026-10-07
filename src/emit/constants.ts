@@ -74,6 +74,12 @@ export const CURSOR = importAlias("cursor");
 export const READ_BUFFER = importAlias("input");
 export const READ_CURSOR = importAlias("readCursor");
 export const READ_LENGTH = importAlias("inputLength");
+// The blob channel's state (Transformer 5.9 in docs/specs/transformer.md in
+// the surge repo): the list `serialize` returns, and the list `deserialize`
+// was given and the next blob's index.
+export const WRITE_BLOBS = importAlias("writeBlobs");
+export const READ_BLOBS = importAlias("readBlobs");
+export const READ_BLOB_INDEX = importAlias("readBlobIndex");
 /** What a serializer starts with, doubled by `grow` from there. */
 export const INITIAL_CAPACITY = 64;
 /** The largest form `writePackedCFrame` can write: header, position, rotation. */

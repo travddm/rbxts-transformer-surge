@@ -425,11 +425,18 @@ return result4;"
 
 exports[`Emitter per-kind write/read snapshots blob 1`] = `
 "// write
-__surge_pushBlob(value as unknown as defined);
+__surge_writeBlobs.push(value as unknown as defined);
 
 // read
-const val1 = __surge_nextBlob();
-return val1;"
+if (__surge_readBlobs === undefined) {
+    throw "@rbxts/surge: deserialize() encountered a blob field but its input has no blobs array";
+}
+if (__surge_readBlobIndex >= __surge_readBlobs!.size()) {
+    throw "@rbxts/surge: deserialize read past the end of the blobs array";
+}
+const blob1 = __surge_readBlobs![__surge_readBlobIndex] as unknown as defined;
+__surge_readBlobIndex += 1;
+return blob1;"
 `;
 
 exports[`Emitter per-kind write/read snapshots bool 1`] = `
@@ -1253,7 +1260,7 @@ return new Vector3(buffer.readf32(__surge_input, pos2), buffer.readf32(__surge_i
 
 exports[`Emitter read-order for side-effecting fields a blob field followed by a plain field binds the blob read before the next statement 1`] = `
 "// write
-__surge_pushBlob(value.a as unknown as defined);
+__surge_writeBlobs.push(value.a as unknown as defined);
 const pos1 = __surge_cursor;
 __surge_cursor = pos1 + 8;
 if (__surge_cursor > __surge_capacity) {
@@ -1263,11 +1270,18 @@ if (__surge_cursor > __surge_capacity) {
 buffer.writef64(__surge_scratch, pos1, value.b);
 
 // read
-const val2 = __surge_nextBlob();
+if (__surge_readBlobs === undefined) {
+    throw "@rbxts/surge: deserialize() encountered a blob field but its input has no blobs array";
+}
+if (__surge_readBlobIndex >= __surge_readBlobs!.size()) {
+    throw "@rbxts/surge: deserialize read past the end of the blobs array";
+}
+const blob2 = __surge_readBlobs![__surge_readBlobIndex] as unknown as defined;
+__surge_readBlobIndex += 1;
 const pos3 = __surge_readCursor;
 __surge_readCursor = pos3 + 8;
 return {
-    a: val2,
+    a: blob2,
     b: buffer.readf64(__surge_input, pos3)
 };"
 `;

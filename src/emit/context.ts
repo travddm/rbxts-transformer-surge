@@ -8,13 +8,17 @@ import {
 	INITIAL_CAPACITY,
 	LOCALS_BUDGET,
 	LOCALS_PER_BLOCK,
+	READ_BLOBS,
+	READ_BLOB_INDEX,
 	READ_BUFFER,
 	READ_CURSOR,
 	READ_LENGTH,
 	SCRATCH,
 	WIDTH_BYTES,
+	WRITE_BLOBS,
 	importAlias,
 } from "./constants";
+import { holdsBlob } from "./layout";
 
 /**
  * A reserved region of the buffer: the cursor state's buffer, the position a
@@ -114,6 +118,9 @@ export abstract class EmitContext {
 	 */
 	public usesWriteBytes = false;
 	public usesReadBytes = false;
+	/** Whether `serialize` wrote, and `deserialize` read, a blob (Transformer 5.9). */
+	public usesWriteBlobs = false;
+	public usesReadBlobs = false;
 	/**
 	 * The size `serialize` creates its result at, for a shape `exactSize`
 	 * could size (Transformer 5.20 in docs/specs/transformer.md in the surge
@@ -276,9 +283,8 @@ export abstract class EmitContext {
 	 * The scratch buffer, its capacity and the write cursor, for the head of
 	 * the closure the serializer is emitted into. One buffer per serializer,
 	 * not one per place: two serializers can then be in flight at once, which a
-	 * single module-scoped buffer never allowed -- unless either carries a blob
-	 * field, because the blob side channel is still module state in the package.
-	 * A `serialize` that writes exactly declares its own instead.
+	 * single module-scoped buffer never allowed. A `serialize` that writes
+	 * exactly declares its own instead.
 	 */
 	public writeStateDecls(): ts.Statement[] {
 		if (!this.usesWriteBytes || this.writeSize !== undefined) {
@@ -370,6 +376,158 @@ export abstract class EmitContext {
 			);
 		}
 		return statements;
+	}
+
+	/**
+	 * Counts the locals of the blob channel's state toward the budget of the
+	 * function about to be emitted, where that function holds them: a shape
+	 * that holds a blob and reaches no recursion helper, whose function would
+	 * read the closure's instead (Transformer 5.9 in docs/specs/transformer.md
+	 * in the surge repo). The write side holds its list, and the read side its
+	 * list and its index. Called after {@link beginFunction} and before the
+	 * body is emitted.
+	 */
+	public countBlobLocals(field: Field, side: "write" | "read"): void {
+		if (this.helperFields.size === 0 && holdsBlob(field)) {
+			this.liveLocals += side === "write" ? 1 : 2;
+		}
+	}
+
+	/**
+	 * Appends `value` to the blob list `serialize` returns, inline. `push`
+	 * compiles to `table.insert`, which appends nothing for `nil`, so a missing
+	 * blob leaves no hole in the list (Wire format 6.7).
+	 */
+	public pushBlob(value: ts.Expression, out: ts.Statement[]): void {
+		this.usesWriteBlobs = true;
+		const f = this.factory;
+		const push = f.createPropertyAccessExpression(f.createIdentifier(WRITE_BLOBS), "push");
+		out.push(f.createExpressionStatement(f.createCallExpression(push, undefined, [value])));
+	}
+
+	/**
+	 * Reads the next blob of the list `deserialize` was given into a local,
+	 * inline, and returns the local. Both errors are raised with or without
+	 * checks (Runtime API 4.5 and 4.6 in docs/specs/runtime-api.md in the surge
+	 * repo).
+	 */
+	public nextBlob(out: ts.Statement[]): ts.Expression {
+		this.usesReadBlobs = true;
+		const f = this.factory;
+		const syntax = this.ts_.SyntaxKind;
+		const blobs = f.createIdentifier(READ_BLOBS);
+		const index = f.createIdentifier(READ_BLOB_INDEX);
+		const present = f.createNonNullExpression(blobs);
+		const value = this.fresh("blob");
+		out.push(
+			this.throwIf(
+				f.createBinaryExpression(blobs, syntax.EqualsEqualsEqualsToken, f.createIdentifier("undefined")),
+				"deserialize() encountered a blob field but its input has no blobs array",
+			),
+			this.throwIf(
+				f.createBinaryExpression(index, syntax.GreaterThanEqualsToken, this.sizeOf(present)),
+				"deserialize read past the end of the blobs array",
+			),
+			this.constStatement(
+				value,
+				this.castTo(f.createElementAccessExpression(present, index), f.createTypeReferenceNode("defined")),
+			),
+			f.createExpressionStatement(f.createBinaryExpression(index, syntax.PlusEqualsToken, this.num(1))),
+		);
+		return value;
+	}
+
+	/**
+	 * Opens the blob list a `serialize()` returns: a new one each call,
+	 * because the caller keeps the one it was given.
+	 */
+	public beginWriteBlobsStatements(): ts.Statement[] {
+		if (!this.usesWriteBlobs) {
+			return [];
+		}
+		const empty = this.factory.createArrayLiteralExpression([]);
+		if (this.helperFields.size === 0) {
+			return [this.typedStatement(WRITE_BLOBS, this.blobListType(false), empty, this.ts_.NodeFlags.Const)];
+		}
+		return [this.assign(WRITE_BLOBS, empty)];
+	}
+
+	/** The blob list a `serialize()` returns. */
+	public writeBlobsExpression(): ts.Expression {
+		return this.factory.createIdentifier(WRITE_BLOBS);
+	}
+
+	/** Opens a `deserialize()`'s blob list: `blobs`, read from its first blob on. */
+	public beginReadBlobsStatements(blobs: ts.Expression): ts.Statement[] {
+		if (!this.usesReadBlobs) {
+			return [];
+		}
+		if (this.helperFields.size === 0) {
+			return [
+				this.typedStatement(READ_BLOBS, this.blobListType(true), blobs, this.ts_.NodeFlags.Const),
+				this.letStatement(READ_BLOB_INDEX, this.num(0)),
+			];
+		}
+		return [this.assign(READ_BLOBS, blobs), this.assign(READ_BLOB_INDEX, this.num(0))];
+	}
+
+	/**
+	 * The blob channel's state, for the head of the closure, where a shape
+	 * that reaches a recursion helper holds it so that the helper reads it.
+	 */
+	public blobStateDecls(): ts.Statement[] {
+		if (this.helperFields.size === 0) {
+			return [];
+		}
+		const decls: ts.Statement[] = [];
+		const let_ = this.ts_.NodeFlags.Let;
+		if (this.usesWriteBlobs) {
+			decls.push(
+				this.typedStatement(
+					WRITE_BLOBS,
+					this.blobListType(false),
+					this.factory.createArrayLiteralExpression([]),
+					let_,
+				),
+			);
+		}
+		if (this.usesReadBlobs) {
+			decls.push(
+				this.typedStatement(
+					READ_BLOBS,
+					this.blobListType(true),
+					this.factory.createIdentifier("undefined"),
+					let_,
+				),
+				this.letStatement(READ_BLOB_INDEX, this.num(0)),
+			);
+		}
+		return decls;
+	}
+
+	/** `Array<defined>`, or with `undefined` for a list a caller may leave out. */
+	private blobListType(orUndefined: boolean): ts.TypeNode {
+		const f = this.factory;
+		const list = f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]);
+		return orUndefined
+			? f.createUnionTypeNode([list, f.createKeywordTypeNode(this.ts_.SyntaxKind.UndefinedKeyword)])
+			: list;
+	}
+
+	private typedStatement(
+		name: string,
+		type: ts.TypeNode,
+		initializer: ts.Expression,
+		flags: ts.NodeFlags,
+	): ts.Statement {
+		const f = this.factory;
+		return f.createVariableStatement(
+			undefined,
+			f.createVariableDeclarationList(
+				[f.createVariableDeclaration(f.createIdentifier(name), undefined, type, initializer)],
+				flags,
+			),
+		);
 	}
 
 	/**
@@ -521,9 +679,9 @@ export abstract class EmitContext {
 	 * its place. `readObjectInline` pushes each field's read statements in
 	 * field order but evaluates each field's returned expression later,
 	 * inside the object literal -- sound only if every such expression is
-	 * side-effect free. A bare `object`/`recursiveRef` helper call and a
-	 * `blob`'s `nextBlob()` are not, so their `readField` cases route through
-	 * this instead of returning the call expression directly (the
+	 * side-effect free. A bare `object`/`recursiveRef` helper call is not, so
+	 * its `readField` case routes through this instead of returning the call
+	 * expression directly, and a `blob`'s read binds its own local (the
 	 * read-order-side-effects finding in
 	 * docs/research/september-2026-review.md in the surge repo).
 	 */
