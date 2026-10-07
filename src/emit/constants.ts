@@ -39,6 +39,11 @@ export const LOCALS_PER_BLOCK = 32;
 // the reservation's locals, so a run has to fit in the block `pushScoped`
 // would give it. The bound is one local short of the block.
 export const ALLOC_RUN_LOCALS = LOCALS_PER_BLOCK - 1;
+// Luau holds a register for each level of a left-nested `a + b + c` while it
+// compiles it, and a function has 255, so a size of a few hundred terms failed
+// to compile. A size sums at most this many terms in one chain, and adds the
+// chains in pairs (`sum` in size.ts).
+export const TERMS_PER_SUM = 32;
 
 /**
  * The module of `@rbxts/surge` that holds the helpers generated code calls

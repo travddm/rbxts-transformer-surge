@@ -2,6 +2,7 @@ import * as ts from "typescript";
 
 import { FIXED_DATATYPES } from "../src/datatypes";
 import { Emitter } from "../src/emit";
+import { TERMS_PER_SUM } from "../src/emit/constants";
 import type { EmitOptions } from "../src/emit/context";
 import { runLocals } from "../src/emit/layout";
 import type { Field } from "../src/field";
@@ -1081,6 +1082,32 @@ describe("Emitter exact sizing", () => {
 		expect(create.match(/len\d+/g)).toHaveLength(16);
 		expect(create).toContain("value.s16.size() + value.s17.size() + value.s18.size() + value.s19.size()");
 		expect(output.match(/\bconst len\d+ =/g)).toHaveLength(20);
+	});
+
+	test("a size of many terms sums chains of TERMS_PER_SUM terms in pairs", () => {
+		/** How deeply `+` nests in `node`, which is what Luau holds a register for at each level. */
+		const plusDepth = (node: ts.Node): number => {
+			if (ts.isParenthesizedExpression(node)) {
+				return plusDepth(node.expression);
+			}
+			if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+				return 1 + Math.max(plusDepth(node.left), plusDepth(node.right));
+			}
+			return 0;
+		};
+		const depthOf = (strings: number): number => {
+			const output = serializeBody({
+				kind: "object",
+				fields: Array.from({ length: strings }, (_, i) => ({ name: `s${i}`, field: { kind: "str" } as Field })),
+			});
+			const size = /buffer\.create\((.*)\);/.exec(output)![1];
+			const source = ts.createSourceFile("size.ts", `(${size});`, ts.ScriptTarget.Latest);
+			return plusDepth((source.statements[0] as ts.ExpressionStatement).expression);
+		};
+		// Twenty strings and the constant are one chain of 21 terms.
+		expect(depthOf(20)).toBe(20);
+		// 300 strings and the constant are ten chains, added in four rounds of pairs.
+		expect(depthOf(300)).toBe(TERMS_PER_SUM - 1 + 4);
 	});
 
 	test("a packed region counts as its bytes, and a packed optional adds no flag byte", () => {

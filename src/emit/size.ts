@@ -16,7 +16,7 @@
 import type ts from "typescript";
 
 import type { CountSpec, Field, ObjectFieldEntry } from "../field";
-import { LOCALS_PER_BLOCK, WIDTH_BYTES } from "./constants";
+import { LOCALS_PER_BLOCK, TERMS_PER_SUM, WIDTH_BYTES } from "./constants";
 import type { EmitContext, SizeBinding } from "./context";
 import { exactCount, fixedBytes, isAllPackedBits, lengthWidth, packedBits, tagKeyOf } from "./layout";
 import { fieldToTypeNode, objectShapeTypeNode } from "./types";
@@ -491,16 +491,31 @@ function add(left: Size, right: Size): Size {
 	};
 }
 
-/** The terms in the order the value holds them, then the constant, folded into one number. */
+/**
+ * The terms in the order the value holds them, then the constant, folded into
+ * one number. Up to `TERMS_PER_SUM` of them are one chain. Past that, each run
+ * of that many is a chain, and the chains are added in pairs, so the nesting
+ * Luau compiles grows with the logarithm of the count.
+ */
 function sum(ctx: EmitContext, size: Size): ts.Expression {
-	let expr: ts.Expression | undefined;
-	for (const term of size.terms) {
-		expr = expr === undefined ? term : ctx.factory.createBinaryExpression(expr, ctx.ts_.SyntaxKind.PlusToken, term);
+	const terms = size.constant === 0 ? [...size.terms] : [...size.terms, ctx.num(size.constant)];
+	if (terms.length === 0) {
+		return ctx.num(0);
 	}
-	if (expr === undefined) {
-		return ctx.num(size.constant);
+	const chains: ts.Expression[] = [];
+	for (let start = 0; start < terms.length; start += TERMS_PER_SUM) {
+		chains.push(terms.slice(start, start + TERMS_PER_SUM).reduce((left, term) => plus(ctx, left, term)));
 	}
-	return size.constant === 0
-		? expr
-		: ctx.factory.createBinaryExpression(expr, ctx.ts_.SyntaxKind.PlusToken, ctx.num(size.constant));
+	while (chains.length > 1) {
+		const paired: ts.Expression[] = [];
+		for (let i = 0; i < chains.length; i += 2) {
+			paired.push(i + 1 < chains.length ? plus(ctx, chains[i], chains[i + 1]) : chains[i]);
+		}
+		chains.splice(0, chains.length, ...paired);
+	}
+	return chains[0];
+}
+
+function plus(ctx: EmitContext, left: ts.Expression, right: ts.Expression): ts.Expression {
+	return ctx.factory.createBinaryExpression(left, ctx.ts_.SyntaxKind.PlusToken, right);
 }
