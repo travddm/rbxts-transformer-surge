@@ -418,8 +418,9 @@ export abstract class EmitContext {
 	 * and counts it, inline. A `nil` is neither stored nor counted, so a
 	 * missing blob leaves no hole in the list (Wire format 6.7), as
 	 * `table.insert` did, without finding the list's length for each blob.
+	 * `present` skips the test where the caller has made it already.
 	 */
-	public pushBlob(value: ts.Expression, out: ts.Statement[]): void {
+	public pushBlob(value: ts.Expression, out: ts.Statement[], present = false): void {
 		this.usesWriteBlobs = true;
 		const f = this.factory;
 		const syntax = this.ts_.SyntaxKind;
@@ -430,23 +431,24 @@ export abstract class EmitContext {
 			statements.push(this.constStatement(blob as ts.Identifier, value));
 		}
 		const count = f.createIdentifier(WRITE_BLOB_COUNT);
-		const store = f.createBinaryExpression(
-			f.createElementAccessExpression(f.createIdentifier(WRITE_BLOBS), count),
-			syntax.EqualsToken,
-			this.castTo(blob, f.createTypeReferenceNode("defined")),
-		);
+		const store = [
+			f.createExpressionStatement(
+				f.createBinaryExpression(
+					f.createElementAccessExpression(f.createIdentifier(WRITE_BLOBS), count),
+					syntax.EqualsToken,
+					this.castTo(blob, f.createTypeReferenceNode("defined")),
+				),
+			),
+			f.createExpressionStatement(f.createBinaryExpression(count, syntax.PlusEqualsToken, this.num(1))),
+		];
+		if (present) {
+			out.push(...statements, ...store);
+			return;
+		}
 		statements.push(
 			f.createIfStatement(
 				f.createBinaryExpression(blob, syntax.ExclamationEqualsEqualsToken, f.createIdentifier("undefined")),
-				f.createBlock(
-					[
-						f.createExpressionStatement(store),
-						f.createExpressionStatement(
-							f.createBinaryExpression(count, syntax.PlusEqualsToken, this.num(1)),
-						),
-					],
-					true,
-				),
+				f.createBlock(store, true),
 			),
 		);
 		// A block of its own, so the local holding the blob ends with it.

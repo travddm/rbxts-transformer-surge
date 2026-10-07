@@ -506,6 +506,21 @@ describe("Emitter opaque union variant", () => {
 	});
 });
 
+describe("Emitter blob list", () => {
+	test("a blob is stored at the counted index unless it is nil, and an optional's presence is its test", () => {
+		const [bare] = emitSnapshot({ kind: "blob" }).split("// read");
+		expect(bare).toMatch(
+			/if \(value !== undefined\) \{\n\s+__surge_writeBlobs\[__surge_writeBlobCount\] = value as unknown as defined;\n\s+__surge_writeBlobCount \+= 1;\n\s*\}/,
+		);
+		const [optional] = emitSnapshot({ kind: "optional", inner: { kind: "blob" }, packed: false }).split("// read");
+		// The flag byte's test and the branch's, and none inside the branch.
+		expect(optional.match(/!== undefined/g)).toHaveLength(2);
+		expect(optional).toMatch(
+			/if \((opt\d+) !== undefined\) \{\n\s+__surge_writeBlobs\[__surge_writeBlobCount\] = \1 as unknown as defined;/,
+		);
+	});
+});
+
 describe("Emitter enum guards", () => {
 	const order: Field = { kind: "enum", enumName: "SortOrder", members: ["Custom", "Name"] };
 	const rig: Field = { kind: "enum", enumName: "HumanoidRigType", members: ["R15", "R6"] };

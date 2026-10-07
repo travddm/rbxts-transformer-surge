@@ -1099,7 +1099,12 @@ function writeOptional(
 		);
 	}
 	const innerStatements: ts.Statement[] = [];
-	writeField(ctx, field.inner, tmp, innerStatements);
+	if (field.inner.kind === "blob") {
+		// The presence test is the blob's own test for `nil`.
+		ctx.pushBlob(tmp, innerStatements, true);
+	} else {
+		writeField(ctx, field.inner, tmp, innerStatements);
+	}
 	out.push(f.createIfStatement(isPresent(tmp), f.createBlock(innerStatements, true)));
 }
 
