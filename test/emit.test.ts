@@ -1143,6 +1143,40 @@ describe("Emitter exact sizing", () => {
 		expect(guarded).toMatch(/^const __surge_scratch = buffer\.create\(\(typeIs\(value, "number"\) \? 8 : /);
 	});
 
+	/** A tagged union of `a`, which holds `inner`, then `b`, which holds a string, then `c`, which holds nothing. */
+	const threeTags = (inner: Field = u8): Field => ({
+		kind: "taggedUnion",
+		tagKey: "kind",
+		variants: [
+			{ tagValue: "a", fields: [{ name: "x", field: inner }] },
+			{ tagValue: "b", fields: [{ name: "s", field: { kind: "str" } }] },
+			{ tagValue: "c", fields: [] },
+		],
+	});
+
+	test("a size that compares a tag more than once reads it into a local once, in a loop and out of one", () => {
+		const array = serializeBody({ kind: "array", element: threeTags() });
+		expect(array).toMatch(
+			/for \(const (item\d+) of arr\d+\) \{\n\s+const (tag\d+) = \1\.kind;\n\s+size\d+ \+= \(\2 === "a" \? 1 : \2 === "b" \? [^]*?\.s\.size\(\) \+ 4 : 0\) \+ 1;\n\}/,
+		);
+		// The write reads the tag again inside its own loop.
+		expect(array.match(/\.kind;/g)).toHaveLength(2);
+		const alone = serializeBody(threeTags());
+		expect(alone).toMatch(
+			/^const (tag\d+) = value\.kind;\n[^]*?buffer\.create\(\(\1 === "a" \? 1 : \1 === "b" \? /,
+		);
+		// Outside a loop, the write reads the local the size bound.
+		expect(alone.match(/\.kind\b/g)).toHaveLength(1);
+		expect(alone).toMatch(/^if \(tag\d+ === "a"\) \{$/m);
+	});
+
+	test("a tag read inside a variant's branch is declared in that branch", () => {
+		const output = serializeBody(threeTags(threeTags()));
+		expect(output).toMatch(
+			/^const (tag\d+) = value\.kind;\nlet (size\d+) = 1;\nif \(\1 === "a"\) \{\n\s+const (tag\d+) = [^]*?\.x\.kind;\n\s+\2 \+= \(\3 === "a" \? 1 : /,
+		);
+	});
+
 	test("a union whose variants are one size tests nothing, and one with a loop in a variant is an if chain", () => {
 		const sameSize = serializeBody({
 			kind: "taggedUnion",

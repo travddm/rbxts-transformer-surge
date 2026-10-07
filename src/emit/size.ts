@@ -7,7 +7,8 @@
  * The size is an expression over the value, and, for an array of unions, a
  * loop over its elements that adds each one's bytes to a local ahead of that
  * expression. A union's size is its variants' sizes, chosen by the tests its
- * write makes. The locals the write binds outside a loop or a branch, the
+ * write makes, and a tagged union's tag is read once for those tests, as the
+ * write reads it. The locals the write binds outside a loop or a branch, the
  * size binds ahead of the result instead, and reads the value through them;
  * the write then reads the same locals (`SizeBinding` in context.ts). What
  * the size reads inside a loop or a branch, the write reads again.
@@ -25,7 +26,12 @@ import { guardFor, isLocal, literalCheck, severalEnums } from "./write";
 interface Size {
 	readonly constant: number;
 	readonly terms: ReadonlyArray<ts.Expression>;
-	/** Statements that add to the {@link Total}, which run before it is read. */
+	/**
+	 * Statements that run before the terms are added to the {@link Total}: the
+	 * loops that add to it, and, inside a loop or a branch, the locals its terms
+	 * read. Outside one, `exactSize` reads the terms ahead of these statements,
+	 * so a term there reads only what the size's `Bindings` bind.
+	 */
 	readonly loops: ReadonlyArray<ts.Statement>;
 }
 
@@ -175,21 +181,25 @@ function measure(
 			return add(size, elements(ctx, field.length, count, bytes));
 		}
 		case "taggedUnion": {
-			const tag = ctx.propertyAccess(value, tagKeyOf(field));
-			return measureUnion(
+			const sizes = field.variants.map((variant) =>
+				measureObject(
+					ctx,
+					variant.fields,
+					ctx.castTo(value, objectShapeTypeNode(ctx, variant.fields)),
+					total,
+					undefined,
+				),
+			);
+			const tag = readTag(ctx, bindings, ctx.propertyAccess(value, tagKeyOf(field)), sizes);
+			const union = measureUnion(
 				ctx,
-				field.variants.map((variant) => ({
-					check: () => literalCheck(ctx, tag, variant.tagValue),
-					size: measureObject(
-						ctx,
-						variant.fields,
-						ctx.castTo(value, objectShapeTypeNode(ctx, variant.fields)),
-						total,
-						undefined,
-					),
+				field.variants.map((variant, i) => ({
+					check: () => literalCheck(ctx, tag.value, variant.tagValue),
+					size: sizes[i],
 				})),
 				total,
 			);
+			return union === undefined ? undefined : add(tag.size, union);
 		}
 		case "guardedUnion":
 			return measureUnion(
@@ -225,9 +235,8 @@ function measureUnion(
 		sizes.push(variant.size);
 	}
 	const index = constant(variants.length <= 256 ? 1 : 2);
-	const first = sizes[0];
-	if (sizes.every((size) => !readsValue(size) && size.constant === first.constant)) {
-		return add(index, constant(first.constant));
+	if (oneConstant(sizes)) {
+		return add(index, constant(sizes[0].constant));
 	}
 	const last = sizes.length - 1;
 	if (sizes.every((size) => size.loops.length === 0)) {
@@ -248,6 +257,37 @@ function measureUnion(
 		chain = f.createIfStatement(variants[i].check(), f.createBlock(addTo(ctx, total, sizes[i]), true), chain);
 	}
 	return add(index, { constant: 0, terms: [], loops: [chain] });
+}
+
+/** Whether every one of `sizes` is the same constant, so a union of them tests nothing. */
+function oneConstant(sizes: ReadonlyArray<Size>): boolean {
+	return sizes.every((size) => !readsValue(size) && size.constant === sizes[0].constant);
+}
+
+/**
+ * The tag a tagged union's size compares, read once into a local when the
+ * size compares it more than once, as its write reads it (Transformer 5.25).
+ * Outside a loop or a branch, the local is one of the size's `bindings`, which
+ * the write reads instead of its own. Inside one, it is declared ahead of the
+ * comparisons, and the write reads the tag again.
+ */
+function readTag(
+	ctx: EmitContext,
+	bindings: Bindings | undefined,
+	tag: ts.Expression,
+	sizes: ReadonlyArray<Size | undefined>,
+): { readonly value: ts.Expression; readonly size: Size } {
+	// The size compares the tag for each variant but the last, and not at all
+	// when the variants are one constant size.
+	const known = sizes.filter((size) => size !== undefined);
+	if (sizes.length < 3 || known.length < sizes.length || oneConstant(known)) {
+		return { value: tag, size: EMPTY };
+	}
+	if (bindings !== undefined) {
+		return { value: bind(ctx, bindings, "tag", tag)?.value ?? tag, size: EMPTY };
+	}
+	const local = ctx.fresh("tag");
+	return { value: local, size: { constant: 0, terms: [], loops: [ctx.constStatement(local, tag)] } };
 }
 
 /**

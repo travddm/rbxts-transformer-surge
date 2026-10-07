@@ -1170,8 +1170,12 @@ function writeTaggedUnion(
 	// `false` when the enclosing object's packed region holds the tag as one bit.
 	writeIndex = true,
 ): void {
-	const tag = ctx.fresh("tag");
-	out.push(ctx.constStatement(tag, ctx.propertyAccess(value, tagKeyOf(field))));
+	const access = ctx.propertyAccess(value, tagKeyOf(field));
+	const bound = ctx.boundBySize(access)?.value;
+	const tag = bound ?? ctx.fresh("tag");
+	if (bound === undefined) {
+		out.push(ctx.constStatement(tag, access));
+	}
 	writeVariants(
 		ctx,
 		field.variants.map((variant) => ({
