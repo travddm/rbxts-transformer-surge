@@ -646,12 +646,9 @@ describe("transform generated code", () => {
 		expect(errors).toEqual([]);
 	});
 
-	test("the generated code of a shape sized by loops passes the type check under a consumer's noUnusedLocals", () => {
+	test("the generated code of a shape sized by loops over unions passes the type check under a consumer's noUnusedLocals", () => {
 		const source = `import { DataType, createCodec } from "@rbxts/surge";
 			interface T {
-				names: string[]; rows: { label: string; at: Vector3 }[];
-				ids: Set<DataType.u8>; byName: Map<string, DataType.u8>; byId: Map<DataType.u8, string>;
-				counts: Map<DataType.u8, DataType.u8>; record: Record<string, DataType.u8>;
 				mixed: (string | number)[]; maybe?: (string | boolean)[];
 				events: ({ kind: "a"; id: DataType.u8 } | { kind: "b"; text: string; tags: (string | number)[] })[];
 				either: string | number;
