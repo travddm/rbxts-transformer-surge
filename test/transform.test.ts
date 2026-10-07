@@ -232,6 +232,8 @@ describe("transform (end-to-end)", () => {
 		try {
 			// A recursion helper reads the closure's state, which each call resets.
 			expect(printed).toContain("let __surge_writeBlobs: Array<defined> = [];");
+			expect(printed).toContain("let __surge_writeBlobCount = 0;");
+			expect(printed).toMatch(/\(value: Node\) => \{[^]*?\n\s+__surge_writeBlobCount = 0;\n/);
 			expect(printed).toContain("let __surge_readBlobs: Array<defined> | undefined = undefined;");
 			expect(printed).toMatch(/\(value: Node\) => \{[^]*?\n\s+__surge_writeBlobs = \[\];\n/);
 			expect(printed).toContain("__surge_readBlobIndex = 0;");
