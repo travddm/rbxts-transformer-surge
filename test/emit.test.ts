@@ -521,6 +521,20 @@ describe("Emitter enum guards", () => {
 		expect(write).toContain('if (typeIs(value, "EnumItem") && value.EnumType === Enum.HumanoidRigType) {');
 		expect(write).toContain('else if (typeIs(value, "EnumItem") && value.EnumType === Enum.SortOrder) {');
 	});
+
+	const r15: Field = { kind: "literalConst", value: { enumName: "HumanoidRigType", member: "R15" } };
+
+	test("one enum item writes nothing and reads back as that item", () => {
+		const [write, read] = emitSnapshot({ kind: "object", fields: [{ name: "rig", field: r15 }] }).split("// read");
+		expect(write).not.toContain("buffer.");
+		expect(read).toContain("rig: Enum.HumanoidRigType.R15");
+		expect(read).not.toContain("buffer.");
+	});
+
+	test("one enum item in a union is guarded by equality with that item", () => {
+		const write = emitSnapshot({ kind: "guardedUnion", variants: [r15, { kind: "str" }] }).split("// read")[0];
+		expect(write).toContain("if (value === Enum.HumanoidRigType.R15) {");
+	});
 });
 
 describe("Emitter union guards", () => {

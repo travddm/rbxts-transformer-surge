@@ -63,6 +63,15 @@ export interface NumRange {
 /** A literal value a `bitSet` can hold. `undefined` cannot be a table key, so it is never one. */
 export type SetMember = string | number | boolean;
 
+/** One item of a Roblox enum, `Enum.<enumName>.<member>`. */
+export interface EnumItemConst {
+	readonly enumName: string;
+	readonly member: string;
+}
+
+/** The value of a `literalConst`. */
+export type ConstValue = string | number | boolean | undefined | EnumItemConst;
+
 export interface FieldKey {
 	readonly name: string;
 	// `{ 0: T }` and `{ "0": T }` are one property to TypeScript but two
@@ -132,7 +141,9 @@ export type Field =
 	// docs/specs/wire-format.md in the surge repo).
 	| { readonly kind: "bitSet"; readonly members: ReadonlyArray<SetMember> }
 	| { readonly kind: "optional"; readonly inner: Field; readonly packed: boolean }
-	| { readonly kind: "literalConst"; readonly value: string | number | boolean | undefined }
+	// A type with one value, which writes no bytes: a literal, `undefined`, or
+	// one item of a Roblox enum.
+	| { readonly kind: "literalConst"; readonly value: ConstValue }
 	// `undefined` is a value like any other, last in canonical literal order.
 	| { readonly kind: "literal"; readonly values: ReadonlyArray<string | number | boolean | undefined> }
 	| {

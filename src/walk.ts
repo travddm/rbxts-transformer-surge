@@ -11,6 +11,7 @@ import {
 } from "./detect";
 import type {
 	ComponentWidths,
+	ConstValue,
 	CountSpec,
 	Field,
 	FieldKey,
@@ -98,7 +99,7 @@ function narrowestWidth(min: number, max: number): NumWidth {
  */
 function setMembers(key: Field): ReadonlyArray<SetMember> | undefined {
 	if (key.kind === "literalConst") {
-		return key.value === undefined ? undefined : [key.value];
+		return key.value === undefined || typeof key.value === "object" ? undefined : [key.value];
 	}
 	if (key.kind === "literal" && key.values.every((value) => value !== undefined)) {
 		return key.values as ReadonlyArray<SetMember>;
@@ -142,6 +143,21 @@ function compareLiteral(a: string | number | boolean | undefined, b: string | nu
 		return 0;
 	}
 	return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Two `literalConst` values in canonical order: the literals as
+ * `compareLiteral` orders them, then the enum items, by enum and then by item
+ * name.
+ */
+function compareConst(a: ConstValue, b: ConstValue): number {
+	if (typeof a === "object" && typeof b === "object") {
+		return compareLiteral(a.enumName, b.enumName) || compareLiteral(a.member, b.member);
+	}
+	if (typeof a === "object" || typeof b === "object") {
+		return typeof a === "object" ? 1 : -1;
+	}
+	return compareLiteral(a, b);
 }
 
 export class TypeWalker {
@@ -914,6 +930,11 @@ export class TypeWalker {
 
 		const aliasName = (first as ts.Type & { aliasSymbol?: ts.Symbol }).aliasSymbol?.name;
 		const enumName = aliasName ?? parentSymbol?.name ?? "Enum";
+		// One item has one value, which the type already gives, so it writes
+		// no index (Wire format 4.12).
+		if (named.length === 1) {
+			return { kind: "literalConst", value: { enumName, member: named[0] } };
+		}
 		return { kind: "enum", enumName, members: named };
 	}
 
@@ -1133,7 +1154,7 @@ export class TypeWalker {
 				return a.kind < b.kind ? -1 : 1;
 			}
 			if (a.kind === "literalConst" && b.kind === "literalConst") {
-				return compareLiteral(a.value, b.value);
+				return compareConst(a.value, b.value);
 			}
 			if (a.kind === "datatype" && b.kind === "datatype") {
 				return compareLiteral(a.name, b.name);

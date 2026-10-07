@@ -1,6 +1,6 @@
 import type ts from "typescript";
 
-import type { Field, FieldKey, LengthWidth, NumWidth } from "../field";
+import type { ConstValue, Field, FieldKey, LengthWidth, NumWidth } from "../field";
 import {
 	CAPACITY,
 	CURSOR,
@@ -984,11 +984,17 @@ export abstract class EmitContext {
 		return entry;
 	}
 
-	public literalValueExpr(value: string | number | boolean | undefined): ts.Expression {
+	public literalValueExpr(value: ConstValue): ts.Expression {
 		const f = this.factory;
 		if (value === undefined) return f.createIdentifier("undefined");
 		if (typeof value === "string") return f.createStringLiteral(value);
 		if (typeof value === "number") return this.num(value);
+		if (typeof value === "object") {
+			return f.createPropertyAccessExpression(
+				f.createPropertyAccessExpression(f.createIdentifier("Enum"), value.enumName),
+				value.member,
+			);
+		}
 		return value ? f.createTrue() : f.createFalse();
 	}
 

@@ -125,11 +125,20 @@ export function fieldToTypeNode(ctx: EmitContext, field: Field): ts.TypeNode {
 		case "optional":
 			return f.createUnionTypeNode([fieldToTypeNode(ctx, field.inner), kw(ctx.ts_.SyntaxKind.UndefinedKeyword)]);
 		case "literalConst":
-			return field.value === undefined
-				? kw(ctx.ts_.SyntaxKind.UndefinedKeyword)
-				: f.createLiteralTypeNode(
-						ctx.literalValueExpr(field.value) as ts.LiteralExpression | ts.BooleanLiteral,
-					);
+			if (field.value === undefined) {
+				return kw(ctx.ts_.SyntaxKind.UndefinedKeyword);
+			}
+			if (typeof field.value === "object") {
+				return f.createTypeReferenceNode(
+					f.createQualifiedName(
+						f.createQualifiedName(f.createIdentifier("Enum"), field.value.enumName),
+						field.value.member,
+					),
+				);
+			}
+			return f.createLiteralTypeNode(
+				ctx.literalValueExpr(field.value) as ts.LiteralExpression | ts.BooleanLiteral,
+			);
 		case "literal":
 			return f.createUnionTypeNode(
 				field.values.map((v) =>

@@ -251,7 +251,7 @@ describe("TypeWalker classification with fixture packages", () => {
 		});
 	});
 
-	test("two items with the same name from two enums are two one-member enum variants", () => {
+	test("two items with the same name from two enums are two enum-item constants", () => {
 		const { field, diagnostics } = walkDeclaration(
 			"interface T { e: Enum.AutomaticSize.None | Enum.ActuatorType.None; }",
 			"T",
@@ -264,8 +264,8 @@ describe("TypeWalker classification with fixture packages", () => {
 					field: {
 						kind: "guardedUnion",
 						variants: [
-							{ kind: "enum", enumName: "ActuatorType", members: ["None"] },
-							{ kind: "enum", enumName: "AutomaticSize", members: ["None"] },
+							{ kind: "literalConst", value: { enumName: "ActuatorType", member: "None" } },
+							{ kind: "literalConst", value: { enumName: "AutomaticSize", member: "None" } },
 						],
 					},
 				},
@@ -307,7 +307,7 @@ describe("TypeWalker classification with fixture packages", () => {
 		});
 	});
 
-	test("one item of an enum next to another type is a one-member enum variant", () => {
+	test("one item of an enum next to another type is an enum-item constant variant", () => {
 		const { field } = walkDeclaration("interface T { e: Enum.SortOrder.Name | string; }", "T", { roblox: true });
 		expect(field).toMatchObject({
 			fields: [
@@ -315,7 +315,43 @@ describe("TypeWalker classification with fixture packages", () => {
 					name: "e",
 					field: {
 						kind: "guardedUnion",
-						variants: [{ kind: "enum", enumName: "SortOrder", members: ["Name"] }, { kind: "str" }],
+						variants: [
+							{ kind: "literalConst", value: { enumName: "SortOrder", member: "Name" } },
+							{ kind: "str" },
+						],
+					},
+				},
+			],
+		});
+	});
+
+	test("one item of an enum alone is a constant, which writes no bytes", () => {
+		const { field, diagnostics } = walkDeclaration("interface T { rig: Enum.HumanoidRigType.R15; }", "T", {
+			roblox: true,
+		});
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toEqual({
+			kind: "object",
+			fields: [
+				{ name: "rig", field: { kind: "literalConst", value: { enumName: "HumanoidRigType", member: "R15" } } },
+			],
+		});
+	});
+
+	test("an enum-item constant comes after a literal constant among a union's variants", () => {
+		const { field, diagnostics } = walkDeclaration('interface T { e: Enum.SortOrder.Name | "x"; }', "T", {
+			roblox: true,
+		});
+		expect(diagnostics).toHaveLength(0);
+		expect(field).toMatchObject({
+			fields: [
+				{
+					field: {
+						kind: "guardedUnion",
+						variants: [
+							{ kind: "literalConst", value: "x" },
+							{ kind: "literalConst", value: { enumName: "SortOrder", member: "Name" } },
+						],
 					},
 				},
 			],
