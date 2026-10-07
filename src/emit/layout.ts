@@ -243,6 +243,13 @@ export function runLocals(field: Field): number {
 		case "num":
 			// The value `writeChecks` binds to check against a range.
 			return field.range === undefined ? 1 : 2;
+		case "vector2":
+		case "vector3":
+		case "color3":
+			// The value the write reads its components from, read once.
+			return 2;
+		case "datatype":
+			return FIXED_DATATYPES[field.name].components.length > 1 ? 2 : 1;
 		default:
 			return 1;
 	}

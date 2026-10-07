@@ -1021,6 +1021,42 @@ describe("Emitter nested object values", () => {
 	});
 });
 
+describe("Emitter datatype values", () => {
+	function writeSection(field: Field): string {
+		return emitSnapshot(field).split("// read\n")[0];
+	}
+
+	const property = (field: Field): Field => ({
+		kind: "object",
+		fields: [
+			{ name: "id", field: { kind: "num", width: "u32" } },
+			{ name: "at", field },
+		],
+	});
+
+	test.each([
+		["vector2", { kind: "vector2" } as Field, "vec", ["X", "Y"]],
+		["vector3", { kind: "vector3" } as Field, "vec", ["X", "Y", "Z"]],
+		["color3", { kind: "color3" } as Field, "color", ["R", "G", "B"]],
+		["UDim2", { kind: "datatype", name: "UDim2" } as Field, "dt", ["X.Scale", "Y.Offset"]],
+	])("a %s read through a property path is read into a local once, inside a run", (_label, field, base, reads) => {
+		const write = writeSection(property(field));
+		const local = new RegExp(`const (${base}\\d+) = value\\.at;`).exec(write)?.[1];
+		expect(local).toBeDefined();
+		for (const read of reads) {
+			expect(write).toContain(`${local}.${read}`);
+		}
+		expect(write.match(/value\.at\b/g)).toHaveLength(1);
+		// `id` and `at` share one reservation.
+		expect(write.match(/__surge_cursor = pos\d+ \+ \d+;/g)).toHaveLength(1);
+	});
+
+	test("a local value and a one-component datatype bind nothing", () => {
+		expect(writeSection({ kind: "vector3" })).not.toMatch(/const vec\d+/);
+		expect(writeSection(property({ kind: "datatype", name: "BrickColor" }))).not.toMatch(/const dt\d+/);
+	});
+});
+
 describe("Emitter exact arrays", () => {
 	test("an element read by index is cast to the element's type", () => {
 		const point: Field = {
