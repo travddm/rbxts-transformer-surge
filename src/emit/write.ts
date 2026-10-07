@@ -227,6 +227,15 @@ function bindLocal(ctx: EmitContext, base: string, value: ts.Expression, out: ts
 	return local;
 }
 
+/**
+ * `value`, read into a local first when it is not a local itself, for a
+ * write that reads more than one of its properties (Transformer 5.26). The
+ * path to the value is then read once, inside a run of 5.5 as outside one.
+ */
+function readOnce(ctx: EmitContext, base: string, value: ts.Expression, out: ts.Statement[]): ts.Expression {
+	return isLocal(ctx, value) ? value : bindLocal(ctx, base, value, out);
+}
+
 function writeCount(ctx: EmitContext, length: CountSpec | undefined, count: ts.Expression, out: ts.Statement[]): void {
 	const width = lengthWidth(length);
 	checkCountFits(ctx, width, count, out);
@@ -317,7 +326,7 @@ function writeVector3(
 	const widths = componentsOf(field.components);
 	const { buf, pos, statements } = ctx.destructureAlloc("alloc", componentBytes(widths));
 	out.push(...statements);
-	writeNum3(ctx, value, "X", "Y", "Z", widths, { buf, pos, offset: 0 }, out);
+	writeNum3(ctx, readOnce(ctx, "vec", value, out), "X", "Y", "Z", widths, { buf, pos, offset: 0 }, out);
 }
 
 /**
@@ -535,11 +544,12 @@ function writeDatatype(ctx: EmitContext, name: string, value: ts.Expression, out
 	const size = components.reduce((total, component) => total + WIDTH_BYTES[component.width], 0);
 	const { buf, pos, statements } = ctx.destructureAlloc("alloc", size);
 	out.push(...statements);
+	const source = components.length > 1 ? readOnce(ctx, "dt", value, out) : value;
 	let offset = 0;
 	for (const component of components) {
 		const read = component.path.reduce<ts.Expression>(
 			(target, key) => f.createPropertyAccessExpression(target, key),
-			value,
+			source,
 		);
 		out.push(
 			f.createExpressionStatement(
@@ -552,7 +562,7 @@ function writeDatatype(ctx: EmitContext, name: string, value: ts.Expression, out
 
 function writeNum2(
 	ctx: EmitContext,
-	value: ts.Expression,
+	vector: ts.Expression,
 	a: string,
 	b: string,
 	width: "f32",
@@ -561,6 +571,7 @@ function writeNum2(
 	const f = ctx.factory;
 	const { buf, pos, statements } = ctx.destructureAlloc("alloc", 8);
 	out.push(...statements);
+	const value = readOnce(ctx, "vec", vector, out);
 	out.push(
 		f.createExpressionStatement(
 			ctx.bufferCall(`write${width}`, [buf, pos, f.createPropertyAccessExpression(value, a)]),
@@ -606,10 +617,11 @@ function writeNum3(
 	});
 }
 
-function writeColor3(ctx: EmitContext, value: ts.Expression, out: ts.Statement[]): void {
+function writeColor3(ctx: EmitContext, color: ts.Expression, out: ts.Statement[]): void {
 	const f = ctx.factory;
 	const { buf, pos, statements } = ctx.destructureAlloc("alloc", 3);
 	out.push(...statements);
+	const value = readOnce(ctx, "color", color, out);
 	(["R", "G", "B"] as const).forEach((channel, i) => {
 		const byteExpr = f.createCallExpression(
 			f.createPropertyAccessExpression(f.createIdentifier("math"), "floor"),
@@ -637,7 +649,7 @@ function writeColor3(ctx: EmitContext, value: ts.Expression, out: ts.Statement[]
 function writeCFrame(
 	ctx: EmitContext,
 	field: Extract<Field, { kind: "cframe" }>,
-	value: ts.Expression,
+	cframe: ts.Expression,
 	out: ts.Statement[],
 ): void {
 	const f = ctx.factory;
@@ -649,6 +661,7 @@ function writeCFrame(
 	// rotation is written.
 	const { buf, pos, statements } = ctx.destructureAlloc("alloc", cframeBytes(field));
 	out.push(...statements);
+	const value = readOnce(ctx, "cf", cframe, out);
 	// Read once rather than once per component: `Position` is a property of
 	// a Roblox userdata, which the engine answers on every read.
 	const position = ctx.fresh("position");
