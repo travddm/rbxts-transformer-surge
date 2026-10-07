@@ -167,10 +167,9 @@ const pos1 = __surge_cursor;
 __surge_cursor = pos1 + 16;
 buffer.writeu32(__surge_scratch, pos1, value.id);
 const pos2 = pos1 + 4;
-const vec3 = value.at;
-buffer.writef32(__surge_scratch, pos2, vec3.X);
-buffer.writef32(__surge_scratch, pos2 + 4, vec3.Y);
-buffer.writef32(__surge_scratch, pos2 + 8, vec3.Z);
+buffer.writef32(__surge_scratch, pos2, value.at.X);
+buffer.writef32(__surge_scratch, pos2 + 4, value.at.Y);
+buffer.writef32(__surge_scratch, pos2 + 8, value.at.Z);
 return __surge_scratch;"
 `;
 
@@ -557,26 +556,25 @@ for (const kp3 of keypoints1) {
         __surge_scratch = __surge_grow(__surge_scratch, pos5, __surge_cursor);
         __surge_capacity = buffer.len(__surge_scratch);
     }
-    const color6 = kp3.Value;
-    buffer.writeu8(__surge_scratch, pos5, math.floor(color6.R * 255));
-    buffer.writeu8(__surge_scratch, pos5 + 1, math.floor(color6.G * 255));
-    buffer.writeu8(__surge_scratch, pos5 + 2, math.floor(color6.B * 255));
+    buffer.writeu8(__surge_scratch, pos5, math.floor(kp3.Value.R * 255));
+    buffer.writeu8(__surge_scratch, pos5 + 1, math.floor(kp3.Value.G * 255));
+    buffer.writeu8(__surge_scratch, pos5 + 2, math.floor(kp3.Value.B * 255));
 }
 
 // read
-const pos7 = __surge_readCursor;
-__surge_readCursor = pos7 + 1;
-const count8 = buffer.readu8(__surge_input, pos7);
-const keypoints9 = new Array<ColorSequenceKeypoint>(count8);
-for (const i10 of $range(1, count8)) {
-    const pos11 = __surge_readCursor;
-    __surge_readCursor = pos11 + 4;
-    const time12 = buffer.readf32(__surge_input, pos11);
-    const pos13 = __surge_readCursor;
-    __surge_readCursor = pos13 + 3;
-    keypoints9[i10 - 1] = new ColorSequenceKeypoint(time12, new Color3(buffer.readu8(__surge_input, pos13) / 255, buffer.readu8(__surge_input, pos13 + 1) / 255, buffer.readu8(__surge_input, pos13 + 2) / 255));
+const pos6 = __surge_readCursor;
+__surge_readCursor = pos6 + 1;
+const count7 = buffer.readu8(__surge_input, pos6);
+const keypoints8 = new Array<ColorSequenceKeypoint>(count7);
+for (const i9 of $range(1, count7)) {
+    const pos10 = __surge_readCursor;
+    __surge_readCursor = pos10 + 4;
+    const time11 = buffer.readf32(__surge_input, pos10);
+    const pos12 = __surge_readCursor;
+    __surge_readCursor = pos12 + 3;
+    keypoints8[i9 - 1] = new ColorSequenceKeypoint(time11, new Color3(buffer.readu8(__surge_input, pos12) / 255, buffer.readu8(__surge_input, pos12 + 1) / 255, buffer.readu8(__surge_input, pos12 + 2) / 255));
 }
-return new ColorSequence(keypoints9);"
+return new ColorSequence(keypoints8);"
 `;
 
 exports[`Emitter per-kind write/read snapshots datatype BrickColor 1`] = `
@@ -1418,20 +1416,19 @@ buffer.writeu8(__surge_scratch, pos1, value.flag ? 1 : 0);
 const pos2 = pos1 + 1;
 buffer.writeu32(__surge_scratch, pos2, value.id);
 const pos3 = pos1 + 5;
-const vec4 = value.at;
-buffer.writef32(__surge_scratch, pos3, vec4.X);
-buffer.writef32(__surge_scratch, pos3 + 4, vec4.Y);
-buffer.writef32(__surge_scratch, pos3 + 8, vec4.Z);
+buffer.writef32(__surge_scratch, pos3, value.at.X);
+buffer.writef32(__surge_scratch, pos3 + 4, value.at.Y);
+buffer.writef32(__surge_scratch, pos3 + 8, value.at.Z);
 
 // read
-const pos5 = __surge_readCursor;
-__surge_readCursor = pos5 + 17;
-const pos6 = pos5 + 1;
-const pos7 = pos5 + 5;
+const pos4 = __surge_readCursor;
+__surge_readCursor = pos4 + 17;
+const pos5 = pos4 + 1;
+const pos6 = pos4 + 5;
 return {
-    flag: buffer.readu8(__surge_input, pos5) !== 0,
-    id: buffer.readu32(__surge_input, pos6),
-    at: new Vector3(buffer.readf32(__surge_input, pos7), buffer.readf32(__surge_input, pos7 + 4), buffer.readf32(__surge_input, pos7 + 8))
+    flag: buffer.readu8(__surge_input, pos4) !== 0,
+    id: buffer.readu32(__surge_input, pos5),
+    at: new Vector3(buffer.readf32(__surge_input, pos6), buffer.readf32(__surge_input, pos6 + 4), buffer.readf32(__surge_input, pos6 + 8))
 };"
 `;
 
