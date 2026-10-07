@@ -169,7 +169,7 @@ function measure(
 			if (field.rest === undefined) {
 				return size;
 			}
-			const bytes = fixedBytes(field.rest);
+			const bytes = constantBytes(ctx, field.rest, total);
 			if (bytes === undefined) {
 				return undefined;
 			}
@@ -306,15 +306,12 @@ function measureArray(
 	total: Total,
 	bindings: Bindings | undefined,
 ): Size | undefined {
-	const bytes = fixedBytes(field.element);
 	if (exactCount(field.length) !== undefined) {
+		const bytes = constantBytes(ctx, field.element, total);
 		return bytes === undefined ? undefined : elements(ctx, field.length, ctx.sizeOf(value), bytes);
 	}
-	const union = field.element.kind === "taggedUnion" || field.element.kind === "guardedUnion";
-	if (bytes === undefined && !union) {
-		return undefined;
-	}
 	const arr = bind(ctx, bindings, "arr", value)?.value ?? value;
+	const bytes = fixedBytes(field.element);
 	if (bytes !== undefined) {
 		return elements(ctx, field.length, ctx.sizeOf(arr), bytes);
 	}
@@ -325,6 +322,9 @@ function measureArray(
 	}
 	if (!readsValue(element)) {
 		return elements(ctx, field.length, ctx.sizeOf(arr), element.constant);
+	}
+	if (field.element.kind !== "taggedUnion" && field.element.kind !== "guardedUnion") {
+		return undefined;
 	}
 	return {
 		constant: WIDTH_BYTES[lengthWidth(field.length)],
@@ -435,6 +435,20 @@ function addTo(ctx: EmitContext, total: Total, size: Size): ts.Statement[] {
 		);
 	}
 	return statements;
+}
+
+/**
+ * The bytes `field` writes for every value: its fixed bytes, or a size that
+ * reads nothing from the value. An object that holds a blob has the second
+ * and not the first, because `fixedBytes` admits no blob into a run.
+ */
+function constantBytes(ctx: EmitContext, field: Field, total: Total): number | undefined {
+	const bytes = fixedBytes(field);
+	if (bytes !== undefined) {
+		return bytes;
+	}
+	const size = measure(ctx, field, ctx.fresh("item"), total, undefined);
+	return size === undefined || readsValue(size) ? undefined : size.constant;
 }
 
 /** Whether `size` reads anything from the value, rather than being a constant. */

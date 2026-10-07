@@ -1146,6 +1146,25 @@ describe("Emitter exact sizing", () => {
 		expect(output).not.toContain("__surge_capacity");
 	});
 
+	test("an element that holds a blob is sized by its count, in an array, an exact array and a tuple's rest", () => {
+		const holder: Field = {
+			kind: "object",
+			fields: [
+				{ name: "model", field: { kind: "blob" } },
+				{ name: "health", field: { kind: "num", width: "u16" } },
+			],
+		};
+		expect(serializeBody({ kind: "array", element: holder })).toMatch(
+			/^const (arr\d+) = value;\nconst __surge_scratch = buffer\.create\(\1\.size\(\) \* 2 \+ 4\);/,
+		);
+		expect(serializeBody({ kind: "array", element: holder, length: 3 })).toMatch(
+			/^const __surge_scratch = buffer\.create\(6\);/,
+		);
+		expect(serializeBody({ kind: "tuple", fixed: [u8], rest: { kind: "blob" }, length: "u8" })).toMatch(
+			/^const (tup\d+) = value;\nconst __surge_scratch = buffer\.create\(2\);/,
+		);
+	});
+
 	test("a loop inside a loop, and inside an optional, adds to the one size", () => {
 		const nested = serializeBody({
 			kind: "optional",
