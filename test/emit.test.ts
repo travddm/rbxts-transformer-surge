@@ -499,7 +499,9 @@ describe("Emitter opaque union variant", () => {
 		const output = emitSnapshot({ kind: "guardedUnion", variants: [{ kind: "str" }, { kind: "blob" }] });
 		const [write, read] = output.split("// read");
 		expect(write.match(/typeIs\(/g)).toHaveLength(1);
-		expect(write).toMatch(/else \{[^]*?writeu8\(__surge_scratch, pos\d+, 1\);[^]*?__surge_writeBlobs\.push\(/);
+		expect(write).toMatch(
+			/else \{[^]*?writeu8\(__surge_scratch, pos\d+, 1\);[^]*?__surge_writeBlobs\[__surge_writeBlobCount\] = /,
+		);
 		expect(read).toContain("__surge_readBlobs![__surge_readBlobIndex]");
 	});
 });

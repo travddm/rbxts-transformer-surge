@@ -167,7 +167,7 @@ describe("transform (end-to-end)", () => {
 			);
 			try {
 				expect(diagnostics).toHaveLength(0);
-				expect(printed.includes("__surge_writeBlobs.push(")).toBe(carries);
+				expect(printed.includes("__surge_writeBlobs[__surge_writeBlobCount] = ")).toBe(carries);
 				expect(printed.includes("blobs:")).toBe(carries);
 			} finally {
 				cleanup();
@@ -186,7 +186,7 @@ describe("transform (end-to-end)", () => {
 		);
 		try {
 			expect(diagnostics).toHaveLength(0);
-			expect(printed).toContain("__surge_writeBlobs.push(");
+			expect(printed).toContain("__surge_writeBlobs[__surge_writeBlobCount] = ");
 			expect(printed).toContain("blobs: __surge_writeBlobs }");
 		} finally {
 			cleanup();
@@ -200,11 +200,15 @@ describe("transform (end-to-end)", () => {
 			const s = createCodec<P>();`,
 		);
 		try {
-			// The blob list is a local of `serialize`, created at the one blob it
-			// can hold, and the list `deserialize` was given and its index locals
-			// of `deserialize`.
+			// The blob list and its count are locals of `serialize`, the list
+			// created at the one blob it can hold, and the list `deserialize` was
+			// given and its index locals of `deserialize`. A blob is stored at the
+			// next index unless it is `nil`.
 			expect(printed).toContain("const __surge_writeBlobs: Array<defined> = new Array<defined>(1);");
-			expect(printed).toContain("__surge_writeBlobs.push(value.part as unknown as defined);");
+			expect(printed).toContain("let __surge_writeBlobCount = 0;");
+			expect(printed).toMatch(
+				/const (blob\d+) = value\.part;\n\s+if \(\1 !== undefined\) \{\n\s+__surge_writeBlobs\[__surge_writeBlobCount\] = \1 as unknown as defined;\n\s+__surge_writeBlobCount \+= 1;/,
+			);
 			expect(printed).toContain("blobs: __surge_writeBlobs }");
 			// `deserialize` takes the table `serialize` returns.
 			expect(printed).toContain("__surge_input = input.buffer;");

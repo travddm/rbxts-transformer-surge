@@ -223,7 +223,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				const writeStatements: ts.Statement[] = [];
 				if (needsWrite) {
 					emitter.beginFunction();
-					emitter.countBlobLocals(rootField, "write");
+					emitter.countBlobLocals(rootField);
 					emitter.sizeExactly(rootField, f.createIdentifier("value"));
 					emitter.writeField(rootField, f.createIdentifier("value"), writeStatements);
 				}
@@ -244,7 +244,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				if (needsRead) {
 					emitter.beginFunction();
 					emitter.readLocally();
-					emitter.countBlobLocals(rootField, "read");
+					emitter.countBlobLocals(rootField);
 					if (options.readChecks && serializedCarriesBlobs) {
 						tableParts = { buffer: emitter.fresh("inputBuffer"), blobs: emitter.fresh("inputBlobs") };
 					}

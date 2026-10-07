@@ -425,7 +425,10 @@ return result4;"
 
 exports[`Emitter per-kind write/read snapshots blob 1`] = `
 "// write
-__surge_writeBlobs.push(value as unknown as defined);
+if (value !== undefined) {
+    __surge_writeBlobs[__surge_writeBlobCount] = value as unknown as defined;
+    __surge_writeBlobCount += 1;
+}
 
 // read
 if (__surge_readBlobs === undefined) {
@@ -1261,14 +1264,20 @@ return new Vector3(buffer.readf32(__surge_input, pos2), buffer.readf32(__surge_i
 
 exports[`Emitter read-order for side-effecting fields a blob field followed by a plain field binds the blob read before the next statement 1`] = `
 "// write
-__surge_writeBlobs.push(value.a as unknown as defined);
-const pos1 = __surge_cursor;
-__surge_cursor = pos1 + 8;
+{
+    const blob1 = value.a;
+    if (blob1 !== undefined) {
+        __surge_writeBlobs[__surge_writeBlobCount] = blob1 as unknown as defined;
+        __surge_writeBlobCount += 1;
+    }
+}
+const pos2 = __surge_cursor;
+__surge_cursor = pos2 + 8;
 if (__surge_cursor > __surge_capacity) {
-    __surge_scratch = __surge_grow(__surge_scratch, pos1, __surge_cursor);
+    __surge_scratch = __surge_grow(__surge_scratch, pos2, __surge_cursor);
     __surge_capacity = buffer.len(__surge_scratch);
 }
-buffer.writef64(__surge_scratch, pos1, value.b);
+buffer.writef64(__surge_scratch, pos2, value.b);
 
 // read
 if (__surge_readBlobs === undefined) {
@@ -1277,13 +1286,13 @@ if (__surge_readBlobs === undefined) {
 if (__surge_readBlobIndex >= __surge_readBlobs!.size()) {
     throw "@rbxts/surge: deserialize read past the end of the blobs array";
 }
-const blob2 = __surge_readBlobs![__surge_readBlobIndex] as unknown as defined;
+const blob3 = __surge_readBlobs![__surge_readBlobIndex] as unknown as defined;
 __surge_readBlobIndex += 1;
-const pos3 = __surge_readCursor;
-__surge_readCursor = pos3 + 8;
+const pos4 = __surge_readCursor;
+__surge_readCursor = pos4 + 8;
 return {
-    a: blob2,
-    b: buffer.readf64(__surge_input, pos3)
+    a: blob3,
+    b: buffer.readf64(__surge_input, pos4)
 };"
 `;
 

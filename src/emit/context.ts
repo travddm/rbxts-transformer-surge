@@ -16,6 +16,7 @@ import {
 	SCRATCH,
 	WIDTH_BYTES,
 	WRITE_BLOBS,
+	WRITE_BLOB_COUNT,
 	importAlias,
 } from "./constants";
 import { holdsBlob } from "./layout";
@@ -400,26 +401,56 @@ export abstract class EmitContext {
 	 * function about to be emitted, where that function holds them: a shape
 	 * that holds a blob and reaches no recursion helper, whose function would
 	 * read the closure's instead (Transformer 5.9 in docs/specs/transformer.md
-	 * in the surge repo). The write side holds its list, and the read side its
-	 * list and its index. Called after {@link beginFunction} and before the
-	 * body is emitted.
+	 * in the surge repo). The write side holds its list and its count, and the
+	 * read side its list and its index. Called after {@link beginFunction} and
+	 * before the body is emitted.
 	 */
-	public countBlobLocals(field: Field, side: "write" | "read"): void {
+	public countBlobLocals(field: Field): void {
 		if (this.helperFields.size === 0 && holdsBlob(field)) {
-			this.liveLocals += side === "write" ? 1 : 2;
+			// The list and its count on the write side, the list and its index
+			// on the read side.
+			this.liveLocals += 2;
 		}
 	}
 
 	/**
-	 * Appends `value` to the blob list `serialize` returns, inline. `push`
-	 * compiles to `table.insert`, which appends nothing for `nil`, so a missing
-	 * blob leaves no hole in the list (Wire format 6.7).
+	 * Stores `value` at the next index of the blob list `serialize` returns,
+	 * and counts it, inline. A `nil` is neither stored nor counted, so a
+	 * missing blob leaves no hole in the list (Wire format 6.7), as
+	 * `table.insert` did, without finding the list's length for each blob.
 	 */
 	public pushBlob(value: ts.Expression, out: ts.Statement[]): void {
 		this.usesWriteBlobs = true;
 		const f = this.factory;
-		const push = f.createPropertyAccessExpression(f.createIdentifier(WRITE_BLOBS), "push");
-		out.push(f.createExpressionStatement(f.createCallExpression(push, undefined, [value])));
+		const syntax = this.ts_.SyntaxKind;
+		const statements: ts.Statement[] = [];
+		let blob = value;
+		if (!this.ts_.isIdentifier(value)) {
+			blob = this.fresh("blob");
+			statements.push(this.constStatement(blob as ts.Identifier, value));
+		}
+		const count = f.createIdentifier(WRITE_BLOB_COUNT);
+		const store = f.createBinaryExpression(
+			f.createElementAccessExpression(f.createIdentifier(WRITE_BLOBS), count),
+			syntax.EqualsToken,
+			this.castTo(blob, f.createTypeReferenceNode("defined")),
+		);
+		statements.push(
+			f.createIfStatement(
+				f.createBinaryExpression(blob, syntax.ExclamationEqualsEqualsToken, f.createIdentifier("undefined")),
+				f.createBlock(
+					[
+						f.createExpressionStatement(store),
+						f.createExpressionStatement(
+							f.createBinaryExpression(count, syntax.PlusEqualsToken, this.num(1)),
+						),
+					],
+					true,
+				),
+			),
+		);
+		// A block of its own, so the local holding the blob ends with it.
+		out.push(statements.length === 1 ? statements[0] : f.createBlock(statements, true));
 	}
 
 	/**
@@ -474,9 +505,12 @@ export abstract class EmitContext {
 							[f.createTypeReferenceNode("defined")],
 							[this.writeBlobsLength],
 						);
-			return [this.typedStatement(WRITE_BLOBS, this.blobListType(false), list, this.ts_.NodeFlags.Const)];
+			return [
+				this.typedStatement(WRITE_BLOBS, this.blobListType(false), list, this.ts_.NodeFlags.Const),
+				this.letStatement(WRITE_BLOB_COUNT, this.num(0)),
+			];
 		}
-		return [this.assign(WRITE_BLOBS, empty)];
+		return [this.assign(WRITE_BLOBS, empty), this.assign(WRITE_BLOB_COUNT, this.num(0))];
 	}
 
 	/** The blob list a `serialize()` returns. */
@@ -516,6 +550,7 @@ export abstract class EmitContext {
 					this.factory.createArrayLiteralExpression([]),
 					let_,
 				),
+				this.letStatement(WRITE_BLOB_COUNT, this.num(0)),
 			);
 		}
 		if (this.usesReadBlobs) {

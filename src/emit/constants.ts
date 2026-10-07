@@ -78,6 +78,7 @@ export const READ_LENGTH = importAlias("inputLength");
 // the surge repo): the list `serialize` returns, and the list `deserialize`
 // was given and the next blob's index.
 export const WRITE_BLOBS = importAlias("writeBlobs");
+export const WRITE_BLOB_COUNT = importAlias("writeBlobCount");
 export const READ_BLOBS = importAlias("readBlobs");
 export const READ_BLOB_INDEX = importAlias("readBlobIndex");
 /** What a serializer starts with, doubled by `grow` from there. */

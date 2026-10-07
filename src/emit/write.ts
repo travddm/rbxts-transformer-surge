@@ -524,8 +524,7 @@ function writeLiteral(
 }
 
 function writeBlob(ctx: EmitContext, value: ts.Expression, out: ts.Statement[]): void {
-	// The list holds `defined`, and the static type of a blob can be `unknown`.
-	ctx.pushBlob(ctx.castTo(value, ctx.factory.createTypeReferenceNode("defined")), out);
+	ctx.pushBlob(value, out);
 }
 
 function writeDatatype(ctx: EmitContext, name: string, value: ts.Expression, out: ts.Statement[]): void {
