@@ -1052,7 +1052,7 @@ return opt6;"
 
 exports[`Emitter per-kind write/read snapshots recursiveRef 1`] = `
 "// write
-surge_Node_1_write(value);
+__surge_cursor = surge_Node_1_write(value, __surge_cursor);
 
 // read
 const val4 = surge_Node_1_read();
@@ -1063,7 +1063,7 @@ type surge_Node_1_Type = {
     value: number;
     next: surge_Node_1_Type;
 };
-function surge_Node_1_write(value: surge_Node_1_Type) {
+function surge_Node_1_write(value: surge_Node_1_Type, __surge_cursor: number): number {
     const pos1 = __surge_cursor;
     __surge_cursor = pos1 + 8;
     if (__surge_cursor > __surge_capacity) {
@@ -1071,7 +1071,8 @@ function surge_Node_1_write(value: surge_Node_1_Type) {
         __surge_capacity = buffer.len(__surge_scratch);
     }
     buffer.writef64(__surge_scratch, pos1, value.value);
-    surge_Node_1_write(value.next);
+    __surge_cursor = surge_Node_1_write(value.next, __surge_cursor);
+    return __surge_cursor;
 }
 function surge_Node_1_read(): surge_Node_1_Type {
     const pos2 = __surge_readCursor;
@@ -1288,7 +1289,7 @@ return {
 
 exports[`Emitter read-order for side-effecting fields a helper-object field followed by a plain field binds the helper call before the next statement 1`] = `
 "// write
-surge_Tree_1_write(value.inner);
+__surge_cursor = surge_Tree_1_write(value.inner, __surge_cursor);
 const pos12 = __surge_cursor;
 __surge_cursor = pos12 + 8;
 if (__surge_cursor > __surge_capacity) {
@@ -1310,7 +1311,7 @@ return {
 type surge_Tree_1_Type = {
     kids: number[];
 };
-function surge_Tree_1_write(value: surge_Tree_1_Type) {
+function surge_Tree_1_write(value: surge_Tree_1_Type, __surge_cursor: number): number {
     const arr1 = value.kids;
     const pos2 = __surge_cursor;
     __surge_cursor = pos2 + 4;
@@ -1330,6 +1331,7 @@ function surge_Tree_1_write(value: surge_Tree_1_Type) {
         buffer.writef64(__surge_scratch, element5, item3);
         element5 += 8;
     }
+    return __surge_cursor;
 }
 function surge_Tree_1_read(): surge_Tree_1_Type {
     const pos6 = __surge_readCursor;

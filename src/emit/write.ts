@@ -374,7 +374,7 @@ function writeRecursiveRef(
 	// `writeObject`) -- without it, this call site would reference a
 	// helper function that's never declared.
 	ctx.ensureHelper(field.helperName);
-	out.push(ctx.factory.createExpressionStatement(ctx.callLocal(`${field.helperName}_write`, [value])));
+	out.push(ctx.callWriteHelper(field.helperName, value));
 }
 
 function writeArray(
@@ -956,7 +956,7 @@ function writeObject(
 ): void {
 	if (field.helperName) {
 		ctx.ensureHelper(field.helperName);
-		out.push(ctx.factory.createExpressionStatement(ctx.callLocal(`${field.helperName}_write`, [value])));
+		out.push(ctx.callWriteHelper(field.helperName, value));
 		return;
 	}
 	writeObjectInline(ctx, field.fields, value, out);

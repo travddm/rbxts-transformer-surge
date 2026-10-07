@@ -194,6 +194,20 @@ export abstract class EmitContext {
 		return this.factory.createCallExpression(this.factory.createIdentifier(name), undefined, args);
 	}
 
+	/**
+	 * Calls a recursion helper's write function, which takes the write cursor
+	 * and returns it past what the helper wrote. Inside the helper the cursor
+	 * is a parameter rather than the closure's, so its reservations move a
+	 * local.
+	 */
+	public callWriteHelper(helperName: string, value: ts.Expression): ts.Statement {
+		this.usesWriteBytes = true;
+		return this.assign(
+			CURSOR,
+			this.callLocal(`${helperName}_write`, [value, this.factory.createIdentifier(CURSOR)]),
+		);
+	}
+
 	/** `value.name`, or `value["my-key"]`/`value[0]` when the name isn't a valid identifier. */
 	public propertyAccess(value: ts.Expression, key: FieldKey): ts.Expression {
 		const name = this.propertyName(key);

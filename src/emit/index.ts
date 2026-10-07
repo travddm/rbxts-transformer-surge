@@ -8,6 +8,7 @@
 import type ts from "typescript";
 
 import type { Field } from "../field";
+import { CURSOR } from "./constants";
 import { EmitContext } from "./context";
 import { readField, readObjectInline } from "./read";
 import { exactSize } from "./size";
@@ -80,20 +81,34 @@ export class Emitter extends EmitContext {
 		const valueParam = f.createParameterDeclaration(undefined, undefined, "value", undefined, typeRef, undefined);
 		if (this.sides.write) {
 			this.beginFunction();
+			// The write cursor is a parameter, returned past what the helper
+			// wrote (`callWriteHelper`), so the body's reservations move a local
+			// rather than the closure's cursor.
+			this.liveLocals += 1;
 			const writeBody: ts.Statement[] = [];
 			if (field.kind === "object") {
 				writeObjectInline(this, field.fields, f.createIdentifier("value"), writeBody);
 			} else {
 				writeField(this, field, f.createIdentifier("value"), writeBody);
 			}
+			writeBody.push(f.createReturnStatement(f.createIdentifier(CURSOR)));
+			const number = f.createKeywordTypeNode(this.ts_.SyntaxKind.NumberKeyword);
+			const cursorParam = f.createParameterDeclaration(
+				undefined,
+				undefined,
+				CURSOR,
+				undefined,
+				number,
+				undefined,
+			);
 			this.helperDecls.push(
 				f.createFunctionDeclaration(
 					undefined,
 					undefined,
 					`${name}_write`,
 					undefined,
-					[valueParam],
-					undefined,
+					[valueParam, cursorParam],
+					number,
 					f.createBlock(writeBody, true),
 				),
 			);
