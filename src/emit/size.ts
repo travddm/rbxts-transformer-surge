@@ -391,11 +391,13 @@ function measureArray(
 	) {
 		return undefined;
 	}
-	return {
-		constant: WIDTH_BYTES[lengthWidth(field.length)],
+	// The bytes every element writes, such as a union's index, are added once
+	// for all of them, ahead of the loop, which adds only what varies.
+	return add(elements(ctx, field.length, ctx.sizeOf(arr), element.constant), {
+		constant: 0,
 		terms: [],
-		loops: [loopOver(ctx, total, item, arr, element)],
-	};
+		loops: [loopOver(ctx, total, item, arr, { ...element, constant: 0 })],
+	});
 }
 
 /**

@@ -1157,7 +1157,7 @@ describe("Emitter exact sizing", () => {
 	test("an array of unions is sized by a loop over them, ahead of the result", () => {
 		const output = serializeBody({ kind: "array", element: either });
 		expect(output).toMatch(
-			/^const (arr\d+) = value;\nlet (size\d+) = 4;\nfor \(const (item\d+) of \1\) \{\n\s+\2 \+= \(typeIs\(\3, "number"\) \? 8 : /,
+			/^const (arr\d+) = value;\nlet (size\d+) = \1\.size\(\) \+ 4;\nfor \(const (item\d+) of \1\) \{\n\s+\2 \+= \(typeIs\(\3, "number"\) \? 8 : /,
 		);
 		expect(output).toMatch(/\nconst __surge_scratch = buffer\.create\(size\d+\);/);
 		expect(output).not.toContain("__surge_capacity");
@@ -1175,7 +1175,7 @@ describe("Emitter exact sizing", () => {
 			},
 		});
 		expect(output).toMatch(
-			/^const (arr\d+) = value;\nlet (size\d+) = 4;\nfor \(const (item\d+) of \1\) \{\n\s+\2 \+= \3\.name\.size\(\) \+ 8;\n\}\nconst __surge_scratch = buffer\.create\(\2\);/,
+			/^const (arr\d+) = value;\nlet (size\d+) = \1\.size\(\) \* 8 \+ 4;\nfor \(const (item\d+) of \1\) \{\n\s+\2 \+= \3\.name\.size\(\);\n\}\nconst __surge_scratch = buffer\.create\(\2\);/,
 		);
 		expect(output).not.toContain("__surge_capacity");
 	});
@@ -1252,7 +1252,7 @@ describe("Emitter exact sizing", () => {
 	test("a size that compares a tag more than once reads it into a local once, in a loop and out of one", () => {
 		const array = serializeBody({ kind: "array", element: threeTags() });
 		expect(array).toMatch(
-			/for \(const (item\d+) of arr\d+\) \{\n\s+const (tag\d+) = \1\.kind;\n\s+size\d+ \+= \(\2 === "a" \? 1 : \2 === "b" \? [^]*?\.s\.size\(\) \+ 4 : 0\) \+ 1;\n\}/,
+			/for \(const (item\d+) of arr\d+\) \{\n\s+const (tag\d+) = \1\.kind;\n\s+size\d+ \+= \(\2 === "a" \? 1 : \2 === "b" \? [^]*?\.s\.size\(\) \+ 4 : 0\);\n\}/,
 		);
 		// The write reads the tag again inside its own loop.
 		expect(array.match(/\.kind;/g)).toHaveLength(2);
