@@ -20,7 +20,7 @@ import { LOCALS_PER_BLOCK, TERMS_PER_SUM, WIDTH_BYTES } from "./constants";
 import type { EmitContext, SizeBinding } from "./context";
 import { exactCount, fixedBytes, isAllPackedBits, lengthWidth, packedBits, tagKeyOf } from "./layout";
 import { fieldToTypeNode, objectShapeTypeNode } from "./types";
-import { guardFor, isLocal, literalCheck, severalEnums } from "./write";
+import { asMapOrSet, guardFor, isLocal, literalCheck, severalEnums } from "./write";
 
 /** A constant number of bytes, plus terms read from the value, plus loops that add to the total. */
 interface Size {
@@ -210,6 +210,8 @@ function measure(
 				})),
 				total,
 			);
+		case "dict":
+			return measureDict(ctx, field, value, total);
 		default:
 			return undefined;
 	}
@@ -293,11 +295,10 @@ function readTag(
 /**
  * An array's count, and its elements: their count times their size when
  * that size is the same for each, and otherwise, for an element that is a
- * union or an object, a loop over them, as the write's own. A loop measured
- * slower than the scratch buffer for an array of strings (docs/research/
- * exact-sizing-with-loops.md in the surge repo), so an array of any other
- * element that varies in size is not sized, and neither is the exact form,
- * whose write reads by index up to its length rather than iterating.
+ * union, an object or a string, a loop over them, as the write's own. An
+ * array of any other element that varies in size is not sized, and neither
+ * is the exact form, whose write reads by index up to its length rather than
+ * iterating.
  */
 function measureArray(
 	ctx: EmitContext,
@@ -326,7 +327,8 @@ function measureArray(
 	if (
 		field.element.kind !== "taggedUnion" &&
 		field.element.kind !== "guardedUnion" &&
-		field.element.kind !== "object"
+		field.element.kind !== "object" &&
+		field.element.kind !== "str"
 	) {
 		return undefined;
 	}
@@ -334,6 +336,48 @@ function measureArray(
 		constant: WIDTH_BYTES[lengthWidth(field.length)],
 		terms: [],
 		loops: [loopOver(ctx, total, item, arr, element)],
+	};
+}
+
+/**
+ * A dict's count, and its entries: a loop over them, as the write's own,
+ * adding each key's and each value's bytes.
+ */
+function measureDict(
+	ctx: EmitContext,
+	field: Extract<Field, { kind: "dict" }>,
+	value: ts.Expression,
+	total: Total,
+): Size | undefined {
+	const f = ctx.factory;
+	const k = ctx.fresh("k");
+	const key = measure(ctx, field.key, k, total, undefined);
+	if (key === undefined) {
+		return undefined;
+	}
+	const v = field.value === undefined ? undefined : ctx.fresh("v");
+	const entryValue = field.value === undefined ? EMPTY : measure(ctx, field.value, v!, total, undefined);
+	if (entryValue === undefined) {
+		return undefined;
+	}
+	// A key or a value whose size does not depend on it is not bound: an
+	// unused `for`-`of` variable fails a consumer's `noUnusedLocals`.
+	const keyName = readsValue(key) ? k : ctx.fresh("_k");
+	let binding: ts.BindingName = keyName;
+	if (v !== undefined) {
+		binding = f.createArrayBindingPattern(
+			readsValue(entryValue)
+				? [
+						readsValue(key) ? f.createBindingElement(undefined, undefined, k) : f.createOmittedExpression(),
+						f.createBindingElement(undefined, undefined, v),
+					]
+				: [f.createBindingElement(undefined, undefined, keyName)],
+		);
+	}
+	return {
+		constant: WIDTH_BYTES[lengthWidth(field.length)],
+		terms: [],
+		loops: [loopOver(ctx, total, binding, asMapOrSet(ctx, value, field.key, field.value), add(key, entryValue))],
 	};
 }
 

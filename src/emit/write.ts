@@ -869,7 +869,7 @@ export function literalCheck(
  * docs/research/compile-time-specialization.md in the surge repo), so the
  * cast is lossless either way.
  */
-function asMapOrSet(
+export function asMapOrSet(
 	ctx: EmitContext,
 	value: ts.Expression,
 	keyField: Field,

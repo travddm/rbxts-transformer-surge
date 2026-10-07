@@ -1163,6 +1163,18 @@ describe("Emitter exact sizing", () => {
 		expect(output).not.toContain("__surge_capacity");
 	});
 
+	test("an array of strings and a dict are sized by a loop over them, ahead of the result", () => {
+		const strings = serializeBody({ kind: "array", element: { kind: "str" } });
+		expect(strings).toMatch(
+			/^const (arr\d+) = value;\nlet (size\d+) = 4;\nfor \(const (item\d+) of \1\) \{\n\s+\2 \+= \3\.size\(\) \+ 4;\n\}\nconst __surge_scratch = buffer\.create\(\2\);/,
+		);
+		const dict = serializeBody({ kind: "dict", key: { kind: "str" }, value: u8, source: "map" });
+		expect(dict).toMatch(
+			/^let (size\d+) = 4;\nfor \(const \[(k\d+)\] of value as unknown as Map<string, number>\) \{\n\s+\1 \+= \2\.size\(\) \+ 5;\n\}\nconst __surge_scratch = buffer\.create\(\1\);/,
+		);
+		expect(dict).not.toContain("__surge_capacity");
+	});
+
 	test("an element that holds a blob is sized by its count, in an array, an exact array and a tuple's rest", () => {
 		const holder: Field = {
 			kind: "object",
@@ -1279,15 +1291,10 @@ describe("Emitter exact sizing", () => {
 	});
 
 	test.each([
-		// A loop measured slower than the scratch buffer on an array of strings
-		// and on a dict (docs/research/exact-sizing-with-loops.md in the surge
-		// repo).
-		["an array of strings", { kind: "array", element: { kind: "str" } } as Field],
 		[
 			"an array of arrays of strings",
 			{ kind: "array", element: { kind: "array", element: { kind: "str" } } } as Field,
 		],
-		["a dict", { kind: "dict", key: { kind: "str" }, value: u8, source: "map" } as Field],
 		["an exact array of unions", { kind: "array", element: either, length: 3 } as Field],
 		[
 			"a tagged union whose tag is a packed bit",
