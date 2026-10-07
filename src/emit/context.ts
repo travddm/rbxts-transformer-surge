@@ -130,6 +130,9 @@ export abstract class EmitContext {
 	private writeSizeStatements: ReadonlyArray<ts.Statement> = [];
 	/** The locals that size bound, by the {@link pathKey} of the value each holds. */
 	private sizeBindings: ReadonlyMap<string, SizeBinding> = new Map();
+
+	/** At most how many blobs `serialize` appends, which its list is created at (`blobCount` in size.ts). */
+	public writeBlobsLength: ts.Expression | undefined;
 	/** Whether `deserialize` declares the read state itself (see {@link readLocally}). */
 	private readsLocally = false;
 	protected readonly generatedHelpers = new Set<string>();
@@ -459,9 +462,19 @@ export abstract class EmitContext {
 		if (!this.usesWriteBlobs) {
 			return [];
 		}
-		const empty = this.factory.createArrayLiteralExpression([]);
+		const f = this.factory;
+		const empty = f.createArrayLiteralExpression([]);
 		if (this.helperFields.size === 0) {
-			return [this.typedStatement(WRITE_BLOBS, this.blobListType(false), empty, this.ts_.NodeFlags.Const)];
+			// `new Array(length)` compiles to `table.create(length)`.
+			const list =
+				this.writeBlobsLength === undefined
+					? empty
+					: f.createNewExpression(
+							f.createIdentifier("Array"),
+							[f.createTypeReferenceNode("defined")],
+							[this.writeBlobsLength],
+						);
+			return [this.typedStatement(WRITE_BLOBS, this.blobListType(false), list, this.ts_.NodeFlags.Const)];
 		}
 		return [this.assign(WRITE_BLOBS, empty)];
 	}

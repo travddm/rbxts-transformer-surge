@@ -200,9 +200,10 @@ describe("transform (end-to-end)", () => {
 			const s = createCodec<P>();`,
 		);
 		try {
-			// The blob list is a local of `serialize`, and the list `deserialize`
-			// was given and its index locals of `deserialize`.
-			expect(printed).toContain("const __surge_writeBlobs: Array<defined> = [];");
+			// The blob list is a local of `serialize`, created at the one blob it
+			// can hold, and the list `deserialize` was given and its index locals
+			// of `deserialize`.
+			expect(printed).toContain("const __surge_writeBlobs: Array<defined> = new Array<defined>(1);");
 			expect(printed).toContain("__surge_writeBlobs.push(value.part as unknown as defined);");
 			expect(printed).toContain("blobs: __surge_writeBlobs }");
 			// `deserialize` takes the table `serialize` returns.

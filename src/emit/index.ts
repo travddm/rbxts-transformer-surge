@@ -11,7 +11,7 @@ import type { Field } from "../field";
 import { CURSOR } from "./constants";
 import { EmitContext } from "./context";
 import { readField, readObjectInline } from "./read";
-import { exactSize } from "./size";
+import { blobCount, exactSize } from "./size";
 import { fieldToTypeNode, objectShapeTypeNode } from "./types";
 import { writeField, writeObjectInline } from "./write";
 
@@ -42,6 +42,7 @@ export class Emitter extends EmitContext {
 		if (exact !== undefined) {
 			this.writeExactly(exact.size, exact.statements, exact.bindings);
 		}
+		this.writeBlobsLength = blobCount(this, field, value);
 	}
 
 	public readField(field: Field, out: ts.Statement[]): ts.Expression {

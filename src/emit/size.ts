@@ -18,7 +18,7 @@ import type ts from "typescript";
 import type { CountSpec, Field, ObjectFieldEntry } from "../field";
 import { LOCALS_PER_BLOCK, TERMS_PER_SUM, WIDTH_BYTES } from "./constants";
 import type { EmitContext, SizeBinding } from "./context";
-import { exactCount, fixedBytes, isAllPackedBits, lengthWidth, packedBits, tagKeyOf } from "./layout";
+import { exactCount, fixedBytes, holdsBlob, isAllPackedBits, lengthWidth, packedBits, tagKeyOf } from "./layout";
 import { fieldToTypeNode, objectShapeTypeNode } from "./types";
 import { guardFor, isLocal, literalCheck, severalEnums } from "./write";
 
@@ -88,6 +88,67 @@ export function exactSize(ctx: EmitContext, field: Field, value: ts.Expression):
 		size: total.id,
 		bindings: bindings.byPath,
 	};
+}
+
+/**
+ * At most how many blobs `field` appends from `value`, for the list
+ * `serialize` returns to be created at that length; or `undefined` where only
+ * a loop could say. It reads the value through the locals the size bound. An
+ * optional counts as present, so the list may be created longer than it ends:
+ * `table.insert` appends nothing for `nil` either way.
+ */
+export function blobCount(ctx: EmitContext, field: Field, value: ts.Expression): ts.Expression | undefined {
+	const count = countBlobs(ctx, field, value);
+	return count === undefined || (!readsValue(count) && count.constant === 0) ? undefined : sum(ctx, count);
+}
+
+function countBlobs(ctx: EmitContext, field: Field, value: ts.Expression): Size | undefined {
+	if (!holdsBlob(field)) {
+		return EMPTY;
+	}
+	const f = ctx.factory;
+	switch (field.kind) {
+		case "blob":
+			return constant(1);
+		case "optional":
+			return countBlobs(ctx, field.inner, f.createNonNullExpression(value));
+		case "object": {
+			const obj = ctx.boundBySize(value)?.value ?? value;
+			let size = EMPTY;
+			for (const entry of field.fields) {
+				const one = countBlobs(ctx, entry.field, ctx.propertyAccess(obj, entry));
+				if (one === undefined) {
+					return undefined;
+				}
+				size = add(size, one);
+			}
+			return size;
+		}
+		case "array": {
+			// Each element's count must not depend on the element, so the
+			// placeholder it is read through is never emitted.
+			const each = countBlobs(ctx, field.element, f.createIdentifier("_"));
+			if (each === undefined || readsValue(each)) {
+				return undefined;
+			}
+			const exact = exactCount(field.length);
+			if (exact !== undefined) {
+				return constant(exact * each.constant);
+			}
+			const count = ctx.sizeOf(ctx.boundBySize(value)?.value ?? value);
+			return {
+				constant: 0,
+				terms: [
+					each.constant === 1
+						? count
+						: f.createBinaryExpression(count, ctx.ts_.SyntaxKind.AsteriskToken, ctx.num(each.constant)),
+				],
+				loops: [],
+			};
+		}
+		default:
+			return undefined;
+	}
 }
 
 /**
