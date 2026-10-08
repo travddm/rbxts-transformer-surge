@@ -20,7 +20,7 @@
 		"spell": "cspell --no-progress"
 	},
 	"author": "travddm",
-	"license": "ISC",
+	"license": "MIT",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/travddm/rbxts-transformer-surge.git"
