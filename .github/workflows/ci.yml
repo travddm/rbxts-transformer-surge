@@ -15,19 +15,29 @@ jobs:
             - name: Checkout
               uses: actions/checkout@v7
 
-            - name: Cache npm dependencies
+            # npm's download cache, not node_modules: `npm ci` removes node_modules before it
+            # installs. Keyed on the exact lockfile, with no fallback to another key's cache.
+            - name: Cache npm downloads
               uses: actions/cache@v6
               with:
-                  path: node_modules
-                  key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
-                  restore-keys: |
-                      ${{ runner.os }}-node-modules-
+                  path: ~/.npm
+                  key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
 
             - name: Set up mise
               uses: jdx/mise-action@v4
               with:
                   install: true
                   cache: true
+
+            # `npm ci` installs what the lockfile records and fails where it does not match
+            # package.json.
+            - name: Install dependencies
+              run: npm ci
+
+            # mise's postinstall hook runs `npm install`, which can rewrite a lockfile that does
+            # not match its package.json; a rewritten one fails here instead of passing unseen.
+            - name: "Check: Lockfile"
+              run: git diff --exit-code -- package-lock.json
 
             - name: "Check: Lint"
               run: mise run lint:check
@@ -43,3 +53,59 @@ jobs:
 
             - name: "Test: Jest"
               run: mise run test
+
+    # surge's round-trip suite and golden checks, compiled through this commit of the
+    # transformer: the tests of what the generated code does live in surge (see surge's
+    # docs/testing.md). surge is checked out at the commit in ci/surge-ref, bumped deliberately,
+    # so that a run is reproducible and a push to surge alone cannot change its result.
+    integration:
+        name: Integration (surge's CI against this commit)
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        defaults:
+            run:
+                working-directory: surge
+        steps:
+            - name: Checkout rbxts-transformer-surge
+              uses: actions/checkout@v7
+              with:
+                  path: rbxts-transformer-surge
+
+            - name: Read the pinned surge commit
+              id: surge
+              working-directory: rbxts-transformer-surge
+              run: echo "ref=$(tr -d '[:space:]' < ci/surge-ref)" >> "$GITHUB_OUTPUT"
+
+            # A sibling checkout: surge's tests/package.json reaches this repository as
+            # `file:../../rbxts-transformer-surge`.
+            - name: Checkout surge
+              uses: actions/checkout@v7
+              with:
+                  repository: travddm/surge
+                  ref: ${{ steps.surge.outputs.ref }}
+                  path: surge
+
+            - name: Cache npm downloads
+              uses: actions/cache@v6
+              with:
+                  path: ~/.npm
+                  key: ${{ runner.os }}-npm-${{ hashFiles('surge/package-lock.json', 'surge/tests/package-lock.json', 'rbxts-transformer-surge/package-lock.json') }}
+
+            - name: Set up mise
+              uses: jdx/mise-action@v4
+              with:
+                  install: true
+                  cache: true
+                  working_directory: surge
+
+            # Each file: dependency builds during the consumer's install, with its own
+            # devDependencies, so both packages install theirs first.
+            - name: Install this repository's dependencies
+              working-directory: rbxts-transformer-surge
+              run: npm ci
+
+            - name: Install surge's dependencies
+              run: npm ci
+
+            - name: "Test: surge's CI"
+              run: mise run ci

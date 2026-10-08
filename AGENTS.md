@@ -61,8 +61,12 @@ has the rest.
   surge's specifications in the matching commit; see surge's
   [AGENTS.md](https://github.com/travddm/surge/blob/master/AGENTS.md).
 - Review a snapshot change before accepting it with `npx jest -u`.
-- Push this repository before surge when a change spans both: surge's CI
-  checks out this repository's default branch.
+- Each repository's CI tests the other at a pinned commit: this
+  repository's integration job runs surge's CI at the commit in
+  `ci/surge-ref`, and surge's CI checks out this repository at the commit in
+  its `ci/transformer-ref`. A change that spans both moves the pins as surge's
+  [contributing.md](https://github.com/travddm/surge/blob/master/docs/contributing.md)
+  states, and a commit is pushed before any commit whose pin names it.
 
 ## Verifying changes
 
