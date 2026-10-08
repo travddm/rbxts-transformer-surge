@@ -110,6 +110,23 @@ export function createSerializer<T>(options?: Pick<CodecOptions, "writeChecks">)
 	return notConfigured();
 }
 
+export interface Cursor {
+	buffer: buffer;
+	offset: number;
+	blobs: Array<defined>;
+	blobIndex: number;
+}
+
+export interface CursorCodec<in out T> {
+	write: (cursor: Cursor, value: T) => void;
+	read: (cursor: Cursor) => T;
+	size: number | undefined;
+}
+
+export function createCursorCodec<T>(options?: CodecOptions): CursorCodec<T> {
+	return notConfigured();
+}
+
 export function createDeserializer<T>(options: { readonly readChecks: true }): CheckedDeserializer<T>;
 export function createDeserializer<T>(options?: Pick<CodecOptions, "readChecks">): Deserializer<T>;
 export function createDeserializer<T>(options?: Pick<CodecOptions, "readChecks">): CheckedDeserializer<T> {

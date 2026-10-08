@@ -91,6 +91,23 @@ export function exactSize(ctx: EmitContext, field: Field, value: ts.Expression):
 }
 
 /**
+ * The bytes every value of `field` writes, where that does not depend on the
+ * value, and `undefined` otherwise: the exact size when it reads nothing of
+ * the value. A cursor codec's `size` (Runtime API 3 in the surge repo). It
+ * counts a packed region of `boolean`s, which `fixedBytes` leaves out. The
+ * names and locals the measure takes are given back either way.
+ */
+export function constantSize(ctx: EmitContext, field: Field): number | undefined {
+	let result: number | undefined;
+	ctx.tentatively(() => {
+		const size = measure(ctx, field, ctx.factory.createIdentifier("value"), { id: undefined }, undefined);
+		result = size === undefined || readsValue(size) ? undefined : size.constant;
+		return undefined;
+	});
+	return result;
+}
+
+/**
  * At most how many blobs `field` appends from `value`, for the list
  * `serialize` returns to be created at that length; or `undefined` where only
  * a loop could say. It reads the value through the locals the size bound. An

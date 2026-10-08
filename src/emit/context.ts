@@ -102,6 +102,12 @@ export interface EmitOptions {
 	 * so a helper for the other side would name state that does not exist.
 	 */
 	readonly sides?: EmitSides;
+	/**
+	 * Emit for a cursor codec (`createCursorCodec`): `write` and `read` take
+	 * the caller's cursor and set their state from it, in place of a scratch
+	 * buffer of their own and an input read from its start.
+	 */
+	readonly cursor?: boolean;
 }
 
 export abstract class EmitContext {
@@ -158,12 +164,14 @@ export abstract class EmitContext {
 		this.readChecks = options.readChecks ?? false;
 		this.writeChecks = options.writeChecks ?? false;
 		this.sides = options.sides ?? BOTH_SIDES;
+		this.cursor = options.cursor ?? false;
 	}
 
 	/** See {@link EmitOptions}. */
 	public readonly readChecks: boolean;
 	public readonly writeChecks: boolean;
 	public readonly sides: EmitSides;
+	public readonly cursor: boolean;
 
 	/**
 	 * Runs `attempt`, and gives back the names and locals it took when it
@@ -308,6 +316,17 @@ export abstract class EmitContext {
 		if (!this.usesWriteBytes || this.writeSize !== undefined) {
 			return [];
 		}
+		if (this.cursor) {
+			// Set from the cursor each call: in `write` itself unless a recursion
+			// helper reads it (`beginCursorWriteStatements`).
+			return this.helperFields.size === 0
+				? []
+				: [
+						this.letStatement(SCRATCH, this.bufferCall("create", [this.num(0)])),
+						this.letStatement(CAPACITY, this.num(0)),
+						this.letStatement(CURSOR, this.num(0)),
+					];
+		}
 		return [
 			this.letStatement(SCRATCH, this.bufferCall("create", [this.num(INITIAL_CAPACITY)])),
 			this.letStatement(CAPACITY, this.num(INITIAL_CAPACITY)),
@@ -372,14 +391,17 @@ export abstract class EmitContext {
 		return [this.assign(CURSOR, this.num(0))];
 	}
 
-	/** Opens a `deserialize()`, taking the buffer the caller passed. */
-	public beginReadStatements(input: ts.Expression): ts.Statement[] {
+	/**
+	 * Opens a `deserialize()`, taking the buffer the caller passed, read from
+	 * `start`: its head, or a cursor codec's offset.
+	 */
+	public beginReadStatements(input: ts.Expression, start: ts.Expression = this.num(0)): ts.Statement[] {
 		if (!this.usesReadBytes) {
 			return [];
 		}
 		if (this.readsLocally) {
 			const buffer = this.factory.createIdentifier(READ_BUFFER);
-			const locals = [this.constStatement(buffer, input), this.letStatement(READ_CURSOR, this.num(0))];
+			const locals = [this.constStatement(buffer, input), this.letStatement(READ_CURSOR, start)];
 			if (this.readChecks) {
 				locals.push(
 					this.constStatement(this.factory.createIdentifier(READ_LENGTH), this.bufferCall("len", [buffer])),
@@ -387,7 +409,7 @@ export abstract class EmitContext {
 			}
 			return locals;
 		}
-		const statements = [this.assign(READ_BUFFER, input), this.assign(READ_CURSOR, this.num(0))];
+		const statements = [this.assign(READ_BUFFER, input), this.assign(READ_CURSOR, start)];
 		if (this.readChecks) {
 			statements.push(
 				this.assign(READ_LENGTH, this.bufferCall("len", [this.factory.createIdentifier(READ_BUFFER)])),
@@ -521,17 +543,114 @@ export abstract class EmitContext {
 	}
 
 	/** Opens a `deserialize()`'s blob list: `blobs`, read from its first blob on. */
-	public beginReadBlobsStatements(blobs: ts.Expression): ts.Statement[] {
+	public beginReadBlobsStatements(blobs: ts.Expression, start: ts.Expression = this.num(0)): ts.Statement[] {
 		if (!this.usesReadBlobs) {
 			return [];
 		}
 		if (this.helperFields.size === 0) {
 			return [
 				this.typedStatement(READ_BLOBS, this.blobListType(true), blobs, this.ts_.NodeFlags.Const),
-				this.letStatement(READ_BLOB_INDEX, this.num(0)),
+				this.letStatement(READ_BLOB_INDEX, start),
 			];
 		}
-		return [this.assign(READ_BLOBS, blobs), this.assign(READ_BLOB_INDEX, this.num(0))];
+		return [this.assign(READ_BLOBS, blobs), this.assign(READ_BLOB_INDEX, start)];
+	}
+
+	/**
+	 * Has the `write` of a cursor codec about to be emitted hold the scratch
+	 * path's state, the buffer, its capacity and the write cursor, in locals of
+	 * its own, set from the caller's cursor, where no recursion helper reads
+	 * them. Called after {@link beginFunction} and before the body is emitted.
+	 */
+	public writeIntoCursor(): void {
+		if (this.helperFields.size === 0) {
+			this.liveLocals += 3;
+		}
+	}
+
+	/**
+	 * Opens a cursor codec's `write`: the buffer and the write cursor are the
+	 * cursor's, and the capacity the buffer's length, so the body's
+	 * reservations grow the caller's buffer as they grow a scratch buffer.
+	 */
+	public beginCursorWriteStatements(cursor: ts.Expression): ts.Statement[] {
+		if (!this.usesWriteBytes) {
+			return [];
+		}
+		const f = this.factory;
+		const scratch = f.createIdentifier(SCRATCH);
+		const buffer = f.createPropertyAccessExpression(cursor, "buffer");
+		const offset = f.createPropertyAccessExpression(cursor, "offset");
+		if (this.helperFields.size === 0) {
+			return [
+				this.letStatement(SCRATCH, buffer),
+				this.letStatement(CAPACITY, this.bufferCall("len", [scratch])),
+				this.letStatement(CURSOR, offset),
+			];
+		}
+		return [
+			this.assign(SCRATCH, buffer),
+			this.assign(CAPACITY, this.bufferCall("len", [scratch])),
+			this.assign(CURSOR, offset),
+		];
+	}
+
+	/** Closes a cursor codec's `write`: the cursor takes the buffer, grown or not, and the offset past the value. */
+	public endCursorWriteStatements(cursor: ts.Expression): ts.Statement[] {
+		if (!this.usesWriteBytes) {
+			return [];
+		}
+		const f = this.factory;
+		const store = (name: string, value: string) =>
+			f.createExpressionStatement(
+				f.createBinaryExpression(
+					f.createPropertyAccessExpression(cursor, name),
+					this.ts_.SyntaxKind.EqualsToken,
+					f.createIdentifier(value),
+				),
+			);
+		return [store("buffer", SCRATCH), store("offset", CURSOR)];
+	}
+
+	/**
+	 * Opens a cursor codec's blob list: the cursor's, appended to after the
+	 * blobs already in it.
+	 */
+	public beginCursorWriteBlobsStatements(cursor: ts.Expression): ts.Statement[] {
+		if (!this.usesWriteBlobs) {
+			return [];
+		}
+		const f = this.factory;
+		const blobs = f.createPropertyAccessExpression(cursor, "blobs");
+		const count = this.sizeOf(f.createIdentifier(WRITE_BLOBS));
+		if (this.helperFields.size === 0) {
+			return [
+				this.typedStatement(WRITE_BLOBS, this.blobListType(false), blobs, this.ts_.NodeFlags.Const),
+				this.letStatement(WRITE_BLOB_COUNT, count),
+			];
+		}
+		return [this.assign(WRITE_BLOBS, blobs), this.assign(WRITE_BLOB_COUNT, count)];
+	}
+
+	/** Closes a cursor codec's `read`: the cursor takes the offset and the blob index past the value. */
+	public endCursorReadStatements(cursor: ts.Expression): ts.Statement[] {
+		const f = this.factory;
+		const store = (name: string, value: string) =>
+			f.createExpressionStatement(
+				f.createBinaryExpression(
+					f.createPropertyAccessExpression(cursor, name),
+					this.ts_.SyntaxKind.EqualsToken,
+					f.createIdentifier(value),
+				),
+			);
+		const statements: ts.Statement[] = [];
+		if (this.usesReadBytes) {
+			statements.push(store("offset", READ_CURSOR));
+		}
+		if (this.usesReadBlobs) {
+			statements.push(store("blobIndex", READ_BLOB_INDEX));
+		}
+		return statements;
 	}
 
 	/**

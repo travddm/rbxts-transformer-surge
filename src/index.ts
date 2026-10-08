@@ -1,7 +1,7 @@
 import type ts from "typescript";
 
 import { type FactoryName, declaredSerializedCarriesBlobs, resolveFactoryName } from "./detect";
-import { ABI_MODULE, Emitter, importAlias } from "./emit";
+import { ABI_MODULE, Emitter, constantSize, importAlias } from "./emit";
 import { TypeWalker } from "./walk";
 
 /**
@@ -200,9 +200,13 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				// declares, and the file imports, only what those sides use.
 				const needsWrite = factoryName !== "createDeserializer";
 				const needsRead = factoryName !== "createSerializer";
+				// A cursor codec writes into and reads from the caller's cursor
+				// (Runtime API 3 in docs/specs/runtime-api.md in the surge repo).
+				const isCursor = factoryName === "createCursorCodec";
 				const emitter = new Emitter(typescript, f, walker.getHelperFields(), {
 					...options,
 					sides: { write: needsWrite, read: needsRead },
+					cursor: isCursor,
 				});
 
 				const valueParam = f.createParameterDeclaration(
@@ -224,7 +228,11 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				if (needsWrite) {
 					emitter.beginFunction();
 					emitter.countBlobLocals(rootField);
-					emitter.sizeExactly(rootField, f.createIdentifier("value"));
+					if (isCursor) {
+						emitter.writeIntoCursor();
+					} else {
+						emitter.sizeExactly(rootField, f.createIdentifier("value"));
+					}
 					emitter.writeField(rootField, f.createIdentifier("value"), writeStatements);
 				}
 
@@ -233,7 +241,9 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 				// `blobs` array. It gives the array wherever it cannot tell, which
 				// costs an empty one; a blob it misses would be dropped by a caller
 				// that follows the type, so that is a diagnostic below.
-				const serializedCarriesBlobs = declaredSerializedCarriesBlobs(typescript, checker, node, factoryName);
+				// A cursor codec's blobs go to the cursor's list, whatever `T` holds.
+				const serializedCarriesBlobs =
+					!isCursor && declaredSerializedCarriesBlobs(typescript, checker, node, factoryName);
 
 				const readStatements: ts.Statement[] = [];
 				let resultExpr: ts.Expression | undefined;
@@ -253,7 +263,7 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 
 				const usesBlobs = emitter.usesWriteBlobs || emitter.usesReadBlobs;
 
-				if (usesBlobs && !serializedCarriesBlobs) {
+				if (usesBlobs && !serializedCarriesBlobs && !isCursor) {
 					report(
 						node,
 						`"${checker.typeToString(type)}" holds a value that goes into "blobs", but the result type ` +
@@ -449,8 +459,97 @@ export default function transform(program: ts.Program, _config: unknown, extras:
 					);
 				};
 
+				/** `{ buffer, offset, blobs, blobIndex }`, the cursor's shape, written out so that no import is needed. */
+				const cursorType = (): ts.TypeNode =>
+					f.createTypeLiteralNode([
+						f.createPropertySignature(undefined, "buffer", undefined, f.createTypeReferenceNode("buffer")),
+						f.createPropertySignature(
+							undefined,
+							"offset",
+							undefined,
+							f.createKeywordTypeNode(typescript.SyntaxKind.NumberKeyword),
+						),
+						f.createPropertySignature(
+							undefined,
+							"blobs",
+							undefined,
+							f.createTypeReferenceNode("Array", [f.createTypeReferenceNode("defined")]),
+						),
+						f.createPropertySignature(
+							undefined,
+							"blobIndex",
+							undefined,
+							f.createKeywordTypeNode(typescript.SyntaxKind.NumberKeyword),
+						),
+					]);
+				/** The cursor parameter, named with an underscore where the side uses nothing of it. */
+				const cursorParam = (used: boolean): [ts.ParameterDeclaration, ts.Identifier] => {
+					const cursor = f.createIdentifier(used ? "cursor" : "_cursor");
+					return [
+						f.createParameterDeclaration(undefined, undefined, cursor, undefined, cursorType()),
+						cursor,
+					];
+				};
+				const arrow = (parameters: ts.ParameterDeclaration[], body: ts.Statement[]): ts.ArrowFunction =>
+					f.createArrowFunction(
+						undefined,
+						undefined,
+						parameters,
+						undefined,
+						f.createToken(typescript.SyntaxKind.EqualsGreaterThanToken),
+						f.createBlock(body, true),
+					);
+
+				/** A cursor codec's `write`: the scratch path's body, with its state taken from and given back to the cursor. */
+				const buildCursorWrite = (): ts.ArrowFunction => {
+					const [parameter, cursor] = cursorParam(emitter.usesWriteBytes || emitter.usesWriteBlobs);
+					return arrow(
+						[parameter, valueParam],
+						[
+							...emitter.beginCursorWriteStatements(cursor),
+							...emitter.beginCursorWriteBlobsStatements(cursor),
+							...writeStatements,
+							...emitter.endCursorWriteStatements(cursor),
+						],
+					);
+				};
+
+				/** A cursor codec's `read`: the body, read from the cursor's offset and blob index, which it moves past the value. */
+				const buildCursorRead = (): ts.ArrowFunction => {
+					const [parameter, cursor] = cursorParam(emitter.usesReadBytes || emitter.usesReadBlobs);
+					return arrow(
+						[parameter],
+						[
+							...emitter.beginReadStatements(
+								f.createPropertyAccessExpression(cursor, "buffer"),
+								f.createPropertyAccessExpression(cursor, "offset"),
+							),
+							...emitter.beginReadBlobsStatements(
+								f.createPropertyAccessExpression(cursor, "blobs"),
+								f.createPropertyAccessExpression(cursor, "blobIndex"),
+							),
+							...readStatements,
+							...emitter.endCursorReadStatements(cursor),
+							f.createReturnStatement(f.createAsExpression(resultExpr!, typeArgumentNode)),
+						],
+					);
+				};
+
 				let resultValue: ts.Expression;
-				if (factoryName === "createSerializer") {
+				if (isCursor) {
+					const size = constantSize(emitter, rootField);
+					resultValue = f.createObjectLiteralExpression(
+						[
+							f.createPropertyAssignment("write", buildCursorWrite()),
+							f.createPropertyAssignment("read", buildCursorRead()),
+							f.createPropertyAssignment(
+								"size",
+								size === undefined ? f.createIdentifier("undefined") : emitter.num(size),
+							),
+						],
+						false,
+					);
+				} else if (factoryName === "createSerializer") {
 					resultValue = buildSerialize();
 				} else if (factoryName === "createDeserializer") {
 					resultValue = buildDeserialize();

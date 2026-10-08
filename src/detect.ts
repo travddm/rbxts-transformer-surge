@@ -3,8 +3,8 @@ import * as path from "path";
 
 import type ts from "typescript";
 
-const FACTORY_NAMES = new Set(["createCodec", "createSerializer", "createDeserializer"]);
-export type FactoryName = "createCodec" | "createSerializer" | "createDeserializer";
+const FACTORY_NAMES = new Set(["createCodec", "createSerializer", "createDeserializer", "createCursorCodec"]);
+export type FactoryName = "createCodec" | "createSerializer" | "createDeserializer" | "createCursorCodec";
 
 const packageNameCache = new Map<string, string | undefined>();
 

@@ -696,6 +696,52 @@ describe("transform generated code", () => {
 		}
 	});
 
+	test("a cursor codec's generated code passes the type check, and takes its state from the cursor", () => {
+		// A string, a packed region, a blob and a recursive type: the scratch
+		// path, the blob list, and the closure's state a helper reads.
+		const source = (options: string) => `import { DataType, createCursorCodec } from "@rbxts/surge";
+			interface T {
+				name: string; list: DataType.u16[]; flags: DataType.Packed<{ on: boolean; count?: DataType.u8 }>;
+				part: Instance; maybe?: unknown;
+			}
+			interface Node { id: DataType.u8; part: Instance; children: Node[]; }
+			export const t = createCursorCodec<T>(${options});
+			export const n = createCursorCodec<Node>(${options});
+			export const fixed = createCursorCodec<{ id: DataType.u32; flags: DataType.Packed<{ a: boolean; b: boolean }> }>();
+			export const nothing = createCursorCodec<{ kind: "a" }>();`;
+		const { printed, cleanup } = runTransform(source(""));
+		try {
+			expect(printed).toMatch(
+				/write: \(cursor: \{[^]*?\}, value: T\) => \{\n\s+let __surge_scratch = cursor\.buffer;/,
+			);
+			expect(printed).toContain("let __surge_capacity = buffer.len(__surge_scratch);");
+			expect(printed).toContain("let __surge_cursor = cursor.offset;");
+			expect(printed).toContain("const __surge_writeBlobs: Array<defined> = cursor.blobs;");
+			expect(printed).toContain("let __surge_writeBlobCount = __surge_writeBlobs.size();");
+			expect(printed).toContain("cursor.buffer = __surge_scratch;");
+			expect(printed).toContain("cursor.offset = __surge_cursor;");
+			expect(printed).toContain("let __surge_readCursor = cursor.offset;");
+			expect(printed).toContain("let __surge_readBlobIndex = cursor.blobIndex;");
+			expect(printed).toContain("cursor.blobIndex = __surge_readBlobIndex;");
+			// No result is created or copied: the write is into the caller's buffer.
+			expect(printed).not.toContain("__surge_finishWrite");
+			// A recursive type sets the closure's state, which its helper reads.
+			expect(printed).toMatch(/\n\s+__surge_scratch = cursor\.buffer;\n/);
+			// `size` is the constant size where there is one: a u32 and a byte of
+			// packed bits.
+			expect(printed).toContain("size: 5");
+			expect(printed).toContain("size: undefined");
+			// A shape that writes and reads nothing uses nothing of the cursor.
+			expect(printed).toMatch(/write: \(_cursor: /);
+		} finally {
+			cleanup();
+		}
+		for (const options of ["", "{ writeChecks: true }", "{ readChecks: true }"]) {
+			const errors = typeErrorsOfGeneratedCode(source(options), { noUnusedLocals: true });
+			expect(errors.filter((error) => !error.startsWith("'createCursorCodec' is declared"))).toEqual([]);
+		}
+	});
+
 	test("the generated code for a buffer passes the type check", () => {
 		const errors = typeErrorsOfGeneratedCode(
 			`import { createCodec } from "@rbxts/surge";
