@@ -1247,6 +1247,17 @@ describe("Emitter exact sizing", () => {
 		expect(output).not.toContain("__surge_capacity");
 	});
 
+	test("an array of arrays is sized by a loop over its rows, with each row's count added ahead of it", () => {
+		const output = serializeBody({
+			kind: "array",
+			element: { kind: "array", element: { kind: "num", width: "u16" } },
+		});
+		expect(output).toMatch(
+			/^const (arr\d+) = value;\nlet (size\d+) = \1\.size\(\) \* 4 \+ 4;\nfor \(const (item\d+) of \1\) \{\n\s+\2 \+= \3\.size\(\) \* 2;\n\}\nconst __surge_scratch = buffer\.create\(\2\);/,
+		);
+		expect(output).not.toContain("__surge_capacity");
+	});
+
 	test("an element that holds a blob is sized by its count, in an array, an exact array and a tuple's rest", () => {
 		const holder: Field = {
 			kind: "object",
